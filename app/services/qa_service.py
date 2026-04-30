@@ -1,0 +1,37 @@
+from app.indexing.vector_store import create_vector_store
+from app.retrieval.retriever import retrieve_relevant_chunks
+from app.retrieval.ranking import rerank_chunks
+from app.llm.prompts import build_prompt
+from app.llm.llm_client import generate_response
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+def handle_user_query(query: str, index_name: str) -> str:
+    """
+    Orchestrates the QA pipeline:
+    retrieve -> rerank -> build_prompt -> generate_response -> format output
+    """
+    logger.info(f"Handling query for index '{index_name}': {query}")
+    
+    # 1. Load vector store
+    vector_store = create_vector_store(index_name)
+    if not vector_store.load():
+        return f"Error: Could not load index '{index_name}'. Have you processed the repository yet?"
+        
+    # 2. Retrieve relevant chunks
+    chunks = retrieve_relevant_chunks(query, vector_store, top_k=5)
+    if not chunks:
+        return "No relevant context found in the codebase to answer your question."
+        
+    # 3. Rerank chunks (currently a pass-through)
+    ranked_chunks = rerank_chunks(query, chunks)
+    
+    # 4. Build prompt
+    prompt = build_prompt(query, ranked_chunks)
+    
+    # 5. Generate response
+    response = generate_response(prompt)
+    
+    # 6. Format output (already returning string)
+    return response

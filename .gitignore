@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+
+# Data & indexes
+data/repos/
+data/index/
+
+# Logs
+*.log
+
+# MacOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Streamlit cache
+.streamlit/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
