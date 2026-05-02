@@ -20,7 +20,21 @@ def handle_user_query(query: str, index_name: str) -> str:
         return f"Error: Could not load index '{index_name}'. Have you processed the repository yet?"
         
     # 2. Retrieve relevant chunks
-    chunks = retrieve_relevant_chunks(query, vector_store, top_k=5)
+    # chunks = retrieve_relevant_chunks(query, vector_store, top_k=5)
+    from app.retrieval.file_map_retriever import retrieve_relevant_files
+
+    # Step 1: get relevant files
+    relevant_files = retrieve_relevant_files(query, index_name)
+
+    # Step 2: filter chunks based on files
+    file_paths = [f["file"] for f in relevant_files]
+
+    filtered_chunks = [
+        c for c in vector_store.metadata
+        if c["metadata"]["path"] in file_paths
+    ]
+
+    chunks = filtered_chunks[:3]  # limit
     if not chunks:
         return "No relevant context found in the codebase to answer your question."
         

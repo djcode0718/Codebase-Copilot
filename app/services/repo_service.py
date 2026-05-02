@@ -5,6 +5,7 @@ from app.ingestion.file_filter import filter_files
 from app.parsing.code_parser import parse_code_files
 from app.indexing.index_builder import build_index
 from app.utils.logger import get_logger
+from app.indexing.file_map_builder import build_file_map
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,11 @@ def process_repository(source: str) -> Optional[str]:
             
         # 3. Parse Code Files
         chunks = parse_code_files(valid_files, repo_path)
+
+
+        # 🔥 Build File Map (NEW STEP)
+        build_file_map(valid_files, repo_path, index_name)
+
         if not chunks:
             logger.warning("No chunks generated from the code files.")
             return None

@@ -107,6 +107,27 @@ def generate_ollama(prompt: str) -> str:
         logger.error(f"Ollama error: {e}")
         return f"Ollama error: {e}"
 
+def generate_summary(prompt: str) -> str:
+    try:
+        import requests
+
+        model = os.getenv("OLLAMA_MODEL", "phi3:mini")
+
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False
+            }
+        )
+
+        return response.json()["response"]
+
+    except Exception as e:
+        logger.error(f"Ollama error: {e}")
+        return f"Ollama error: {e}"
+
 
 # =========================
 # MAIN ROUTER
