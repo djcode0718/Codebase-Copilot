@@ -108,6 +108,77 @@
 #     return chunks
 
 
+# import os
+# from typing import List, Dict, Any
+# from app.utils.logger import get_logger
+
+# logger = get_logger(__name__)
+
+# def parse_code_files(file_paths: List[str], repo_path: str) -> List[Dict[str, Any]]:
+#     """
+#     Simplified parser: Treat each file as a single chunk.
+#     This avoids memory issues and ensures stability.
+#     """
+#     all_chunks = []
+
+#     # Limit number of files processed (safety)
+#     # file_paths = file_paths[:3]
+
+#     # # prioritize important files first
+#     # priority_files = [f for f in file_paths if "readme" in f.lower()]
+
+#     # # take README + few code files
+#     # file_paths = priority_files + file_paths[:5]
+
+#     # Prioritize important files
+#     priority_files = []
+#     other_files = []
+
+#     for f in file_paths:
+#         name = f.lower()
+#         if "readme" in name or "main" in name or "app" in name:
+#             priority_files.append(f)
+#         else:
+#             other_files.append(f)
+
+#     MAX_FILES = 10
+#     file_paths = (priority_files + other_files)[:MAX_FILES]
+
+#     # Take important files first, then rest
+#     # file_paths = priority_files + other_files
+
+#     for file_path in file_paths:
+#         try:
+#             with open(file_path, 'r', encoding='utf-8') as f:
+#                 content = f.read()
+#         except Exception as e:
+#             logger.warning(f"Failed to read file {file_path}: {e}")
+#             continue
+
+#         if not content.strip():
+#             continue
+
+#         # HARD LIMIT content size (very important)
+#         content = content[:20000]
+
+#         relative_path = os.path.relpath(file_path, repo_path)
+#         file_name = os.path.basename(file_path)
+
+#         chunk = {
+#             "text": content,
+#             "metadata": {
+#                 "file_name": file_name,
+#                 "path": relative_path,
+#                 "entity_name": "full_file"
+#             }
+#         }
+
+#         all_chunks.append(chunk)
+
+#     logger.info(f"Generated {len(all_chunks)} chunks from {len(file_paths)} files.")
+#     return all_chunks
+
+
 import os
 from typing import List, Dict, Any
 from app.utils.logger import get_logger

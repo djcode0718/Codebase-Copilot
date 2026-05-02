@@ -5,3 +5,8 @@ google-genai
 gitpython
 python-dotenv
 scikit-learn
+langchain
+langchain-community
+llama-index
+llama-index-llms-groq
+llama-index-llms-openai
