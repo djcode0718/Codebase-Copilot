@@ -7,7 +7,7 @@ logger = get_logger(__name__)
 # Common code file extensions
 VALID_EXTENSIONS = {
     '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.hpp', '.cs', 
-    '.go', '.rs', '.rb', '.php', '.html', '.css', '.md', '.json', '.sh'
+    '.go', '.rs', '.rb', '.php', '.html', '.css', '.md', '.sh'
 }
 
 # Directories to ignore
@@ -31,7 +31,10 @@ def filter_files(repo_path: str) -> List[str]:
             _, ext = os.path.splitext(file)
             if ext.lower() in VALID_EXTENSIONS:
                 full_path = os.path.join(root, file)
+                logger.debug(f"Checking file: {full_path}")
+
                 valid_files.append(full_path)
+                logger.info(f"Accepted file: {full_path}")
                 
     logger.info(f"Found {len(valid_files)} valid code files in {repo_path}")
     return valid_files

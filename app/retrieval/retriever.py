@@ -101,12 +101,45 @@ def retrieve_relevant_chunks(query: str, vector_store: VectorStore, top_k: int =
 
     # Transform query using same vectorizer
     query_vector = vector_store.vectorizer.transform([query]).toarray()
+    query_vector = np.nan_to_num(query_vector)
 
     # Get stored embeddings
     stored_embeddings = vector_store.embeddings
+    stored_embeddings = np.nan_to_num(stored_embeddings)
 
     # Compute similarity
+    # similarities = cosine_similarity(query_vector, stored_embeddings)[0]
+
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    # Convert safely
+    query_vector = vector_store.vectorizer.transform([query]).toarray()
+
+    # 🔒 FIX 1: Replace NaN / inf
+    query_vector = np.nan_to_num(query_vector)
+
+    stored_embeddings = np.nan_to_num(vector_store.embeddings)
+
+    # 🔒 FIX 2: Handle zero vector query
+    if np.linalg.norm(query_vector) == 0:
+        logger.warning("Query vector is zero. Returning top chunks without similarity.")
+        return vector_store.metadata[:top_k]
+
+    # 🔒 FIX 3: Compute similarity safely
     similarities = cosine_similarity(query_vector, stored_embeddings)[0]
+
+    # 🔒 FIX 4: Clean output
+    similarities = np.nan_to_num(similarities)
+
+    # 🔒 FIX 5: Handle all-zero similarity
+    if np.all(similarities == 0):
+        logger.warning("All similarities are zero. Returning fallback chunks.")
+        return vector_store.metadata[:top_k]
+
+    # 🔒 Sort normally
+    top_indices = similarities.argsort()[-top_k:][::-1]
+
+    return [vector_store.metadata[i] for i in top_indices]
 
     # Get top-k indices
     top_indices = np.argsort(similarities)[::-1][:top_k]

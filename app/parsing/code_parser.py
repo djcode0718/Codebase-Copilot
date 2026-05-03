@@ -179,25 +179,81 @@
 #     return all_chunks
 
 
+# import os
+# from typing import List, Dict, Any
+# from app.utils.logger import get_logger
+
+# logger = get_logger(__name__)
+
+# def parse_code_files(file_paths: List[str], repo_path: str) -> List[Dict[str, Any]]:
+#     """
+#     Simplified parser: Treat each file as a single chunk.
+#     This avoids memory issues and ensures stability.
+#     """
+#     all_chunks = []
+
+#     # Limit number of files processed (safety)
+#     file_paths = file_paths[:3]
+
+#     for file_path in file_paths:
+#         try:
+#             with open(file_path, 'r', encoding='utf-8') as f:
+#                 content = f.read()
+#         except Exception as e:
+#             logger.warning(f"Failed to read file {file_path}: {e}")
+#             continue
+
+#         if not content.strip():
+#             continue
+
+#         # HARD LIMIT content size (very important)
+#         content = content[:20000]
+
+#         relative_path = os.path.relpath(file_path, repo_path)
+#         file_name = os.path.basename(file_path)
+
+#         chunk = {
+#             "text": content,
+#             "metadata": {
+#                 "file_name": file_name,
+#                 "path": relative_path,
+#                 "entity_name": "full_file"
+#             }
+#         }
+
+#         all_chunks.append(chunk)
+
+#     logger.info(f"Generated {len(all_chunks)} chunks from {len(file_paths)} files.")
+#     return all_chunks
+
+
 import os
+import re
 from typing import List, Dict, Any
+from app.parsing.chunk_utils import chunk_text
 from app.utils.logger import get_logger
+from tqdm import tqdm
+import time
 
 logger = get_logger(__name__)
 
+
 def parse_code_files(file_paths: List[str], repo_path: str) -> List[Dict[str, Any]]:
     """
-    Simplified parser: Treat each file as a single chunk.
-    This avoids memory issues and ensures stability.
+    Parse files into meaningful chunks.
+    - Python → function/class level
+    - Others → chunk_text
     """
     all_chunks = []
 
-    # Limit number of files processed (safety)
-    file_paths = file_paths[:3]
+    logger.info(f"Parsing {len(file_paths)} files...")
 
-    for file_path in file_paths:
+    start_time = time.time()
+
+    for file_path in tqdm(file_paths, desc="Parsing files"):
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
         except Exception as e:
             logger.warning(f"Failed to read file {file_path}: {e}")
@@ -206,22 +262,107 @@ def parse_code_files(file_paths: List[str], repo_path: str) -> List[Dict[str, An
         if not content.strip():
             continue
 
-        # HARD LIMIT content size (very important)
+        # HARD LIMIT (protect memory)
         content = content[:20000]
 
         relative_path = os.path.relpath(file_path, repo_path)
         file_name = os.path.basename(file_path)
 
-        chunk = {
-            "text": content,
-            "metadata": {
-                "file_name": file_name,
-                "path": relative_path,
-                "entity_name": "full_file"
-            }
-        }
+        logger.info(f"Parsing file: {relative_path}")
 
-        all_chunks.append(chunk)
+        # 🔥 PYTHON FILES → FUNCTION LEVEL SPLIT
+        if file_path.endswith(".py"):
+            chunks = _parse_python_file(content, relative_path, file_name)
+            all_chunks.extend(chunks)
+
+        # 🔥 MARKDOWN → smaller chunks
+        elif file_path.endswith(".md"):
+            raw_chunks = chunk_text(content, max_chunk_size=800, overlap=100)
+
+            MAX_CHUNKS_PER_FILE = 15
+
+            for i, text in enumerate(raw_chunks[:MAX_CHUNKS_PER_FILE]):
+                all_chunks.append({
+                    "text": text,
+                    "metadata": {
+                        "file_name": file_name,
+                        "path": relative_path,
+                        "entity_name": f"md_chunk_{i}"
+                    }
+                })
+
+        # 🔥 OTHER FILES
+        else:
+            # raw_chunks = chunk_text(content, max_chunk_size=1000, overlap=150)
+            raw_chunks = chunk_text(content, max_chunk_size=600, overlap=100)
+
+            for i, text in enumerate(raw_chunks):
+                all_chunks.append({
+                    "text": text,
+                    "metadata": {
+                        "file_name": file_name,
+                        "path": relative_path,
+                        "entity_name": f"chunk_{i}"
+                    }
+                })
+            logger.info(f"[CHUNKS] {relative_path} → {len(chunks)} chunks")
 
     logger.info(f"Generated {len(all_chunks)} chunks from {len(file_paths)} files.")
+    logger.info(f"Parsing completed in {time.time() - start_time:.2f}s")
     return all_chunks
+
+
+# =========================
+# PYTHON PARSER
+# =========================
+def _parse_python_file(content: str, path: str, file_name: str) -> List[Dict[str, Any]]:
+    """
+    Split Python files by functions/classes.
+    """
+    pattern = re.compile(r'^(?=def |class )', re.MULTILINE)
+    parts = pattern.split(content)
+
+    chunks = []
+
+    # Module-level code
+    if parts and parts[0].strip():
+        # module_chunks = chunk_text(parts[0], max_chunk_size=1000, overlap=100)
+        module_chunks = chunk_text(parts[0], max_chunk_size=600, overlap=100)
+
+        for i, text in enumerate(module_chunks):
+            chunks.append({
+                "text": text,
+                "metadata": {
+                    "file_name": file_name,
+                    "path": path,
+                    "entity_name": "module_level"
+                }
+            })
+
+    for part in parts[1:]:
+        if not part.strip():
+            continue
+
+        first_line = part.split("\n")[0]
+
+        entity_name = "unknown"
+        match = re.match(r'(?:def|class)\s+([a-zA-Z0-9_]+)', first_line)
+        if match:
+            entity_name = match.group(1)
+
+        # part_chunks = chunk_text(part, max_chunk_size=1200, overlap=150)
+        part_chunks = chunk_text(part, max_chunk_size=800, overlap=100)
+
+        for i, text in enumerate(part_chunks):
+            name = entity_name if i == 0 else f"{entity_name}_part{i}"
+
+            chunks.append({
+                "text": text,
+                "metadata": {
+                    "file_name": file_name,
+                    "path": path,
+                    "entity_name": name
+                }
+            })
+
+    return chunks

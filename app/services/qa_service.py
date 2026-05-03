@@ -4,6 +4,8 @@ from app.retrieval.ranking import rerank_chunks
 from app.llm.prompts import build_prompt
 from app.llm.llm_client import generate_response
 from app.utils.logger import get_logger
+from tqdm import tqdm
+import time
 
 logger = get_logger(__name__)
 
@@ -25,6 +27,7 @@ def handle_user_query(query: str, index_name: str) -> str:
 
     # Step 1: get relevant files
     relevant_files = retrieve_relevant_files(query, index_name)
+    logger.info(f"Relevant files: {len(relevant_files)}")
 
     # Step 2: filter chunks based on files
     file_paths = [f["file"] for f in relevant_files]
@@ -34,9 +37,11 @@ def handle_user_query(query: str, index_name: str) -> str:
         if c["metadata"]["path"] in file_paths
     ]
 
-    chunks = filtered_chunks[:3]  # limit
+    chunks = filtered_chunks[:5]  # limit
     if not chunks:
         return "No relevant context found in the codebase to answer your question."
+
+    logger.info(f"Chunks selected: {len(chunks)}")
         
     # 3. Rerank chunks (currently a pass-through)
     ranked_chunks = rerank_chunks(query, chunks)
@@ -45,7 +50,10 @@ def handle_user_query(query: str, index_name: str) -> str:
     prompt = build_prompt(query, ranked_chunks)
     
     # 5. Generate response
+    start_time = time.time()
+
     response = generate_response(prompt)
+    logger.info(f"LLM response time: {time.time() - start_time:.2f}s")
     
     # 6. Format output (already returning string)
     return response

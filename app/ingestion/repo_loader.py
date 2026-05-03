@@ -4,6 +4,8 @@ import git
 from urllib.parse import urlparse
 from app.config import REPOS_DIR
 from app.utils.logger import get_logger
+from tqdm import tqdm
+import time
 
 logger = get_logger(__name__)
 
@@ -34,7 +36,12 @@ def load_repository(source: str) -> str:
             shutil.rmtree(target_dir)
             
         logger.info(f"Cloning repository into {target_dir}")
+
+        start_time = time.time()
+
         git.Repo.clone_from(source, target_dir)
+        logger.info(f"Cloning completed in {time.time() - start_time:.2f}s")
+        
         return target_dir
     else:
         logger.info(f"Source identified as local path: {source}")
