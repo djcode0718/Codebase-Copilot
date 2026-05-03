@@ -68,66 +68,117 @@
 
 
 
+# from typing import List, Dict, Any
+# import numpy as np
+# from sklearn.feature_extraction.text import TfidfVectorizer
+# from app.indexing.vector_store import VectorStore
+# from app.config import EMBEDDING_MODEL
+# from app.utils.logger import get_logger
+# import time
+# from tqdm import tqdm
+
+# logger = get_logger(__name__)
+
+
+# def build_index(chunks: List[Dict[str, Any]], index_name: str = "default") -> VectorStore:
+#     """
+#     Converts chunks into embeddings and stores them using vector store.
+#     """
+
+#     if not chunks:
+#         logger.warning("No chunks provided to build_index.")
+#         return None
+
+#     logger.info(f"Loading embedding model: {EMBEDDING_MODEL}")
+
+#     # 🔹 Extract texts
+#     texts = [chunk["text"] for chunk in chunks]
+
+#     # 🔹 Initialize vectorizer
+#     vectorizer = TfidfVectorizer(
+#         max_features=1000,
+#         stop_words="english",
+#         lowercase=True
+#     )
+
+#     # 🔥 STEP 1: FIT + TRANSFORM (CRITICAL)
+#     start_time = time.time()
+#     logger.info("Fitting vectorizer and generating embeddings...")
+
+#     embeddings = vectorizer.fit_transform(texts).toarray()
+
+#     logger.info(f"Embedding generation completed in {time.time() - start_time:.2f}s")
+
+#     # 🔹 Optional: Per-chunk logging (NO recomputation)
+#     # for chunk in tqdm(chunks, desc="Logging embeddings"):
+#     #     logger.debug(f"Embedded: {chunk['metadata']['path']}")
+
+#     # 🔹 Get dimension
+#     dimension = embeddings.shape[1]
+
+#     # 🔹 Initialize vector store
+#     vector_store = VectorStore(index_name, dimension=dimension)
+
+#     # 🔹 Store vectorizer (IMPORTANT)
+#     vector_store.vectorizer = vectorizer
+
+#     # 🔹 Add embeddings
+#     vector_store.add_embeddings(np.array(embeddings), chunks)
+
+#     # 🔹 Save index
+#     vector_store.save()
+
+#     logger.info(f"Index built and saved successfully as '{index_name}'.")
+
+#     return vector_store
+
 from typing import List, Dict, Any
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from app.indexing.vector_store import VectorStore
-from app.config import EMBEDDING_MODEL
 from app.utils.logger import get_logger
 import time
-from tqdm import tqdm
 
 logger = get_logger(__name__)
 
 
 def build_index(chunks: List[Dict[str, Any]], index_name: str = "default") -> VectorStore:
     """
-    Converts chunks into embeddings and stores them using vector store.
+    Converts parsed code chunks into TF-IDF embeddings and saves them
+    to the vector store. This will be replaced by nomic-embed-text
+    dense embeddings in the LlamaIndex migration.
     """
 
     if not chunks:
         logger.warning("No chunks provided to build_index.")
         return None
 
-    logger.info(f"Loading embedding model: {EMBEDDING_MODEL}")
-
     # 🔹 Extract texts
     texts = [chunk["text"] for chunk in chunks]
 
-    # 🔹 Initialize vectorizer
+    logger.info(f"Building TF-IDF index for {len(texts)} chunks...")
+
+    # 🔹 Fit vectorizer
     vectorizer = TfidfVectorizer(
         max_features=1000,
         stop_words="english",
         lowercase=True
     )
 
-    # 🔥 STEP 1: FIT + TRANSFORM (CRITICAL)
     start_time = time.time()
-    logger.info("Fitting vectorizer and generating embeddings...")
-
     embeddings = vectorizer.fit_transform(texts).toarray()
+    logger.info(f"Vectorization completed in {time.time() - start_time:.2f}s")
 
-    logger.info(f"Embedding generation completed in {time.time() - start_time:.2f}s")
-
-    # 🔹 Optional: Per-chunk logging (NO recomputation)
-    # for chunk in tqdm(chunks, desc="Logging embeddings"):
-    #     logger.debug(f"Embedded: {chunk['metadata']['path']}")
-
-    # 🔹 Get dimension
     dimension = embeddings.shape[1]
 
-    # 🔹 Initialize vector store
+    # 🔹 Initialize and populate vector store
     vector_store = VectorStore(index_name, dimension=dimension)
-
-    # 🔹 Store vectorizer (IMPORTANT)
     vector_store.vectorizer = vectorizer
-
-    # 🔹 Add embeddings
     vector_store.add_embeddings(np.array(embeddings), chunks)
 
-    # 🔹 Save index
+    # 🔹 Persist to disk
     vector_store.save()
 
-    logger.info(f"Index built and saved successfully as '{index_name}'.")
+    logger.info(f"Index '{index_name}' built and saved — {len(chunks)} chunks, dimension={dimension}.")
 
     return vector_store
