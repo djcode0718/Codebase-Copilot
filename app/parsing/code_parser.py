@@ -305,7 +305,8 @@ def parse_code_files(file_paths: List[str], repo_path: str) -> List[Dict[str, An
                         "entity_name": f"chunk_{i}"
                     }
                 })
-            logger.info(f"[CHUNKS] {relative_path} → {len(chunks)} chunks")
+            # logger.info(f"[CHUNKS] {relative_path} → {len(chunks)} chunks")
+            logger.info(f"[CHUNKS] {relative_path} processed")
 
     logger.info(f"Generated {len(all_chunks)} chunks from {len(file_paths)} files.")
     logger.info(f"Parsing completed in {time.time() - start_time:.2f}s")

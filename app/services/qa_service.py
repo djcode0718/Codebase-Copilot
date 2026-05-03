@@ -32,12 +32,24 @@ def handle_user_query(query: str, index_name: str) -> str:
     # Step 2: filter chunks based on files
     file_paths = [f["file"] for f in relevant_files]
 
-    filtered_chunks = [
-        c for c in vector_store.metadata
-        if c["metadata"]["path"] in file_paths
-    ]
+    # filtered_chunks = [
+    #     c for c in vector_store.metadata
+    #     if c["metadata"]["path"] in file_paths
+    # ]
 
-    chunks = filtered_chunks[:5]  # limit
+    # chunks = filtered_chunks[:5]  # limit
+
+    from app.retrieval.retriever import retrieve_relevant_chunks
+
+    # Step 2: Hybrid retrieval
+    chunks = retrieve_relevant_chunks(
+        query,
+        vector_store,
+        file_paths,
+        top_k=10
+    )
+
+
     if not chunks:
         return "No relevant context found in the codebase to answer your question."
 
