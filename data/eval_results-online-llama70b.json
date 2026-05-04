@@ -1,0 +1,192 @@
+{
+  "total_queries": 6,
+  "hit_rate": 0.8333333333333334,
+  "mrr": 0.75,
+  "avg_faithfulness": 1.0,
+  "avg_relevancy": 1.0,
+  "avg_keyword_hit": 0.9583333333333334,
+  "mode_accuracy": 0.8333333333333334,
+  "avg_latency_total": 5.173678358395894,
+  "avg_latency_retrieval": 0.06124413013458252,
+  "avg_latency_rerank": 1.3535186052322388,
+  "avg_latency_llm": 3.7589156230290732,
+  "colbert_enabled": true,
+  "results": [
+    {
+      "question": "How does the retrieve_relevant_chunks function work?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "app/retrieval/retriever.py",
+        "app/services/qa_service.py"
+      ],
+      "expected_files": [
+        "app/retrieval/retriever.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The `retrieve_relevant_chunks` function, located in the `app/retrieval/retriever.py` file, is responsible for retrieving relevant code chunks based on a given query. \n\nHere's a step-by-step breakdown of how it works:\n\n1. It takes in several parameters: \n   - `query`: the user's search query\n   - `vector_store`: an instance of `VectorStore` from `app/indexing/vector_store`\n   - `relevant_files`: a list of relevant file paths\n   - `top_k`: the number of top results to return (default is 10)\n\n2. It iterates over the `vector_store.metadata` and calculates a score for each chunk based on its similarity to the query.\n\n3. It applies two types of boosts to the score:\n   - **File-level boost**: if the chunk's path matches one of the `relevant_files`, it adds 0.4 to the score.\n   - **Keyword overlap boost**: if the query words are found in the chunk's text, it adds 0.1 to the score.\n\n4. The chunks are then sorted in descending order based on their scores.\n\n5. Finally, it returns the top `top_k` chunks.\n\nHere's the relevant code snippet:\n```python\nfor i, chunk in enumerate(vector_store.metadata):\n    score = float(similarities[i])\n    # ...\n    chunk_copy = chunk.copy()\n    chunk_copy[\"score\"] = score\n    scored_chunks.append(chunk_copy)\n\nscored_chunks.sort(key=lambda x: x[\"score\"], reverse=True)\n\nreturn scored_chunks[:top_k]\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "retriev",
+        "chunk",
+        "vector",
+        "query"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 5.606346845626831,
+      "latency_retrieval": 0.06406092643737793,
+      "latency_rerank": 3.037626028060913,
+      "latency_llm": 2.50465989112854
+    },
+    {
+      "question": "What does the chunk_text function do and what parameters does it take?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/parsing/code_parser.py",
+        "app/parsing/chunk_utils.py"
+      ],
+      "expected_files": [
+        "app/parsing/chunk_utils.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The `chunk_text` function, located in the `chunk_utils.py` file, is used for safe and efficient text/code chunking with overlap. It takes three parameters:\n- `text`: the input string to be chunked\n- `max_chunk_size`: the maximum size of each chunk (defaults to 800)\n- `overlap`: the overlap between chunks (defaults to 100)\n\nIt returns a list of strings, where each string is a chunk of the input text. \n\n```python\ndef chunk_text(text: str, max_chunk_size: int = 800, overlap: int = 100) -> List[str]:\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "chunk",
+        "overlap",
+        "max_chunk_size"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 2.9794702529907227,
+      "latency_retrieval": 0.06794118881225586,
+      "latency_rerank": 1.2345428466796875,
+      "latency_llm": 1.6769862174987793
+    },
+    {
+      "question": "How is the vector store saved to disk?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/indexing/index_builder.py",
+        "app/indexing/vector_store.py"
+      ],
+      "expected_files": [
+        "app/indexing/vector_store.py",
+        "app/indexing/index_builder.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The vector store is saved to disk in the `save` method of the `VectorStore` class in `app/indexing/vector_store.py`. \n\n```python\ndef save(self):\n    try:\n        faiss.write_index(self.index, self.index_path)\n        with open(self.metadata_path, 'w', encoding='utf-8') as f:\n            json.dump(self.metadata, f, ensure_ascii=False, indent=2)\n        logger.info(f\"Vector store '{self.index_name}' saved successfully.\")\n    except Exception as e:\n        logger.error(f\"Failed to save vector store: {e}\")\n        raise\n```\n\nAlternatively, there's another implementation of the `save` method in the same file:\n\n```python\ndef save(self):\n    try:\n        os.makedirs(INDEX_DIR, exist_ok=True)\n\n        with open(self.metadata_path, \"w\", encoding=\"utf-8\") as f:\n            json.dump(self.metadata, f, ensure_ascii=False, indent=2)\n\n        if self.embeddings is not None:\n            np.save(self.embeddings_path, self.embeddings)\n\n        if self.vectorizer is not None:\n            with open(self.vectorizer_path, \"wb\") as f:\n                pickle.dump(self.vectorizer, f)\n\n        logger.info(f\"Vector store '{self.index_name}' saved successfully.\")\n\n    except Exception as e:\n        logger.error(f\"Failed to save vector store: {e}\")\n        raise\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "save",
+        "pickle",
+        "embeddings",
+        "json"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 3.358421802520752,
+      "latency_retrieval": 0.05200481414794922,
+      "latency_rerank": 0.8034889698028564,
+      "latency_llm": 2.5029280185699463
+    },
+    {
+      "question": "What LLM providers are supported?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "architectural",
+      "mode_correct": false,
+      "retrieved_files": [
+        "app/llm/llm_client.py",
+        "README.md"
+      ],
+      "expected_files": [
+        "app/llm/llm_client.py",
+        "app/config.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 0.5,
+      "answer": "### Supported LLM Providers\n\nThe following LLM providers are supported, as listed in the `README.md` file:\n\n1. **Groq**: An API-based provider with a fast, free tier.\n2. **Gemini**: An API-based provider known for being stable and having good reasoning capabilities.\n3. **OpenAI**: An API-based provider that requires credits for usage.\n4. **Ollama**: A local provider that is fully offline.\n\nThese providers are also referenced in the `.env` file for environment variable configuration and in the `app/llm/llm_client.py` file for implementation details.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "gemini",
+        "ollama",
+        "groq",
+        "openai"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 5.033083915710449,
+      "latency_retrieval": 0.06740212440490723,
+      "latency_rerank": 1.0355358123779297,
+      "latency_llm": 3.9301459789276123
+    },
+    {
+      "question": "How does the file filter decide which files to include?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/indexing/file_map_builder.py",
+        "app/ingestion/file_filter.py",
+        "app/services/repo_service.py"
+      ],
+      "expected_files": [
+        "app/ingestion/file_filter.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The file filter, defined in the `filter_files` function in **[app/ingestion/file_filter.py]**, decides which files to include by checking if the file extension is in the `VALID_EXTENSIONS` set. \n\nIt does this by iterating over all files in the repository directory using `os.walk`, and for each file, it checks if the file extension (obtained using `os.path.splitext`) is in the `VALID_EXTENSIONS` set. If it is, the file is added to the `valid_files` list.\n\n```python\nfor file in files:\n    _, ext = os.path.splitext(file)\n    if ext.lower() in VALID_EXTENSIONS:\n        full_path = os.path.join(root, file)\n        logger.debug(f\"Checking file: {full_path}\")\n\n        valid_files.append(full_path)\n        logger.info(f\"Accepted file: {full_path}\")\n```\n\nAdditionally, it ignores certain directories specified in the `IGNORE_DIRS` set by modifying the `dirs` list in-place:\n\n```python\ndirs[:] = [d for d in dirs if d not in IGNORE_DIRS]\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "extension",
+        "ignore",
+        "valid"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 9.045340538024902,
+      "latency_retrieval": 0.060050010681152344,
+      "latency_rerank": 0.9786257743835449,
+      "latency_llm": 8.006664752960205
+    },
+    {
+      "question": "How could the retrieval quality be improved?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/services/qa_service.py",
+        "app/retrieval/ranking.py",
+        "README.md"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "answer": "### Improvement Opportunities for Retrieval Quality\n\nBased on the architecture of the provided codebase, several opportunities for improvement can be identified to enhance the retrieval quality:\n\n1. **Advanced Ranking Models**: \n   - The current `rerank_chunks` function in `app/retrieval/ranking.py` uses a simple filtering and sorting mechanism based on scores. \n   - Implementing more sophisticated ranking models, such as learning-to-rank algorithms (e.g., LambdaRank, RankNet), could significantly improve the relevance of the retrieved chunks.\n\n2. **Enhanced Query Understanding**:\n   - The query processing in `app/retrieval/retriever.py` relies on basic vectorization and keyword matching.\n   - Utilizing natural language processing (NLP) techniques, such as named entity recognition, part-of-speech tagging, or dependency parsing, could provide a deeper understanding of the query and improve retrieval accuracy.\n\n3. **Semantic Search Integration**:\n   - The current implementation uses TF-IDF cosine similarity for semantic approximation.\n   - Integrating more advanced semantic search techniques, such as those utilizing BERT or other transformer-based models for dense vector representations, could enhance the retrieval of semantically relevant chunks.\n\n4. **Personalization and Contextualization**:\n   - The `handle_user_query` function in `app/services/qa_service.py` considers user memory for building the prompt.\n   - Further personalization and contextualization, such as incorporating user preferences, search history, or environmental context, could tailor the retrieval results to better match individual user needs.\n\n5. **Feedback Mechanisms**:\n   - Implementing feedback mechanisms that allow users to rate the relevance of retrieved chunks could provide valuable data for training and improving the ranking models over time.\n\n6. **Indexing and Storage Optimization**:\n   - Optimizing the indexing and storage of the vector store in `app/retrieval/retriever.py` for faster query execution and more efficient use of resources could indirectly improve retrieval quality by allowing for more complex queries or larger datasets.\n\n7. **Diversification of Retrieval Results**:\n   - Introducing diversification techniques to ensure that the retrieved chunks cover a wide range of aspects related to the query could enhance the overall quality of the retrieval results and prevent redundancy.\n\nBy addressing these areas, the retrieval quality of the system can be significantly improved, leading to more accurate and relevant results for user queries.",
+      "faithfulness_score": null,
+      "relevancy_score": null,
+      "keywords_found": [
+        "retriev",
+        "chunk",
+        "improve"
+      ],
+      "keyword_hit_rate": 0.75,
+      "latency_total": 5.019406795501709,
+      "latency_retrieval": 0.05600571632385254,
+      "latency_rerank": 1.031292200088501,
+      "latency_llm": 3.9321088790893555
+    }
+  ]
+}

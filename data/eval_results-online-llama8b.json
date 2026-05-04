@@ -1,0 +1,309 @@
+{
+  "total_queries": 10,
+  "hit_rate": 0.8,
+  "mrr": 0.6166666666666667,
+  "avg_faithfulness": 0.9,
+  "avg_relevancy": 1.0,
+  "avg_keyword_hit": 0.9666666666666667,
+  "mode_accuracy": 1,
+  "avg_latency_total": 19.900932598114014,
+  "avg_latency_retrieval": 0.06428537368774415,
+  "avg_latency_rerank": 1.3149617671966554,
+  "avg_latency_llm": 18.521685457229616,
+  "colbert_enabled": true,
+  "results": [
+    {
+      "question": "How does the retrieve_relevant_chunks function work?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "app/services/qa_service.py",
+        "app/retrieval/retriever.py"
+      ],
+      "expected_files": [
+        "app/retrieval/retriever.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "**retrieve_relevant_chunks function explanation**\n\nThe `retrieve_relevant_chunks` function is located in the `app/retrieval/retriever.py` file. It takes in four parameters:\n\n* `query`: a string representing the user's query\n* `vector_store`: an instance of the `VectorStore` class\n* `relevant_files`: a list of file paths relevant to the query\n* `top_k`: an integer representing the number of top chunks to return (default is 10)\n\nHere's a step-by-step breakdown of how the function works:\n\n1. It iterates over the `vector_store.metadata` list, which contains metadata about each chunk in the vector store.\n2. For each chunk, it calculates a score based on two factors:\n\t* File-level boost: if the chunk's path matches one of the relevant files, it adds 0.4 to the score.\n\t* Keyword overlap boost: if any of the query words are present in the chunk's text, it adds 0.1 to the score.\n3. It normalizes the chunk path and calculates the similarity score between the query and the chunk's text.\n4. It creates a copy of the chunk with the calculated score and adds it to the `scored_chunks` list.\n5. It sorts the `scored_chunks` list in descending order based on the score.\n6. It returns the top `top_k` chunks from the sorted list.\n\nThe function uses the `similarities` list to calculate the similarity score between the query and each chunk's text. However, the `similarities` list is not shown in the provided code snippet, so its implementation is unknown.\n\nHere's the relevant code snippet:\n```python\nfor i, chunk in enumerate(vector_store.metadata):\n    score = float(similarities[i])\n\n    # \ud83d\udd39 Normalize chunk path the same way\n    chunk_path = Path(chunk[\"metadata\"][\"path\"]).as_posix()\n\n    # \ud83d\udd25 File-level boost \u2014 only fires if paths match correctly\n    if chunk_path in relevant_files_set:\n        score += 0.4\n\n    # \ud83d\udd25 Keyword overlap boost\n    text = chunk[\"text\"].lower()\n    query_words = query.lower().split()\n    if any(word in text for word in query_words):\n        score += 0.1\n\n    chunk_copy = chunk.copy()\n    chunk_copy[\"score\"] = score\n    scored_chunks.append(chunk_copy)\n\nscored_chunks.sort(key=lambda x: x[\"score\"], reverse=True)\n\nlogger.info(f\"Hybrid retrieval complete \u2014 top {top_k} chunks selected from {len(scored_chunks)} total\")\n\nreturn scored_chunks[:top_k]\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "retriev",
+        "chunk",
+        "vector",
+        "query"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 5.653613090515137,
+      "latency_retrieval": 0.07900786399841309,
+      "latency_rerank": 3.385686159133911,
+      "latency_llm": 2.1889190673828125
+    },
+    {
+      "question": "What does the chunk_text function do and what parameters does it take?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/parsing/code_parser.py",
+        "app/parsing/chunk_utils.py"
+      ],
+      "expected_files": [
+        "app/parsing/chunk_utils.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The `chunk_text` function splits a given text into chunks of a maximum size with a specified overlap. \n\nIt takes three parameters:\n- `text`: The input text to be chunked.\n- `max_chunk_size`: The maximum size of each chunk (default is 800).\n- `overlap`: The overlap between chunks (default is 100).",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "chunk",
+        "overlap",
+        "max_chunk_size"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 9.805781841278076,
+      "latency_retrieval": 0.06819415092468262,
+      "latency_rerank": 1.1416897773742676,
+      "latency_llm": 8.595897912979126
+    },
+    {
+      "question": "How is the vector store saved to disk?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/indexing/index_builder.py",
+        "app/indexing/vector_store.py"
+      ],
+      "expected_files": [
+        "app/indexing/vector_store.py",
+        "app/indexing/index_builder.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The vector store is saved to disk in the `save` method of the `VectorStore` class in `vector_store.py`. \n\n```python\ndef save(self):\n    try:\n        os.makedirs(INDEX_DIR, exist_ok=True)\n\n        with open(self.metadata_path, \"w\", encoding=\"utf-8\") as f:\n            json.dump(self.metadata, f, ensure_ascii=False, indent=2)\n\n        if self.embeddings is not None:\n            np.save(self.embeddings_path, self.embeddings)\n\n        if self.vectorizer is not None:\n            with open(self.vectorizer_path, \"wb\") as f:\n                pickle.dump(self.vectorizer, f)\n\n        logger.info(f\"Vector store '{self.index_name}' saved successfully.\")\n\n    except Exception as e:\n        logger.error(f\"Failed to save vector store: {e}\")\n        raise\n```\n\nThis method saves the following components of the vector store to disk:\n\n1. Metadata: saved as a JSON file at `self.metadata_path`.\n2. Embeddings: saved as a NumPy file at `self.embeddings_path`.\n3. Vectorizer: saved as a pickled object at `self.vectorizer_path`.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "save",
+        "pickle",
+        "embeddings",
+        "json"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 14.476809024810791,
+      "latency_retrieval": 0.06416797637939453,
+      "latency_rerank": 0.8477098941802979,
+      "latency_llm": 13.564931154251099
+    },
+    {
+      "question": "What LLM providers are supported?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/llm_client.py",
+        "README.md"
+      ],
+      "expected_files": [
+        "app/llm/llm_client.py",
+        "app/config.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 0.5,
+      "answer": "According to the `README.md` file, the following LLM providers are supported:\n\n| Provider | Type  | Notes                  |\n| -------- | ----- | ---------------------- |\n| Groq     | API   | Fast, free tier        |\n| Gemini   | API   | Stable, good reasoning |\n| OpenAI   | API   | Requires credits       |\n| Ollama   | Local | Fully offline          |\n\nYou can find this information in the `README.md` file under the section `\ud83e\udd16 Supported LLM Providers`.",
+      "faithfulness_score": 0.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "gemini",
+        "ollama",
+        "groq",
+        "openai"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 20.245458364486694,
+      "latency_retrieval": 0.06505918502807617,
+      "latency_rerank": 1.2736260890960693,
+      "latency_llm": 18.90677309036255
+    },
+    {
+      "question": "How does the file filter decide which files to include?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/ingestion/file_filter.py",
+        "app/indexing/file_map_builder.py",
+        "app/services/repo_service.py"
+      ],
+      "expected_files": [
+        "app/ingestion/file_filter.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The file filter decides which files to include based on the file extension and the directory path. \n\nIt checks if the file extension is in the `VALID_EXTENSIONS` set and if the directory path is not in the `IGNORE_DIRS` set. \n\nHere's the relevant code:\n\n```python\nfor file in files:\n    _, ext = os.path.splitext(file)\n    if ext.lower() in VALID_EXTENSIONS:\n        # ...\n```\n\n```python\ndirs[:] = [d for d in dirs if d not in IGNORE_DIRS]\n```\n\nThis means that files with extensions like `.py`, `.js`, `.ts`, etc. and not in directories like `node_modules`, `.git`, etc. will be included in the filtered list.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "extension",
+        "ignore",
+        "valid"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 19.792608976364136,
+      "latency_retrieval": 0.06499004364013672,
+      "latency_rerank": 1.0866200923919678,
+      "latency_llm": 18.64099884033203
+    },
+    {
+      "question": "What are the main limitations of this project?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "app/parsing/code_parser.py",
+        "_codebase_context",
+        "README.md"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": true,
+      "reciprocal_rank": 0.3333333333333333,
+      "answer": "**Limitations of Codebase Copilot**\n\nBased on the provided documentation and codebase context, the main limitations of Codebase Copilot are:\n\n1. **Basic Chunking**: The current implementation only supports file-level chunking, which may not be sufficient for understanding complex codebases with multiple functions or modules.\n2. **No Advanced Reranking**: The retrieval component relies on simple cosine similarity, which may not effectively capture the nuances of code relationships. Advanced reranking techniques, such as graph-based or neural network-based methods, are not implemented.\n3. **No Semantic Embeddings**: The current implementation uses lightweight TF-IDF embeddings, which may not capture the semantic meaning of code. Integrating semantic embeddings, such as those based on graph neural networks or transformer models, could improve the accuracy of code understanding.\n4. **Limited LLM Support**: While Codebase Copilot supports multiple LLM providers, the implementation is still limited to a few popular models. Integrating more LLMs or developing custom models could enhance the tool's capabilities.\n5. **No Streaming Responses**: The current implementation processes queries sequentially, which may lead to performance issues with large codebases or high query volumes. Implementing streaming responses could improve the tool's responsiveness and scalability.\n6. **No Auto LLM Fallback System**: The current implementation relies on manual configuration of LLM providers and models. Developing an auto-fallback system could ensure that the tool continues to function even if one or more LLM providers are unavailable.\n7. **No LangChain/LlamaIndex Integration**: While the documentation mentions LangChain/LlamaIndex as a potential integration, it is not currently implemented. Integrating these libraries could provide additional features and improve the tool's performance.\n\nThese limitations highlight areas for improvement and expansion in Codebase Copilot, which could enhance its capabilities and make it a more comprehensive code understanding tool.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "limitation",
+        "improvement",
+        "issue"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 34.458226442337036,
+      "latency_retrieval": 0.06216716766357422,
+      "latency_rerank": 1.2511842250823975,
+      "latency_llm": 33.144875049591064
+    },
+    {
+      "question": "How could the retrieval quality be improved?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/services/qa_service.py",
+        "README.md",
+        "app/retrieval/ranking.py"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "answer": "**Improving Retrieval Quality**\n\nBased on the provided code, there are several opportunities to improve the retrieval quality:\n\n### 1. **Enhance Query Vectorization**\n\n*   **Use more advanced vectorization techniques**: The current implementation uses a simple TF-IDF vectorizer. Consider using more advanced techniques like BERT-based vectorizers or dense passage retrieval models.\n*   **Experiment with different vectorization parameters**: The choice of vectorizer and its parameters can significantly impact the retrieval quality. Experiment with different settings to find the optimal configuration.\n\n### 2. **Improve File-Level Retrieval**\n\n*   **Use more robust file-level scoring**: The current implementation uses a simple score boosting approach. Consider using more sophisticated techniques like file-level embeddings or graph-based methods.\n*   **Incorporate additional file metadata**: The current implementation only considers file paths. Consider incorporating additional metadata like file size, creation date, or author information.\n\n### 3. **Optimize Hybrid Chunk Retrieval**\n\n*   **Use more efficient similarity calculation**: The current implementation uses a simple cosine similarity calculation. Consider using more efficient techniques like approximate nearest neighbors search or GPU-accelerated similarity calculation.\n*   **Experiment with different similarity metrics**: The choice of similarity metric can significantly impact the retrieval quality. Experiment with different metrics like Jaccard similarity or Levenshtein distance.\n\n### 4. **Enhance Re-Ranking**\n\n*   **Use more advanced re-ranking techniques**: The current implementation uses a simple re-ranking approach based on chunk scores. Consider using more advanced techniques like re-ranking with neural networks or graph-based methods.\n*   **Incorporate additional re-ranking features**: The current implementation only considers chunk scores. Consider incorporating additional features like chunk metadata or user feedback.\n\n### 5. **Monitor and Evaluate Retrieval Quality**\n\n*   **Implement evaluation metrics**: The current implementation does not provide any evaluation metrics. Consider implementing metrics like precision, recall, or F1-score to monitor and evaluate the retrieval quality.\n*   **Use A/B testing**: The current implementation does not provide any A/B testing capabilities. Consider implementing A/B testing to compare the performance of different retrieval configurations.\n\nBy addressing these opportunities, you can significantly improve the retrieval quality and provide better results to your users.\n\n**Prioritized Suggestions:**\n\n1.  **Enhance Query Vectorization**: Experiment with different vectorization techniques and parameters to find the optimal configuration.\n2.  **Improve File-Level Retrieval**: Incorporate additional file metadata and use more robust file-level scoring techniques.\n3.  **Optimize Hybrid Chunk Retrieval**: Use more efficient similarity calculation techniques and experiment with different similarity metrics.\n4.  **Enhance Re-Ranking**: Incorporate additional re-ranking features and use more advanced re-ranking techniques.\n5.  **Monitor and Evaluate Retrieval Quality**: Implement evaluation metrics and use A/B testing to compare the performance of different retrieval configurations.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "retriev",
+        "embed",
+        "chunk",
+        "improve"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 20.19451093673706,
+      "latency_retrieval": 0.05678892135620117,
+      "latency_rerank": 1.0124998092651367,
+      "latency_llm": 19.125222206115723
+    },
+    {
+      "question": "What design patterns are used in this codebase?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "app/parsing/code_parser.py",
+        "README.md"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "answer": "## Design Patterns Used in the Codebase\n\nBased on the provided code structure and architecture, several design patterns are visible:\n\n### 1. **Modular Monolithic Architecture**\n\nThe project is structured into separate modules (`ingestion`, `parsing`, `indexing`, `app`) each responsible for a specific step in the RAG pipeline. This modular approach allows for easier maintenance, extension, and reuse of code.\n\n### 2. **Step-by-Step Pipeline**\n\nThe architecture follows a step-by-step pipeline approach, where each step is responsible for a specific task:\n\n1. Ingestion: Load code from repository or local project\n2. Parsing: Break code into chunks\n3. Indexing: Create embeddings for chunks\n4. Retrieval: Use embeddings to retrieve relevant chunks\n5. Generation: Use LLM to generate final answer\n\nThis pipeline approach makes the code easier to understand and maintain.\n\n### 3. **Dependency Injection**\n\nThe `main.py` file acts as the entry point, connecting all the modules together. This is an example of dependency injection, where the `main.py` file provides the necessary dependencies (e.g., `config.py`, `repo_loader.py`) to the other modules.\n\n### 4. **Single Responsibility Principle (SRP)**\n\nEach module has a single responsibility, making it easier to understand and maintain. For example, the `code_parser.py` module is responsible for breaking code into chunks, and the `index_builder.py` module is responsible for creating embeddings.\n\n### 5. **Open-Closed Principle (OCP)**\n\nThe codebase is designed to be extensible, allowing new modules to be added without modifying existing code. For example, the `app/parsing/chunk_utils.py` module provides a way to chunk code, but new chunking algorithms can be added without modifying the existing code.\n\n### 6. **Don't Repeat Yourself (DRY)**\n\nThe codebase avoids repetition by using functions and modules to encapsulate common logic. For example, the `file_filter.py` module provides a way to ignore unnecessary files, and the `config.py` module provides a way to configure the application.\n\nThese design patterns make the codebase more maintainable, scalable, and easier to understand.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "pattern",
+        "pipeline"
+      ],
+      "keyword_hit_rate": 0.6666666666666666,
+      "latency_total": 19.354928731918335,
+      "latency_retrieval": 0.06852412223815918,
+      "latency_rerank": 0.801837682723999,
+      "latency_llm": 18.484566926956177
+    },
+    {
+      "question": "Give me an overview of how the indexing pipeline works",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "app/indexing/index_builder.py",
+        "README.md"
+      ],
+      "expected_files": [
+        "_codebase_context",
+        "app/services/repo_service.py",
+        "app/indexing/index_builder.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 0.3333333333333333,
+      "answer": "**Indexing Pipeline Overview**\n\nThe indexing pipeline, implemented in `app/indexing/index_builder.py`, is responsible for converting parsed code chunks into TF-IDF embeddings and storing them in a vector store. Here's a step-by-step breakdown of the pipeline:\n\n### 1. Input Validation\n\nThe pipeline starts by validating the input `chunks`, which is a list of dictionaries containing parsed code information. If the input is empty, a warning is logged, and `None` is returned.\n\n### 2. Text Extraction\n\nThe pipeline extracts the text from each chunk using a list comprehension: `[chunk[\"text\"] for chunk in chunks]`. This text is used for vectorization.\n\n### 3. Vectorization\n\nThe pipeline uses the `TfidfVectorizer` from scikit-learn to transform the extracted text into TF-IDF embeddings. The vectorizer is configured with the following parameters:\n\n* `max_features=1000`: limits the number of features to 1000\n* `stop_words=\"english\"`: removes common English stop words\n* `lowercase=True`: converts all text to lowercase\n\nThe `fit_transform` method is used to generate the embeddings, and the resulting matrix is converted to a NumPy array using `toarray()`.\n\n### 4. Vector Store Initialization\n\nA `VectorStore` instance is created with the index name and dimension (extracted from the embeddings matrix).\n\n### 5. Vector Store Population\n\nThe pipeline adds the generated embeddings to the vector store using the `add_embeddings` method, passing in the embeddings matrix and the original chunks.\n\n### 6. Persistence\n\nThe vector store is persisted to disk using the `save` method.\n\n### 7. Logging and Return\n\nFinally, the pipeline logs a success message with the index name, dimension, and number of chunks, and returns the populated vector store.\n\n**Note**: The original code had a commented-out section using the SentenceTransformer model, which is not currently being used.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "index",
+        "embed",
+        "chunk",
+        "store"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 22.014824151992798,
+      "latency_retrieval": 0.057839155197143555,
+      "latency_rerank": 1.013157844543457,
+      "latency_llm": 20.943827152252197
+    },
+    {
+      "question": "What would you add to make this production ready?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "_codebase_context",
+        "README.md",
+        "ui/streamlit_app.py"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "**Production Readiness Improvements**\n\nTo make Codebase Copilot production-ready, consider the following enhancements:\n\n### 1. **Monitoring and Logging**\n\n* Implement a robust logging system to track user interactions, system performance, and errors.\n* Utilize a monitoring tool (e.g., Prometheus, Grafana) to collect metrics on system usage, latency, and resource utilization.\n* Set up alerts for critical issues, such as high latency, errors, or resource exhaustion.\n\n### 2. **Scalability and Load Balancing**\n\n* Design the system to scale horizontally by adding more instances of the application, vector store, and LLM services.\n* Implement load balancing to distribute incoming requests across multiple instances.\n* Use a service discovery mechanism (e.g., etcd, Consul) to manage instance registration and communication.\n\n### 3. **Security and Authentication**\n\n* Implement secure authentication and authorization mechanisms to protect user data and prevent unauthorized access.\n* Use a secure communication protocol (e.g., HTTPS, TLS) for all interactions between services and clients.\n* Regularly update dependencies and libraries to ensure the latest security patches.\n\n### 4. **Data Persistence and Backup**\n\n* Design a robust data persistence mechanism to store user data, vector embeddings, and LLM models.\n* Implement regular backups of critical data to prevent loss in case of system failure or data corruption.\n* Use a distributed storage solution (e.g., Apache Cassandra, Amazon S3) to ensure high availability and scalability.\n\n### 5. **LLM Model Management**\n\n* Develop a model management system to handle LLM model updates, versioning, and deployment.\n* Implement a model serving platform (e.g., TensorFlow Serving, AWS SageMaker) to manage model deployment and scaling.\n* Use a model registry (e.g., MLflow, DVC) to track model versions, metadata, and performance metrics.\n\n### 6. **User Interface and Experience**\n\n* Enhance the user interface to provide a seamless and intuitive experience for users.\n* Implement features like code snippet highlighting, syntax coloring, and code completion to improve user productivity.\n* Use a user feedback mechanism to collect suggestions and improve the system based on user needs.\n\n### 7. **Testing and Quality Assurance**\n\n* Develop a comprehensive testing framework to ensure the system's reliability, scalability, and performance.\n* Implement automated testing (e.g., unit tests, integration tests, end-to-end tests) to catch bugs and regressions early.\n* Use a continuous integration and continuous deployment (CI/CD) pipeline to automate testing, building, and deployment.\n\n### 8. **Documentation and Support**\n\n* Create detailed documentation for the system, including user guides, developer guides, and API documentation.\n* Establish a support channel (e.g., email, chat, forum) for users to report issues and receive assistance.\n* Provide regular updates on system changes, new features, and known issues to keep users informed.\n\nBy addressing these areas, Codebase Copilot can become a robust, scalable, and reliable production-ready system that meets the needs of its users.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 33.01256442070007,
+      "latency_retrieval": 0.056115150451660156,
+      "latency_rerank": 1.3356060981750488,
+      "latency_llm": 31.620843172073364
+    }
+  ]
+}

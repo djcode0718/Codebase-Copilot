@@ -277,16 +277,117 @@
 #             else:
 #                 return f"LLM failed after 3 attempts: {e}"
 
+# """
+# llm_client.py
+# ─────────────
+# Returns LlamaIndex-compatible LLM and embedding model instances.
+# The rest of the pipeline (qa_service, index_builder) imports from here
+# so the provider can be swapped via .env without touching any other file.
+# """
+
+# import os
+# from app.config import (
+#     LLM_PROVIDER,
+#     OLLAMA_BASE_URL,
+#     OLLAMA_LLM_MODEL,
+#     OLLAMA_EMBED_MODEL,
+#     GEMINI_API_KEY,
+#     GROQ_API_KEY,
+#     OPENAI_API_KEY,
+# )
+# from app.utils.logger import get_logger
+
+# logger = get_logger(__name__)
+
+
+# def get_llm():
+#     """
+#     Returns a LlamaIndex LLM instance based on LLM_PROVIDER env var.
+#     Default: Ollama (fully local, no API key needed).
+#     """
+#     """
+#     Returns LLM based on config:
+#     - USE_EVAL_LLM=True  → Groq fast model
+#     - else               → normal provider
+#     """
+
+#     logger.info(f"Loading LLM — provider: {LLM_PROVIDER}")
+
+#     if LLM_PROVIDER == "ollama":
+#         from llama_index.llms.ollama import Ollama
+#         return Ollama(
+#             model=OLLAMA_LLM_MODEL,
+#             base_url=OLLAMA_BASE_URL,
+#             request_timeout=120.0,
+#         )
+
+#     elif LLM_PROVIDER == "gemini":
+#         from llama_index.llms.gemini import Gemini
+#         return Gemini(
+#             model="models/gemini-1.5-flash",
+#             api_key=GEMINI_API_KEY,
+#         )
+
+#     elif LLM_PROVIDER == "groq":
+#         from llama_index.llms.groq import Groq
+#         return Groq(
+#             model="openai/gpt-oss-20b",
+#             api_key=GROQ_API_KEY,
+#         )
+
+#     elif LLM_PROVIDER == "openai":
+#         from llama_index.llms.openai import OpenAI
+#         return OpenAI(
+#             model="gpt-4o-mini",
+#             api_key=OPENAI_API_KEY,
+#         )
+
+#     else:
+#         raise ValueError(f"Unknown LLM_PROVIDER: '{LLM_PROVIDER}'. "
+#                          f"Valid options: ollama, gemini, groq, openai")
+
+
+# def get_embed_model():
+#     """
+#     Returns a LlamaIndex embedding model.
+#     Always uses nomic-embed-text via local Ollama — no API cost,
+#     runs fast on M4 unified memory (768-dim dense embeddings).
+#     """
+#     from llama_index.embeddings.ollama import OllamaEmbedding
+#     logger.info(f"Loading embedding model: {OLLAMA_EMBED_MODEL} via Ollama")
+#     return OllamaEmbedding(
+#         model_name=OLLAMA_EMBED_MODEL,
+#         base_url=OLLAMA_BASE_URL,
+#     )
+
+
 """
 llm_client.py
 ─────────────
 Returns LlamaIndex-compatible LLM and embedding model instances.
-The rest of the pipeline (qa_service, index_builder) imports from here
-so the provider can be swapped via .env without touching any other file.
+The rest of the pipeline (qa_service, index_builder, query_router, etc.)
+imports from here — so the provider can be swapped via .env without
+touching any other file.
+
+── FAST LLM TOGGLE ──────────────────────────────────────────────────────────
+Set USE_FAST_LLM=true in .env to switch the entire project to Groq cloud LLM.
+
+  USE_FAST_LLM=false (default) → uses LLM_PROVIDER (e.g. local Ollama)
+  USE_FAST_LLM=true            → uses Groq with GROQ_FAST_MODEL
+
+  GROQ_FAST_MODEL options (set in .env):
+    "llama-3.3-70b-versatile"  → better quality,  ~2-3s latency  (default, good for evals)
+    "llama-3.1-8b-instant"   → faster,          ~0.5-1s latency (good for quick demos)
+
+Embedding model is ALWAYS local Ollama (nomic-embed-text) — never affected
+by this toggle. Only the generative LLM switches.
+─────────────────────────────────────────────────────────────────────────────
 """
 
 import os
 from app.config import (
+    USE_FAST_LLM,
+    GROQ_FAST_MODEL,
     LLM_PROVIDER,
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
@@ -302,15 +403,29 @@ logger = get_logger(__name__)
 
 def get_llm():
     """
-    Returns a LlamaIndex LLM instance based on LLM_PROVIDER env var.
-    Default: Ollama (fully local, no API key needed).
-    """
-    """
-    Returns LLM based on config:
-    - USE_EVAL_LLM=True  → Groq fast model
-    - else               → normal provider
+    Returns a LlamaIndex LLM instance.
+
+    Resolution order:
+      1. USE_FAST_LLM=true  → Groq (GROQ_FAST_MODEL), ignores LLM_PROVIDER
+      2. USE_FAST_LLM=false → LLM_PROVIDER (ollama / gemini / groq / openai)
+
+    This is the single point of control for the generative LLM across the
+    entire project. Every component that needs an LLM calls this function
+    (or picks it up via Settings.llm set in repo_service / main).
     """
 
+    # ── FAST LLM ON ───────────────────────────────────────────────────────────
+    # To disable: set USE_FAST_LLM=false in .env
+    if USE_FAST_LLM:
+        logger.info(f"[FAST LLM] Using Groq — model: {GROQ_FAST_MODEL}")
+        from llama_index.llms.groq import Groq
+        return Groq(
+            model=GROQ_FAST_MODEL,
+            api_key=GROQ_API_KEY,
+        )
+    # ── FAST LLM OFF ──────────────────────────────────────────────────────────
+
+    # Normal provider path — controlled by LLM_PROVIDER in .env
     logger.info(f"Loading LLM — provider: {LLM_PROVIDER}")
 
     if LLM_PROVIDER == "ollama":
@@ -343,15 +458,22 @@ def get_llm():
         )
 
     else:
-        raise ValueError(f"Unknown LLM_PROVIDER: '{LLM_PROVIDER}'. "
-                         f"Valid options: ollama, gemini, groq, openai")
+        raise ValueError(
+            f"Unknown LLM_PROVIDER: '{LLM_PROVIDER}'. "
+            f"Valid options: ollama, gemini, groq, openai"
+        )
 
 
 def get_embed_model():
     """
     Returns a LlamaIndex embedding model.
-    Always uses nomic-embed-text via local Ollama — no API cost,
+
+    Always uses nomic-embed-text via local Ollama — regardless of USE_FAST_LLM
+    or LLM_PROVIDER. Embedding stays local: no API cost, no latency variance,
     runs fast on M4 unified memory (768-dim dense embeddings).
+
+    This is intentional: switching the generative LLM should never affect
+    how chunks are embedded or how the index is built.
     """
     from llama_index.embeddings.ollama import OllamaEmbedding
     logger.info(f"Loading embedding model: {OLLAMA_EMBED_MODEL} via Ollama")
@@ -359,3 +481,18 @@ def get_embed_model():
         model_name=OLLAMA_EMBED_MODEL,
         base_url=OLLAMA_BASE_URL,
     )
+
+
+def generate_summary(prompt: str) -> str:
+    """
+    Used by file_map_builder for file-level summarization at index time.
+    Respects USE_FAST_LLM — if the toggle is on, uses Groq for faster
+    indexing too. Falls back gracefully on error.
+    """
+    try:
+        llm = get_llm()
+        response = llm.complete(prompt)
+        return str(response).strip()
+    except Exception as e:
+        logger.error(f"generate_summary failed: {e}")
+        return ""
