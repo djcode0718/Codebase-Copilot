@@ -1,0 +1,309 @@
+{
+  "total_queries": 10,
+  "hit_rate": 0.8,
+  "mrr": 0.6166666666666667,
+  "avg_faithfulness": 0.8,
+  "avg_relevancy": 1.0,
+  "avg_keyword_hit": 0.9666666666666667,
+  "mode_accuracy": 0.9,
+  "avg_latency_total": 9.75823745727539,
+  "avg_latency_retrieval": 0.06921110153198243,
+  "avg_latency_rerank": 1.2193350076675415,
+  "avg_latency_llm": 8.469691348075866,
+  "colbert_enabled": true,
+  "results": [
+    {
+      "question": "How does the retrieve_relevant_chunks function work?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/services/qa_service.py",
+        "app/llm/prompts.py",
+        "app/retrieval/retriever.py"
+      ],
+      "expected_files": [
+        "app/retrieval/retriever.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The `retrieve_relevant_chunks` function, located in the `app/retrieval/retriever.py` file, is responsible for retrieving relevant code chunks based on a given query. \n\nHere's a step-by-step breakdown of how it works:\n1. It takes in a `query`, a `vector_store`, a list of `relevant_files`, and an optional `top_k` parameter.\n2. It calculates the similarity scores between the query and the chunks in the vector store.\n3. For each chunk, it checks if the chunk's path is in the `relevant_files` list and applies a file-level boost to the score if it is.\n4. It also checks for keyword overlap between the query and the chunk's text, applying a boost to the score if any keywords are found.\n5. The chunks are then sorted by their scores in descending order.\n6. Finally, it returns the top `top_k` chunks.\n\nHere's the relevant code snippet from `app/retrieval/retriever.py`:\n```python\nfor i, chunk in enumerate(vector_store.metadata):\n    score = float(similarities[i])\n    # ...\n    if chunk_path in relevant_files_set:\n        score += 0.4\n    # ...\n    if any(word in text for word in query_words):\n        score += 0.1\n    # ...\nscored_chunks.sort(key=lambda x: x[\"score\"], reverse=True)\nreturn scored_chunks[:top_k]\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "retriev",
+        "chunk",
+        "vector",
+        "query"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 5.263841867446899,
+      "latency_retrieval": 0.07570505142211914,
+      "latency_rerank": 2.5680108070373535,
+      "latency_llm": 2.6201260089874268
+    },
+    {
+      "question": "What does the chunk_text function do and what parameters does it take?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/parsing/code_parser.py",
+        "app/parsing/chunk_utils.py"
+      ],
+      "expected_files": [
+        "app/parsing/chunk_utils.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The `chunk_text` function, located in the `chunk_utils.py` file, is used for safe and efficient text/code chunking with overlap. \n\nIt takes the following parameters:\n- `text`: the input string to be chunked\n- `max_chunk_size`: the maximum size of each chunk (defaults to 800)\n- `overlap`: the overlap between chunks (defaults to 100)\n\n```python\ndef chunk_text(text: str, max_chunk_size: int = 800, overlap: int = 100) -> List[str]:\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "chunk",
+        "overlap",
+        "max_chunk_size"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 3.0731241703033447,
+      "latency_retrieval": 0.05794215202331543,
+      "latency_rerank": 1.3494668006896973,
+      "latency_llm": 1.665715217590332
+    },
+    {
+      "question": "How is the vector store saved to disk?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/indexing/index_builder.py",
+        "app/indexing/vector_store.py"
+      ],
+      "expected_files": [
+        "app/indexing/vector_store.py",
+        "app/indexing/index_builder.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The vector store is saved to disk in the `save` method of the `VectorStore` class in `app/indexing/vector_store.py`. \n\n```python\ndef save(self):\n    try:\n        faiss.write_index(self.index, self.index_path)\n        with open(self.metadata_path, 'w', encoding='utf-8') as f:\n            json.dump(self.metadata, f, ensure_ascii=False, indent=2)\n        logger.info(f\"Vector store '{self.index_name}' saved successfully.\")\n    except Exception as e:\n        logger.error(f\"Failed to save vector store: {e}\")\n        raise\n```\n\nAlternatively, there's another implementation of the `save` method in the same file:\n\n```python\ndef save(self):\n    try:\n        os.makedirs(INDEX_DIR, exist_ok=True)\n\n        with open(self.metadata_path, \"w\", encoding=\"utf-8\") as f:\n            json.dump(self.metadata, f, ensure_ascii=False, indent=2)\n\n        if self.embeddings is not None:\n            np.save(self.embeddings_path, self.embeddings)\n\n        if self.vectorizer is not None:\n            with open(self.vectorizer_path, \"wb\") as f:\n                pickle.dump(self.vectorizer, f)\n\n        logger.info(f\"Vector store '{self.index_name}' saved successfully.\")\n\n    except Exception as e:\n        logger.error(f\"Failed to save vector store: {e}\")\n        raise\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "save",
+        "pickle",
+        "embeddings",
+        "json"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 2.875314235687256,
+      "latency_retrieval": 0.057270050048828125,
+      "latency_rerank": 0.8362500667572021,
+      "latency_llm": 1.9817941188812256
+    },
+    {
+      "question": "What LLM providers are supported?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "architectural",
+      "mode_correct": false,
+      "retrieved_files": [
+        "app/llm/llm_client.py",
+        "README.md"
+      ],
+      "expected_files": [
+        "app/llm/llm_client.py",
+        "app/config.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 0.5,
+      "answer": "### Supported LLM Providers\n\nThe following LLM providers are supported, as listed in the `README.md` file:\n\n1. **Groq**: An API-based provider with a fast, free tier.\n2. **Gemini**: An API-based provider known for being stable and having good reasoning capabilities.\n3. **OpenAI**: An API-based provider that requires credits for usage.\n4. **Ollama**: A local provider that is fully offline.\n\nThese providers are also referenced in the `app/llm/llm_client.py` file, where their respective generation functions (`generate_groq`, `generate_gemini`, `generate_openai`, and `generate_ollama`) are defined. The `LLM_PROVIDER` environment variable, as seen in the `.env` file, determines which provider is used.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "gemini",
+        "ollama",
+        "groq",
+        "openai"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 5.493880033493042,
+      "latency_retrieval": 0.06280303001403809,
+      "latency_rerank": 1.3159339427947998,
+      "latency_llm": 4.115143060684204
+    },
+    {
+      "question": "How does the file filter decide which files to include?",
+      "expected_mode": "code_lookup",
+      "actual_mode": "code_lookup",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/ingestion/file_filter.py",
+        "app/indexing/file_map_builder.py",
+        "app/services/repo_service.py"
+      ],
+      "expected_files": [
+        "app/ingestion/file_filter.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "The file filter, defined in the `filter_files` function in **[app/ingestion/file_filter.py]**, decides which files to include by checking if the file extension is in the `VALID_EXTENSIONS` set. \n\nHere's the relevant code:\n```python\nfor file in files:\n    _, ext = os.path.splitext(file)\n    if ext.lower() in VALID_EXTENSIONS:\n        full_path = os.path.join(root, file)\n        logger.debug(f\"Checking file: {full_path}\")\n\n        valid_files.append(full_path)\n        logger.info(f\"Accepted file: {full_path}\")\n```\nIt also ignores certain directories specified in the `IGNORE_DIRS` set. \n```python\ndirs[:] = [d for d in dirs if d not in IGNORE_DIRS]\n```",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "extension",
+        "ignore",
+        "valid"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 8.966481685638428,
+      "latency_retrieval": 0.07935190200805664,
+      "latency_rerank": 1.00056791305542,
+      "latency_llm": 7.886561870574951
+    },
+    {
+      "question": "What are the main limitations of this project?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "app/parsing/code_parser.py",
+        "README.md",
+        "_codebase_context"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": true,
+      "reciprocal_rank": 0.3333333333333333,
+      "answer": "## Limitations of the Project\nThe main limitations of this project, as outlined in the `README.md` file, are:\n\n1. **Basic Chunking**: The project currently uses basic chunking at the file level, which may not be optimal for all types of codebases.\n2. **No Advanced Reranking**: The project does not implement advanced reranking techniques, which could improve the accuracy of search results.\n3. **No Semantic Embeddings**: The project currently uses TF-IDF embeddings, which may not capture the full semantic meaning of the code.\n\nBased on the architecture and design decisions outlined in the `README.md` and other files, additional limitations can be inferred, such as:\n\n4. **Dependence on TF-IDF**: The project's reliance on TF-IDF embeddings may limit its ability to handle complex or nuanced codebases.\n5. **Limited Context Size**: The project's use of limited context size may restrict its ability to understand and respond to complex or lengthy codebases.\n6. **No Support for Advanced Code Analysis**: The project does not appear to support advanced code analysis techniques, such as static analysis or dynamic analysis.\n\nA common improvement here would be to address these limitations by implementing more advanced techniques, such as smart chunking, hybrid embeddings, and advanced reranking algorithms. Additionally, incorporating support for advanced code analysis techniques could further enhance the project's capabilities.",
+      "faithfulness_score": 0.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "limitation",
+        "improvement"
+      ],
+      "keyword_hit_rate": 0.6666666666666666,
+      "latency_total": 17.644012689590454,
+      "latency_retrieval": 0.06153392791748047,
+      "latency_rerank": 1.0759758949279785,
+      "latency_llm": 16.506502866744995
+    },
+    {
+      "question": "How could the retrieval quality be improved?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/services/qa_service.py",
+        "README.md",
+        "app/retrieval/ranking.py"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "answer": "### Improving Retrieval Quality\n\nBased on the architecture of the provided codebase, several opportunities exist to enhance the retrieval quality. These suggestions are prioritized based on potential impact and complexity.\n\n#### 1. **Enhanced Query Understanding**\n- **Natural Language Processing (NLP) Techniques**: Incorporating more advanced NLP techniques, such as named entity recognition, part-of-speech tagging, or dependency parsing, could help better understand the query context and improve the retrieval of relevant chunks.\n- **Query Expansion**: Implementing query expansion techniques, where the original query is expanded with synonyms or related terms, could help capture more relevant documents or chunks.\n\n#### 2. **Advanced Ranking Models**\n- **Machine Learning Models**: Utilizing machine learning models, such as learning-to-rank models, could significantly improve the ranking of retrieved chunks based on their relevance to the query.\n- **CrossEncoder**: As mentioned in the `rerank_chunks` function in `app/retrieval/ranking.py`, implementing a CrossEncoder for re-ranking could provide more accurate results by directly comparing the query and chunk embeddings.\n\n#### 3. **Hybrid Retrieval Enhancements**\n- **Combining Multiple Retrieval Techniques**: The current hybrid approach combines TF-IDF cosine similarity with file-level score boosting and keyword overlap boost. Further enhancements could include incorporating other retrieval techniques, such as BM25 or semantic search methods, to create a more robust hybrid model.\n- **Weighted Boosting**: Introducing weighted boosting for file-level and keyword overlap scores could allow for more fine-grained control over the importance of each factor in the retrieval process.\n\n#### 4. **Feedback Mechanisms**\n- **Relevance Feedback**: Implementing a relevance feedback loop, where user feedback on the retrieved results is used to adjust the retrieval model, could continuously improve the retrieval quality over time.\n- **Active Learning**: Incorporating active learning techniques, where the system selectively requests user feedback on uncertain samples, could efficiently improve the model with minimal user input.\n\n#### 5. **Indexing and Vector Store Optimizations**\n- **Efficient Indexing**: Ensuring that the indexing of documents and the creation of the vector store are optimized for the specific use case could lead to faster and more accurate retrievals.\n- **Regular Updates**: Regularly updating the vector store and indexes to reflect changes in the document collection or query patterns could maintain the retrieval quality over time.\n\nBy addressing these areas, the retrieval quality of the system could be significantly improved, leading to more accurate and relevant results for user queries.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "retriev",
+        "embed",
+        "chunk",
+        "improve"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 11.471116065979004,
+      "latency_retrieval": 0.07362604141235352,
+      "latency_rerank": 0.9952988624572754,
+      "latency_llm": 10.402191162109375
+    },
+    {
+      "question": "What design patterns are used in this codebase?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "app/parsing/code_parser.py",
+        "README.md"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "answer": "## Design Patterns Used in the Codebase\nBased on the architecture and code structure described in the `README.md` and other files, several design patterns can be identified:\n\n1. **Modular Design Pattern**: The codebase is structured into separate modules for different components of the application, such as `ingestion`, `parsing`, `indexing`, and `ui`. This modularity makes it easier to maintain, update, and extend the code.\n2. **Pipeline Design Pattern**: The `README.md` file describes a pipeline architecture, where the user query flows through several stages, including the Streamlit UI, QA Service, Retriever, Vector Store, and LLM. This pipeline pattern allows for a clear separation of concerns and makes it easier to manage the complexity of the application.\n3. **Facade Design Pattern**: The `main.py` file in the `app` directory seems to act as a facade, connecting the different components of the application and providing a unified interface for the user.\n4. **Repository Design Pattern**: The `repo_loader.py` file in the `ingestion` directory implements a repository pattern, which abstracts the data storage and retrieval logic, making it easier to switch between different data sources.\n5. **Factory Design Pattern**: Although not explicitly mentioned, the use of multiple LLMs (Groq, Gemini, OpenAI, Ollama) suggests the use of a factory pattern, where a factory function creates instances of different LLMs based on the configuration or user input.\n\nA common improvement here would be to consider using additional design patterns, such as the **Observer Pattern**, to handle events and notifications between components, or the **Strategy Pattern**, to make the application more flexible and adaptable to different use cases.\n\nIn the `app/parsing/code_parser.py` file, a design pattern that can be identified is the **Iterator Pattern**, which is used to iterate over the file paths and parse the files. \n\nReasoning beyond the literal code, the use of a **Microservices Architecture** could be beneficial for the application, where each component is a separate service, allowing for greater scalability and flexibility. However, this would require significant changes to the codebase and may not be necessary for the current use case.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "pattern",
+        "service",
+        "pipeline"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 13.112982988357544,
+      "latency_retrieval": 0.06619501113891602,
+      "latency_rerank": 0.7959978580474854,
+      "latency_llm": 12.250790119171143
+    },
+    {
+      "question": "Give me an overview of how the indexing pipeline works",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "app/llm/prompts.py",
+        "README.md",
+        "app/indexing/index_builder.py"
+      ],
+      "expected_files": [
+        "_codebase_context",
+        "app/services/repo_service.py",
+        "app/indexing/index_builder.py"
+      ],
+      "hit": true,
+      "reciprocal_rank": 0.3333333333333333,
+      "answer": "## Overview of the Indexing Pipeline\nThe indexing pipeline is responsible for converting parsed code chunks into embeddings and storing them in a vector store. This process is handled by the `build_index` function in the `app/indexing/index_builder.py` file.\n\n### Step 1: Text Extraction\nThe pipeline starts by extracting the text from each chunk in the input list. This is done using a list comprehension to create a list of texts, as seen in `app/indexing/index_builder.py`: `texts = [chunk[\"text\"] for chunk in chunks]`.\n\n### Step 2: Vectorization\nNext, the pipeline uses the `TfidfVectorizer` from scikit-learn to convert the extracted texts into TF-IDF embeddings. The vectorizer is initialized with specific parameters, such as `max_features=1000`, `stop_words=\"english\"`, and `lowercase=True`, as shown in `app/indexing/index_builder.py`. The `fit_transform` method is then used to generate the embeddings.\n\n### Step 3: Vector Store Initialization\nAfter generating the embeddings, the pipeline initializes a `VectorStore` object with the specified index name and dimension. The dimension is determined by the shape of the embeddings array, as seen in `app/indexing/index_builder.py`: `dimension = embeddings.shape[1]`.\n\n### Step 4: Storing Embeddings and Vectorizer\nThe pipeline then stores the generated embeddings and the vectorizer in the `VectorStore` object. This is done using the `add_embeddings` method and assigning the vectorizer to the `vectorizer` attribute of the `VectorStore` object, as shown in `app/indexing/index_builder.py`: `vector_store.add_embeddings(np.array(embeddings), chunks)` and `vector_store.vectorizer = vectorizer`.\n\n### Step 5: Saving the Index\nFinally, the pipeline saves the `VectorStore` object to disk using the `save` method, as seen in `app/indexing/index_builder.py`: `vector_store.save()`.\n\nBased on the architecture, the indexing pipeline is designed to be flexible and scalable, allowing for easy integration with different embedding models and vector stores. However, the current implementation uses TF-IDF embeddings and a custom `VectorStore` class, which may have limitations in terms of performance and accuracy. A common improvement here would be to explore the use of more advanced embedding models, such as dense embeddings, and optimize the pipeline for better performance and efficiency.",
+      "faithfulness_score": 1.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [
+        "index",
+        "embed",
+        "chunk",
+        "store"
+      ],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 10.737801790237427,
+      "latency_retrieval": 0.0807638168334961,
+      "latency_rerank": 1.1094059944152832,
+      "latency_llm": 9.547631978988647
+    },
+    {
+      "question": "What would you add to make this production ready?",
+      "expected_mode": "architectural",
+      "actual_mode": "architectural",
+      "mode_correct": true,
+      "retrieved_files": [
+        "ui/streamlit_app.py",
+        "app/llm/prompts.py",
+        "README.md",
+        "_codebase_context"
+      ],
+      "expected_files": [
+        "_codebase_context"
+      ],
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "answer": "### Production Readiness Enhancements\nTo make the Codebase Copilot production-ready, several enhancements can be considered:\n\n#### 1. **Error Handling and Logging**\n   - Implement comprehensive error handling to ensure the application gracefully manages unexpected issues, such as network errors when cloning repositories or API call failures to LLM services.\n   - Enhance logging to provide detailed insights into application performance, errors, and user interactions. This can be achieved by integrating a logging framework that supports different log levels and destinations (e.g., file, database).\n\n#### 2. **Security**\n   - **Input Validation and Sanitization**: Ensure that all user inputs, such as repository URLs or local paths, are validated and sanitized to prevent potential security vulnerabilities like path traversal attacks.\n   - **Authentication and Authorization**: Introduce user authentication to control access to the application and its features. Authorization mechanisms can be implemented to restrict certain operations based on user roles.\n   - **Secure API Keys and Credentials**: Store API keys and credentials securely, using environment variables or a secrets management service, to prevent exposure.\n\n#### 3. **Scalability and Performance**\n   - **Caching**: Implement caching for frequently accessed data, such as repository indexes, to improve response times and reduce the load on the system.\n   - **Parallel Processing**: Utilize parallel processing techniques to speed up tasks like repository cloning, indexing, and querying, especially when dealing with large codebases.\n   - **Optimize Database Queries**: If a database is used to store metadata or indexes, optimize database queries to improve performance and reduce latency.\n\n#### 4. **Monitoring and Maintenance**\n   - **Health Checks**: Implement health check endpoints to monitor the application's status and detect potential issues before they affect users.\n   - **Update Mechanism**: Develop a mechanism for seamlessly updating the application, including dependencies and models, without downtime.\n   - **Backup and Recovery**: Establish a backup and recovery process for critical data, such as user configurations and indexed repositories, to ensure business continuity in case of data loss.\n\n#### 5. **User Experience**\n   - **Feedback Mechanisms**: Introduce feedback mechanisms, such as ratings or text feedback, to allow users to evaluate the quality of the answers provided by the LLMs.\n   - **Customization Options**: Offer customization options, such as selecting different LLM models or adjusting the context window, to cater to diverse user preferences and use cases.\n   - **Documentation and Support**: Provide comprehensive documentation and support channels to help users effectively utilize the application and troubleshoot common issues.\n\n#### 6. **Legal and Compliance**\n   - **Terms of Service and Privacy Policy**: Establish clear terms of service and a privacy policy that outline how user data is collected, stored, and used.\n   - **Compliance with Regulations**: Ensure compliance with relevant regulations, such as GDPR for user data protection, and adhere to guidelines set by LLM providers regarding the use of their services.\n\nBy addressing these areas, the Codebase Copilot can be made more robust, secure, scalable, and user-friendly, ultimately enhancing its production readiness.",
+      "faithfulness_score": 0.0,
+      "relevancy_score": 1.0,
+      "keywords_found": [],
+      "keyword_hit_rate": 1.0,
+      "latency_total": 18.943819046020508,
+      "latency_retrieval": 0.0769200325012207,
+      "latency_rerank": 1.14644193649292,
+      "latency_llm": 17.720457077026367
+    }
+  ]
+}
