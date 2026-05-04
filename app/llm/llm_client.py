@@ -163,116 +163,199 @@
 #             else:
 #                 return f"LLM failed after retries: {e}"
 
+# import os
+# import time
+# from app.utils.logger import get_logger
+
+# logger = get_logger(__name__)
+
+# LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+
+
+# def generate_gemini(prompt: str) -> str:
+#     try:
+#         import google.generativeai as genai
+#         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+#         model = genai.GenerativeModel("gemini-1.5-flash-latest")
+#         response = model.generate_content(prompt)
+#         return response.text
+#     except Exception as e:
+#         return f"Gemini error: {e}"
+
+
+# def generate_groq(prompt: str) -> str:
+#     try:
+#         import requests
+#         url = "https://api.groq.com/openai/v1/chat/completions"
+#         headers = {
+#             "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
+#             "Content-Type": "application/json"
+#         }
+#         data = {
+#             # "model": "llama3-8b-8192",
+#             "model": "openai/gpt-oss-20b",
+#             "messages": [{"role": "user", "content": prompt}]
+#         }
+#         response = requests.post(url, headers=headers, json=data)
+#         result = response.json()
+#         if "choices" not in result:
+#             return f"Groq API error: {result}"
+#         return result["choices"][0]["message"]["content"]
+#     except Exception as e:
+#         return f"Groq error: {e}"
+
+
+# def generate_openai(prompt: str) -> str:
+#     try:
+#         from openai import OpenAI
+#         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+#         response = client.chat.completions.create(
+#             model="gpt-4o-mini",
+#             messages=[{"role": "user", "content": prompt}]
+#         )
+#         return response.choices[0].message.content
+#     except Exception as e:
+#         logger.error(f"OpenAI error: {e}")
+#         return f"OpenAI error: {e}"
+
+
+# def generate_ollama(prompt: str) -> str:
+#     try:
+#         import requests
+#         model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+#         response = requests.post(
+#             "http://localhost:11434/api/generate",
+#             json={"model": model, "prompt": prompt, "stream": False}
+#         )
+#         return response.json()["response"]
+#     except Exception as e:
+#         logger.error(f"Ollama error: {e}")
+#         return f"Ollama error: {e}"
+
+
+# def generate_summary(prompt: str) -> str:
+#     """
+#     Used by file_map_builder for file-level summarization.
+#     Runs locally via Ollama — phi3:mini is fast and light on M4.
+#     """
+#     try:
+#         import requests
+#         model = os.getenv("OLLAMA_MODEL", "phi3:mini")
+#         response = requests.post(
+#             "http://localhost:11434/api/generate",
+#             json={"model": model, "prompt": prompt, "stream": False}
+#         )
+#         return response.json()["response"]
+#     except Exception as e:
+#         logger.error(f"Ollama summary error: {e}")
+#         return f"Ollama error: {e}"
+
+
+# def generate_response(prompt: str) -> str:
+#     """
+#     Unified LLM interface with 3-attempt retry logic.
+#     Provider is selected via LLM_PROVIDER env variable.
+#     """
+#     logger.info(f"Using LLM provider: {LLM_PROVIDER}")
+
+#     for attempt in range(3):
+#         try:
+#             if LLM_PROVIDER == "gemini":
+#                 return generate_gemini(prompt)
+#             elif LLM_PROVIDER == "groq":
+#                 return generate_groq(prompt)
+#             elif LLM_PROVIDER == "openai":
+#                 return generate_openai(prompt)
+#             elif LLM_PROVIDER == "ollama":
+#                 return generate_ollama(prompt)
+#             else:
+#                 return f"Unknown LLM_PROVIDER: {LLM_PROVIDER}"
+#         except Exception as e:
+#             logger.warning(f"LLM attempt {attempt + 1} failed: {e}")
+#             if attempt < 2:
+#                 time.sleep(2)
+#             else:
+#                 return f"LLM failed after 3 attempts: {e}"
+
+"""
+llm_client.py
+─────────────
+Returns LlamaIndex-compatible LLM and embedding model instances.
+The rest of the pipeline (qa_service, index_builder) imports from here
+so the provider can be swapped via .env without touching any other file.
+"""
+
 import os
-import time
+from app.config import (
+    LLM_PROVIDER,
+    OLLAMA_BASE_URL,
+    OLLAMA_LLM_MODEL,
+    OLLAMA_EMBED_MODEL,
+    GEMINI_API_KEY,
+    GROQ_API_KEY,
+    OPENAI_API_KEY,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 
+def get_llm():
+    """
+    Returns a LlamaIndex LLM instance based on LLM_PROVIDER env var.
+    Default: Ollama (fully local, no API key needed).
+    """
+    """
+    Returns LLM based on config:
+    - USE_EVAL_LLM=True  → Groq fast model
+    - else               → normal provider
+    """
 
-def generate_gemini(prompt: str) -> str:
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        model = genai.GenerativeModel("gemini-1.5-flash-latest")
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"Gemini error: {e}"
+    logger.info(f"Loading LLM — provider: {LLM_PROVIDER}")
 
+    if LLM_PROVIDER == "ollama":
+        from llama_index.llms.ollama import Ollama
+        return Ollama(
+            model=OLLAMA_LLM_MODEL,
+            base_url=OLLAMA_BASE_URL,
+            request_timeout=120.0,
+        )
 
-def generate_groq(prompt: str) -> str:
-    try:
-        import requests
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            # "model": "llama3-8b-8192",
-            "model": "openai/gpt-oss-20b",
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        response = requests.post(url, headers=headers, json=data)
-        result = response.json()
-        if "choices" not in result:
-            return f"Groq API error: {result}"
-        return result["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"Groq error: {e}"
+    elif LLM_PROVIDER == "gemini":
+        from llama_index.llms.gemini import Gemini
+        return Gemini(
+            model="models/gemini-1.5-flash",
+            api_key=GEMINI_API_KEY,
+        )
 
+    elif LLM_PROVIDER == "groq":
+        from llama_index.llms.groq import Groq
+        return Groq(
+            model="openai/gpt-oss-20b",
+            api_key=GROQ_API_KEY,
+        )
 
-def generate_openai(prompt: str) -> str:
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        response = client.chat.completions.create(
+    elif LLM_PROVIDER == "openai":
+        from llama_index.llms.openai import OpenAI
+        return OpenAI(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
+            api_key=OPENAI_API_KEY,
         )
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"OpenAI error: {e}")
-        return f"OpenAI error: {e}"
+
+    else:
+        raise ValueError(f"Unknown LLM_PROVIDER: '{LLM_PROVIDER}'. "
+                         f"Valid options: ollama, gemini, groq, openai")
 
 
-def generate_ollama(prompt: str) -> str:
-    try:
-        import requests
-        model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False}
-        )
-        return response.json()["response"]
-    except Exception as e:
-        logger.error(f"Ollama error: {e}")
-        return f"Ollama error: {e}"
-
-
-def generate_summary(prompt: str) -> str:
+def get_embed_model():
     """
-    Used by file_map_builder for file-level summarization.
-    Runs locally via Ollama — phi3:mini is fast and light on M4.
+    Returns a LlamaIndex embedding model.
+    Always uses nomic-embed-text via local Ollama — no API cost,
+    runs fast on M4 unified memory (768-dim dense embeddings).
     """
-    try:
-        import requests
-        model = os.getenv("OLLAMA_MODEL", "phi3:mini")
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False}
-        )
-        return response.json()["response"]
-    except Exception as e:
-        logger.error(f"Ollama summary error: {e}")
-        return f"Ollama error: {e}"
-
-
-def generate_response(prompt: str) -> str:
-    """
-    Unified LLM interface with 3-attempt retry logic.
-    Provider is selected via LLM_PROVIDER env variable.
-    """
-    logger.info(f"Using LLM provider: {LLM_PROVIDER}")
-
-    for attempt in range(3):
-        try:
-            if LLM_PROVIDER == "gemini":
-                return generate_gemini(prompt)
-            elif LLM_PROVIDER == "groq":
-                return generate_groq(prompt)
-            elif LLM_PROVIDER == "openai":
-                return generate_openai(prompt)
-            elif LLM_PROVIDER == "ollama":
-                return generate_ollama(prompt)
-            else:
-                return f"Unknown LLM_PROVIDER: {LLM_PROVIDER}"
-        except Exception as e:
-            logger.warning(f"LLM attempt {attempt + 1} failed: {e}")
-            if attempt < 2:
-                time.sleep(2)
-            else:
-                return f"LLM failed after 3 attempts: {e}"
+    from llama_index.embeddings.ollama import OllamaEmbedding
+    logger.info(f"Loading embedding model: {OLLAMA_EMBED_MODEL} via Ollama")
+    return OllamaEmbedding(
+        model_name=OLLAMA_EMBED_MODEL,
+        base_url=OLLAMA_BASE_URL,
+    )

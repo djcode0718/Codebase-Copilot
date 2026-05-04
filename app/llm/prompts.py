@@ -88,51 +88,98 @@
 #     return prompt
 
 
-from typing import List, Dict, Any
+# from typing import List, Dict, Any
 
-SYSTEM_INSTRUCTION = """You are a senior software engineer explaining a codebase.
-Answer ONLY using the provided context.
-If information is not present, say: "Not found in provided code."
-Be concise unless the question asks for detail.
+# SYSTEM_INSTRUCTION = """You are a senior software engineer explaining a codebase.
+# Answer ONLY using the provided context.
+# If information is not present, say: "Not found in provided code."
+# Be concise unless the question asks for detail.
+# """
+
+
+# def build_prompt(query: str, chunks: List[Dict[str, Any]], history: List[Dict[str, str]] = None) -> str:
+#     # 🔹 Build context
+#     context_str = ""
+#     for idx, chunk in enumerate(chunks, 1):
+#         meta = chunk.get("metadata", {})
+#         file_name = meta.get("file_name", "Unknown File")
+#         path = meta.get("path", "Unknown Path")
+#         entity = meta.get("entity_name", "Unknown Entity")
+#         text = chunk.get("text", "")
+
+#         context_str += f"--- Snippet {idx} ---\n"
+#         context_str += f"File: {path} ({file_name})\n"
+#         context_str += f"Entity: {entity}\n"
+#         context_str += f"Code:\n```\n{text}\n```\n\n"
+
+#     # 🔹 Build chat history (short, last few turns)
+#     history_str = ""
+#     if history:
+#         for msg in history:
+#             role = msg["role"]
+#             content = msg["content"]
+#             history_str += f"{role.upper()}: {content}\n"
+
+#     prompt = f"{SYSTEM_INSTRUCTION}\n\n"
+
+#     if history_str:
+#         prompt += "Conversation so far:\n"
+#         prompt += history_str + "\n"
+
+#     prompt += "Relevant code context:\n\n"
+#     prompt += context_str
+
+#     prompt += f"User Question: {query}\n\n"
+#     prompt += "Answer:"
+
+#     return prompt
+
+"""
+prompts.py
+──────────
+Two prompt modes matched to the query router output:
+
+  CODE_LOOKUP_PROMPT    strict — answer only from retrieved code chunks
+  ARCHITECTURAL_PROMPT  relaxed — reason beyond the code for broad questions
+
+Both are used as system prompts inside CondensePlusContextChatEngine.
 """
 
+# ─── CODE LOOKUP ──────────────────────────────────────────────────────────────
+# Used for: specific function/class/file questions
+# Behaviour: strictly grounded in retrieved chunks, no speculation
+CODE_LOOKUP_PROMPT = """You are a senior software engineer explaining a codebase.
 
-def build_prompt(query: str, chunks: List[Dict[str, Any]], history: List[Dict[str, str]] = None) -> str:
-    # 🔹 Build context
-    context_str = ""
-    for idx, chunk in enumerate(chunks, 1):
-        meta = chunk.get("metadata", {})
-        file_name = meta.get("file_name", "Unknown File")
-        path = meta.get("path", "Unknown Path")
-        entity = meta.get("entity_name", "Unknown Entity")
-        text = chunk.get("text", "")
+RULES:
+- Answer ONLY using the provided code context.
+- If the answer is not present in the context, say exactly:
+  "I couldn't find that in the retrieved code. Try rephrasing or asking about a specific file or function."
+- Always reference the file name and function/class name when relevant.
+- Be concise for simple questions, detailed for complex ones.
+- Format code with markdown code blocks."""
 
-        context_str += f"--- Snippet {idx} ---\n"
-        context_str += f"File: {path} ({file_name})\n"
-        context_str += f"Entity: {entity}\n"
-        context_str += f"Code:\n```\n{text}\n```\n\n"
 
-    # 🔹 Build chat history (short, last few turns)
-    history_str = ""
-    if history:
-        for msg in history:
-            role = msg["role"]
-            content = msg["content"]
-            history_str += f"{role.upper()}: {content}\n"
+# ─── ARCHITECTURAL ────────────────────────────────────────────────────────────
+# Used for: limitations, improvements, design patterns, broad questions
+# Behaviour: uses context as primary source but may reason beyond it
+ARCHITECTURAL_PROMPT = """You are a senior software engineer and technical architect reviewing a codebase.
 
-    prompt = f"{SYSTEM_INSTRUCTION}\n\n"
+RULES:
+- Use the provided codebase context as your PRIMARY source.
+- You MAY reason beyond the literal code to identify patterns, limitations,
+  and improvement opportunities — this is expected for architectural questions.
+- When you cite something directly from the code, mention the file name.
+- When you are reasoning or suggesting (not directly from code), say so clearly
+  with phrases like "Based on the architecture..." or "A common improvement here would be..."
+- Be thorough for broad questions. Use structured responses with headers when helpful.
+- Do NOT make up function names or file names that aren't in the context.
 
-    if history_str:
-        prompt += "Conversation so far:\n"
-        prompt += history_str + "\n"
+RESPONSE STYLE for common question types:
+- "What are the limitations?" → List them clearly with brief explanations
+- "How can I improve this?"   → Prioritised suggestions with rationale
+- "What design patterns?"     → Identify patterns visible in the code
+- "How does X compare to Y?"  → Balanced comparison grounded in the code"""
 
-    prompt += "Relevant code context:\n\n"
-    prompt += context_str
-
-    prompt += f"User Question: {query}\n\n"
-    prompt += "Answer:"
-
-    return prompt
 
 
 # from typing import List, Dict, Any
