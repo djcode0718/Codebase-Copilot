@@ -1,210 +1,584 @@
 # 🚀 Codebase Copilot
 
-An AI-powered system that understands any GitHub repository or local codebase and answers natural language questions using a custom-built Retrieval-Augmented Generation (RAG) pipeline.
+> An AI-powered codebase intelligence system that understands repositories using hybrid retrieval, reranking, query routing, conversational memory, and evaluation-driven RAG pipelines.
 
 ---
 
-## 🔥 Overview
+# 📌 Overview
 
-**Codebase Copilot** allows you to:
+**Codebase Copilot** is a modular Retrieval-Augmented Generation (RAG) system designed to help developers understand large and unfamiliar repositories through natural language interaction.
 
-* 📂 Load any GitHub repository or local project
-* 🧠 Index and understand the code structure
-* 💬 Ask natural language questions about the code
-* ⚡ Get intelligent, context-aware answers
+The system combines:
 
-Unlike typical LLM wrappers, this project is built **from scratch**, implementing core RAG components manually—making it both educational and production-relevant.
+* hybrid retrieval
+* semantic search
+* BM25 keyword retrieval
+* reranking
+* query routing
+* conversational memory
+* evaluation pipelines
+* multi-LLM orchestration
+
+to provide both:
+
+✅ low-level code understanding
+✅ higher-order architectural reasoning
+
+Unlike simple repository chatbots, this project focuses heavily on:
+
+* retrieval quality
+* evaluation methodology
+* latency analysis
+* modular AI engineering
+* production-style RAG architecture
 
 ---
 
-## 🧠 Key Features
+# ✨ Key Features
 
-* ✅ Custom RAG pipeline (no dependency on frameworks)
-* ✅ Multi-LLM support (Groq, Gemini, OpenAI, Ollama)
-* ✅ Lightweight TF-IDF embeddings (no GPU required)
-* ✅ FAISS-based vector storage
-* ✅ Streamlit-based interactive UI
-* ✅ Handles real-world constraints (token limits, memory issues)
-* ✅ Modular and extensible architecture
+## 🧠 Hybrid Retrieval Pipeline
+
+The system combines:
+
+* dense semantic retrieval
+* sparse keyword retrieval (BM25)
+* Reciprocal Rank Fusion (RRF)
+* reranking pipelines
+
+to improve:
+
+* retrieval precision
+* contextual relevance
+* architectural understanding
 
 ---
 
-## 🏗️ Architecture
+## 🔀 Intelligent Query Routing
+
+Queries are automatically classified into:
+
+| Mode            | Purpose                            |
+| --------------- | ---------------------------------- |
+| `code_lookup`   | strict grounded code explanations  |
+| `architectural` | higher-order engineering reasoning |
+
+This enables the system to:
+
+* remain faithful for code lookup
+* reason more broadly for design discussions
+
+---
+
+## ⚡ Multi-LLM Support
+
+Supports:
+
+* Ollama (offline/local)
+* Groq
+* Gemini
+* OpenAI
+
+The system supports:
+
+* local inference
+* cloud inference
+* evaluation-specific switching
+
+through centralized configuration.
+
+---
+
+## 💬 Conversational Memory
+
+Includes:
+
+* multi-turn conversation support
+* persistent chat context
+* memory-aware prompting
+* ChatGPT-style interface
+
+---
+
+## 📊 Evaluation Framework
+
+The project includes a complete evaluation pipeline for measuring:
+
+### Retrieval Quality
+
+* Hit Rate
+* MRR (Mean Reciprocal Rank)
+
+### Generation Quality
+
+* Faithfulness
+* Relevancy
+
+### System Metrics
+
+* retrieval latency
+* reranking latency
+* LLM latency
+* routing accuracy
+
+---
+
+## 🧩 Advanced Parsing & Chunking
+
+The pipeline supports:
+
+* recursive repository traversal
+* metadata-rich chunking
+* function-aware splitting
+* tree-sitter parsing
+* semantic file summaries
+
+---
+
+# 🏗️ System Architecture
 
 ```text
-User Query
-   ↓
-Streamlit UI
-   ↓
-QA Service
-   ↓
-Retriever (TF-IDF + Cosine Similarity)
-   ↓
-Vector Store (FAISS + Metadata)
-   ↓
-LLM (Groq / Gemini / OpenAI / Ollama)
-   ↓
-Final Answer
+                    ┌──────────────────────┐
+                    │     Streamlit UI     │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                  ┌────────────────────────┐
+                  │      Query Router      │
+                  │   Code vs Architecture │
+                  └────────┬───────────────┘
+                           │
+           ┌───────────────┴────────────────┐
+           ▼                                ▼
+  ┌─────────────────┐            ┌────────────────────┐
+  │ Hybrid Retriever│            │ Architectural Flow │
+  │  BM25 + Dense   │            │ Contextual Reasoner│
+  └────────┬────────┘            └────────┬───────────┘
+           │                              │
+           └──────────────┬───────────────┘
+                          ▼
+                ┌──────────────────┐
+                │  ColBERT Rerank  │
+                └────────┬─────────┘
+                         ▼
+                ┌──────────────────┐
+                │   LlamaIndex     │
+                │  Retrieval Core  │
+                └────────┬─────────┘
+                         ▼
+                ┌──────────────────┐
+                │   LLM Provider   │
+                │ Ollama/Groq/etc  │
+                └────────┬─────────┘
+                         ▼
+                ┌──────────────────┐
+                │  Final Response  │
+                └──────────────────┘
 ```
 
 ---
 
-## ⚙️ Project Structure
+# ⚙️ Tech Stack
+
+## AI / Retrieval
+
+* LlamaIndex
+* BM25
+* ChromaDB
+* ColBERT
+* Hybrid Retrieval
+* Reciprocal Rank Fusion
+
+## LLMs
+
+* Ollama
+* Groq
+* Gemini
+* OpenAI
+
+## Parsing
+
+* tree-sitter
+* tree-sitter-language-pack
+
+## Frontend
+
+* Streamlit
+
+## Evaluation
+
+* LlamaIndex Evaluators
+* FaithfulnessEvaluator
+* RelevancyEvaluator
+
+---
+
+# 📂 Project Structure
 
 ```text
 codebase-copilot/
 │
-├── app/                       # Main application logic 
-│   ├── main.py              # Entry point (connects everything)
-│   ├── config.py            # Configs (paths, model names)
-│
-│   ├── ingestion/           # Step 1: Load code
-│   │   ├── repo_loader.py   # Clone/load repo
-│   │   └── file_filter.py   # Ignore unnecessary files
-│
-│   ├── parsing/             # Step 2: Structure code
-│   │   ├── code_parser.py   # Break into chunks
-│   │   └── chunk_utils.py   # Chunking logic
-│
-│   ├── indexing/            # Step 3: Create embeddings
-│   │   ├── index_builder.py # Build vector index
-│   │   └── vector_store.py  # FAISS/Chroma setup
-│
-│   ├── retrieval/           # Step 4: Search relevant code
-│   │   ├── retriever.py     # Query → relevant chunks
-│   │   └── ranking.py       # Optional reranking
-│
-│   ├── llm/                 # Step 5: Reasoning
-│   │   ├── llm_client.py    # Connect to LLM (Ollama/Gemini)
-│   │   └── prompts.py       # All prompts stored here
-│
-│   ├── services/            # Step 6: Orchestration
-│   │   ├── qa_service.py    # Main Q&A pipeline
-│   │   └── repo_service.py  # Handles repo processing
-│
-│   └── utils/               # Common helpers
+├── app/
+│   │
+│   ├── config.py
+│   │
+│   ├── ingestion/
+│   │   ├── repo_loader.py
+│   │   └── file_filter.py
+│   │
+│   ├── parsing/
+│   │   ├── code_parser.py
+│   │   └── chunk_utils.py
+│   │
+│   ├── indexing/
+│   │   ├── index_builder.py
+│   │   ├── vector_store.py
+│   │   ├── file_map_builder.py
+│   │   └── summary_index_builder.py
+│   │
+│   ├── retrieval/
+│   │   ├── retriever.py
+│   │   ├── hybrid_retriever.py
+│   │   ├── reranker.py
+│   │   ├── ranking.py
+│   │   ├── query_router.py
+│   │   └── file_map_retriever.py
+│   │
+│   ├── llm/
+│   │   ├── llm_client.py
+│   │   └── prompts.py
+│   │
+│   ├── memory/
+│   │   └── chat_memory.py
+│   │
+│   ├── services/
+│   │   ├── repo_service.py
+│   │   └── qa_service.py
+│   │
+│   └── utils/
 │       ├── logger.py
 │       └── helpers.py
 │
-├── data/                    # Local storage
-│   ├── repos/               # Cloned repos
-│   └── index/               # Vector DB storage
-│
-├── ui/                      # Frontend
+├── ui/
 │   └── streamlit_app.py
 │
+├── data/
+│   ├── repos/
+│   ├── index/
+│   └── eval_results*.json
+│
+├── evaluate.py
+├── copy_codes.py
+│
 ├── requirements.txt
-├── README.md
-└── .env
+├── requirements-llamaindex.txt
+│
+├── .env
+├── .gitignore
+└── README.md
 ```
 
 ---
 
-## 🔄 Workflow (Step-by-Step)
+# 🔄 End-to-End Workflow
 
-### 1. Repository Ingestion
+## 1️⃣ Repository Ingestion
 
-* Accepts GitHub URL or local path
-* Clones repo into `data/repos/`
-* Filters valid code files
+The system accepts:
 
----
+* GitHub repository URLs
+* local repository paths
 
-### 2. Parsing
+Repositories are:
 
-* Reads code files
-* Converts each file into a single chunk (for stability)
-* Avoids memory-heavy chunking logic
+* cloned locally
+* recursively traversed
+* filtered for relevant files
 
----
+Ignored directories:
 
-### 3. Embedding Generation
-
-* Uses **TF-IDF vectorization**
-* Converts code into numerical embeddings
-* Avoids heavy ML dependencies (no PyTorch)
-
----
-
-### 4. Vector Storage
-
-* Stores embeddings using **FAISS**
-* Stores metadata separately (file name, path, content)
-* Saves:
-
-  * `.faiss` index
-  * `.json` metadata
-  * `.npy` embeddings
-  * `.pkl` vectorizer
-
----
-
-### 5. Query Processing
-
-* User enters query in UI
-* Query is converted using the SAME vectorizer
-* Cosine similarity used for retrieval
-
----
-
-### 6. Retrieval
-
-* Top-K relevant chunks are selected
-* Context is trimmed to avoid token overflow
-
----
-
-### 7. LLM Response Generation
-
-* Prompt is constructed using retrieved context
-* Sent to selected LLM provider
-* Response returned to UI
-
----
-
-## 🤖 Supported LLM Providers
-
-| Provider | Type  | Notes                  |
-| -------- | ----- | ---------------------- |
-| Groq     | API   | Fast, free tier        |
-| Gemini   | API   | Stable, good reasoning |
-| OpenAI   | API   | Requires credits       |
-| Ollama   | Local | Fully offline          |
-
----
-
-## 🔐 Environment Variables (`.env`)
-
-```env
-LLM_PROVIDER=groq
-
-GROQ_API_KEY=your_key
-GEMINI_API_KEY=your_key
-OPENAI_API_KEY=your_key
-
-OLLAMA_MODEL=llama3:8b
-
-EMBEDDING_MODEL=tfidf
+```text
+node_modules/
+.git/
+dist/
+venv/
+__pycache__/
 ```
 
 ---
 
-## 🚀 How to Run
+## 2️⃣ Parsing & Chunking
 
-### 1. Create Environment
+The parser:
+
+* reads code safely
+* extracts metadata
+* performs semantic chunking
+* generates file-level summaries
+
+Each chunk stores:
+
+* file path
+* file name
+* entity information
+* chunk text
+* metadata
+
+---
+
+## 3️⃣ Embedding & Indexing
+
+Dense embeddings:
+
+```text
+nomic-embed-text
+```
+
+Storage:
+
+```text
+ChromaDB
+```
+
+Keyword retrieval:
+
+```text
+BM25
+```
+
+---
+
+## 4️⃣ Hybrid Retrieval
+
+The retrieval system combines:
+
+* semantic retrieval
+* keyword retrieval
+* file-level retrieval
+
+using:
+
+* QueryFusionRetriever
+* Reciprocal Rank Fusion (RRF)
+
+This improves:
+
+* retrieval precision
+* architectural reasoning
+* contextual grounding
+
+---
+
+## 5️⃣ Reranking
+
+Optional ColBERT reranking improves:
+
+* ranking quality
+* retrieval precision
+* Mean Reciprocal Rank (MRR)
+
+---
+
+## 6️⃣ Query Routing
+
+Queries are classified into:
+
+* code lookup mode
+* architectural reasoning mode
+
+This allows:
+
+* stricter grounded answers
+* broader engineering analysis
+* better faithfulness control
+
+---
+
+## 7️⃣ Prompt Construction
+
+Prompts include:
+
+* retrieved chunks
+* repository summaries
+* metadata
+* routing instructions
+* conversational history
+
+---
+
+## 8️⃣ Conversational Memory
+
+The memory system:
+
+* stores previous interactions
+* enables follow-up questions
+* preserves context across turns
+
+---
+
+## 9️⃣ LLM Generation
+
+Responses are generated using:
+
+* Ollama
+* Groq
+* Gemini
+* OpenAI
+
+The system supports:
+
+* local inference
+* cloud inference
+* evaluation-specific LLM switching
+
+---
+
+# 📊 Evaluation Framework
+
+The project includes a dedicated evaluation pipeline.
+
+## Metrics Measured
+
+| Category    | Metrics                        |
+| ----------- | ------------------------------ |
+| Retrieval   | Hit Rate, MRR                  |
+| Generation  | Faithfulness, Relevancy        |
+| Routing     | Mode Accuracy                  |
+| Performance | Retrieval, rerank, LLM latency |
+
+---
+
+# 📈 Example Evaluation Results
+
+| Metric            | Score     |
+| ----------------- | --------- |
+| Hit Rate          | 0.80+     |
+| MRR               | 0.60+     |
+| Faithfulness      | 0.60–0.80 |
+| Relevancy         | 0.90+     |
+| Routing Accuracy  | 1.00      |
+| Retrieval Latency | ~0.1s     |
+| Rerank Latency    | ~1s       |
+| Local LLM Latency | ~15s      |
+| Groq LLM Latency  | ~2–4s     |
+
+---
+
+# 🧠 Key Engineering Insights
+
+## Retrieval Pipeline
+
+The retrieval stack is highly optimized:
+
+* retrieval latency is extremely low (~0.1s)
+* reranking adds modest overhead (~1s)
+* the primary bottleneck is local LLM inference
+
+---
+
+## Local AI Optimization
+
+The system was optimized specifically for:
+
+* Apple Silicon Macs
+* 16GB RAM systems
+* local inference workflows
+
+---
+
+## Hallucination Reduction
+
+Implemented using:
+
+* hybrid retrieval
+* reranking
+* query routing
+* retrieval-grounded prompting
+
+---
+
+# 💬 Example Queries
+
+## Code Lookup
+
+```text
+How does retrieve_relevant_chunks work?
+```
+
+```text
+Where is the vector store initialized?
+```
+
+```text
+How does the indexing pipeline work?
+```
+
+---
+
+## Architectural Reasoning
+
+```text
+What are the main limitations of this project?
+```
+
+```text
+How can retrieval quality be improved?
+```
+
+```text
+What changes are needed for production deployment?
+```
+
+---
+
+# 🚀 Running the Project
+
+## 1️⃣ Create Environment
 
 ```bash
 conda create -n ai-copilot-env python=3.10
 conda activate ai-copilot-env
 ```
 
-### 2. Install Dependencies
+---
+
+## 2️⃣ Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-llamaindex.txt
 ```
 
-### 3. Run Application
+---
+
+## 3️⃣ Start Ollama
+
+```bash
+ollama serve
+```
+
+Pull required models:
+
+```bash
+ollama pull mistral
+ollama pull nomic-embed-text
+```
+
+---
+
+## 4️⃣ Configure `.env`
+
+```env
+LLM_PROVIDER=ollama
+
+OLLAMA_MODEL=mistral
+OLLAMA_EMBED_MODEL=nomic-embed-text
+
+USE_COLBERT=true
+USE_FAST_LLM=false
+```
+
+---
+
+## 5️⃣ Launch Streamlit App
 
 ```bash
 streamlit run ui/streamlit_app.py
@@ -212,93 +586,73 @@ streamlit run ui/streamlit_app.py
 
 ---
 
-## ⚠️ Challenges Solved
+# 🧪 Running Evaluation
 
-This project handles several real-world issues:
-
-### 🧠 Memory Constraints
-
-* Removed heavy models (transformers)
-* Used TF-IDF instead
-
-### 📦 Token Limits
-
-* Limited context size
-* Trimmed retrieved chunks
-
-### 🔄 State Persistence
-
-* Saved vectorizer alongside embeddings
-* Ensured consistent query transformations
-
-### ⚡ API Reliability
-
-* Added retry logic
-* Multi-provider fallback
+```bash
+python evaluate.py
+```
 
 ---
 
-## 💡 Design Decisions
+# 🔮 Future Improvements
 
-### Why TF-IDF instead of embeddings?
+## Retrieval
 
-* Lightweight
-* No GPU required
-* Faster for small/medium codebases
-
-### Why not LangChain/LlamaIndex?
-
-* Built manually to understand internals
-* Easier debugging and control
+* GraphRAG integration
+* dependency graph reasoning
+* AST-aware retrieval
+* cross-repository retrieval
 
 ---
 
-## 📊 Current Limitations
+## LLM
 
-* Basic chunking (file-level)
-* No advanced reranking
-* No semantic embeddings (yet)
-
----
-
-## 🔮 Future Improvements
-
-* 🔹 Smart chunking (function-level)
-* 🔹 Hybrid embeddings (TF-IDF + semantic)
-* 🔹 Streaming responses
-* 🔹 Auto LLM fallback system
-* 🔹 LangChain / LlamaIndex integration
-* 🔹 Code visualization features
+* streaming responses
+* tool-using agents
+* autonomous debugging workflows
+* structured reasoning pipelines
 
 ---
 
-## 🧠 What This Project Demonstrates
+## Product Features
 
-* End-to-end RAG system design
-* Vector databases and retrieval logic
-* Handling LLM constraints (tokens, memory)
-* Multi-LLM orchestration
-* Real-world debugging and optimization
-
----
-
-## 📌 Example Use Cases
-
-* Understand unfamiliar codebases
-* Debug large projects quickly
-* Explain project architecture
-* Find where specific logic exists
+* Supabase integration
+* authentication
+* persistent long-term memory
+* multi-user support
 
 ---
 
-## 🙌 Final Note
+# 🎯 What This Project Demonstrates
 
-This project goes beyond tutorials by focusing on:
+This project demonstrates practical understanding of:
 
-* **system design**
-* **debugging real issues**
-* **building from scratch**
-
-It’s not just a chatbot—it’s a **code intelligence system**.
+* Retrieval-Augmented Generation (RAG)
+* hybrid retrieval systems
+* reranking pipelines
+* evaluation engineering
+* conversational memory
+* LLM orchestration
+* routing systems
+* latency optimization
+* AI infrastructure design
+* production-style AI workflows
 
 ---
+
+# 🙌 Final Note
+
+Codebase Copilot was built to deeply explore:
+
+* retrieval quality
+* architectural reasoning
+* evaluation methodology
+* scalable AI system design
+
+with a strong focus on:
+
+* modularity
+* explainability
+* optimization
+* extensibility
+* real-world AI engineering workflows.
