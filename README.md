@@ -1,6 +1,6 @@
 # 🚀 Codebase Copilot
 
-> An AI-powered codebase intelligence system that understands repositories using hybrid retrieval, reranking, query routing, conversational memory, and evaluation-driven RAG pipelines.
+> An AI-powered codebase intelligence system that understands repositories using hybrid retrieval, reranking, query routing, conversational memory, and evaluation-driven RAG pipelines — now with a production-ready FastAPI backend and Supabase integration.
 
 ---
 
@@ -18,6 +18,8 @@ The system combines:
 * conversational memory
 * evaluation pipelines
 * multi-LLM orchestration
+* REST API backend (FastAPI)
+* persistent storage (Supabase)
 
 to provide both:
 
@@ -88,12 +90,23 @@ through centralized configuration.
 
 ---
 
+## 🌐 FastAPI REST Backend
+
+A full production-ready REST API layer built with FastAPI that exposes all core functionality over HTTP:
+
+* JWT-authenticated endpoints via Supabase
+* SSE (Server-Sent Events) for real-time streaming of indexing progress and chat responses
+* Supabase-backed persistence for repositories, chats, messages, and evaluations
+* CORS-configured for frontend integration
+
+---
+
 ## 💬 Conversational Memory
 
 Includes:
 
 * multi-turn conversation support
-* persistent chat context
+* persistent chat context (per session and across restarts via Supabase)
 * memory-aware prompting
 * ChatGPT-style interface
 
@@ -143,36 +156,53 @@ The pipeline supports:
                                │
                                ▼
                   ┌────────────────────────┐
-                  │      Query Router      │
-                  │   Code vs Architecture │
+                  │   FastAPI REST API     │
+                  │  (api/main.py)         │
+                  │  JWT Auth via Supabase │
                   └────────┬───────────────┘
                            │
-           ┌───────────────┴────────────────┐
-           ▼                                ▼
-  ┌─────────────────┐            ┌────────────────────┐
-  │ Hybrid Retriever│            │ Architectural Flow │
-  │  BM25 + Dense   │            │ Contextual Reasoner│
-  └────────┬────────┘            └────────┬───────────┘
-           │                              │
-           └──────────────┬───────────────┘
+           ┌───────────────┼────────────────┐
+           ▼               ▼                ▼
+    ┌─────────────┐ ┌────────────┐  ┌──────────────┐
+    │  /api/repo  │ │ /api/chat  │  │  /api/eval   │
+    │  Indexing   │ │  Streaming │  │  Evaluation  │
+    │  SSE stream │ │  SSE + DB  │  │  SSE stream  │
+    └──────┬──────┘ └─────┬──────┘  └──────┬───────┘
+           │              │                │
+           └──────────────┼────────────────┘
                           ▼
-                ┌──────────────────┐
-                │  ColBERT Rerank  │
-                └────────┬─────────┘
-                         ▼
-                ┌──────────────────┐
-                │   LlamaIndex     │
-                │  Retrieval Core  │
-                └────────┬─────────┘
-                         ▼
-                ┌──────────────────┐
-                │   LLM Provider   │
-                │ Ollama/Groq/etc  │
-                └────────┬─────────┘
-                         ▼
-                ┌──────────────────┐
-                │  Final Response  │
-                └──────────────────┘
+           ┌──────────────────────────┐
+           │     Core RAG Engine      │
+           │   (app/ layer)           │
+           └──────────┬───────────────┘
+                      │
+          ┌───────────┴────────────────┐
+          ▼                            ▼
+ ┌─────────────────┐        ┌────────────────────┐
+ │ Hybrid Retriever│        │ Architectural Flow │
+ │  BM25 + Dense   │        │ Contextual Reasoner│
+ └────────┬────────┘        └────────┬───────────┘
+          │                          │
+          └────────────┬─────────────┘
+                       ▼
+             ┌──────────────────┐
+             │  ColBERT Rerank  │
+             └────────┬─────────┘
+                      ▼
+             ┌──────────────────┐
+             │   LlamaIndex     │
+             │  Retrieval Core  │
+             └────────┬─────────┘
+                      ▼
+             ┌──────────────────┐
+             │   LLM Provider   │
+             │ Ollama/Groq/etc  │
+             └────────┬─────────┘
+                      ▼
+             ┌──────────────────┐
+             │  Supabase (DB)   │
+             │  Persist Results │
+             └──────────────────┘
 ```
 
 ---
@@ -200,6 +230,18 @@ The pipeline supports:
 * tree-sitter
 * tree-sitter-language-pack
 
+## Backend API
+
+* FastAPI
+* Uvicorn
+* Pydantic (request/response models)
+* Server-Sent Events (SSE)
+
+## Database & Auth
+
+* Supabase (PostgreSQL)
+* Supabase Auth (JWT)
+
 ## Frontend
 
 * Streamlit
@@ -217,24 +259,19 @@ The pipeline supports:
 ```text
 codebase-copilot/
 │
-├── app/
-│   │
+├── app/                          # Core RAG engine (provider-agnostic)
 │   ├── config.py
-│   │
 │   ├── ingestion/
 │   │   ├── repo_loader.py
 │   │   └── file_filter.py
-│   │
 │   ├── parsing/
 │   │   ├── code_parser.py
 │   │   └── chunk_utils.py
-│   │
 │   ├── indexing/
 │   │   ├── index_builder.py
 │   │   ├── vector_store.py
 │   │   ├── file_map_builder.py
 │   │   └── summary_index_builder.py
-│   │
 │   ├── retrieval/
 │   │   ├── retriever.py
 │   │   ├── hybrid_retriever.py
@@ -242,21 +279,34 @@ codebase-copilot/
 │   │   ├── ranking.py
 │   │   ├── query_router.py
 │   │   └── file_map_retriever.py
-│   │
 │   ├── llm/
 │   │   ├── llm_client.py
 │   │   └── prompts.py
-│   │
 │   ├── memory/
 │   │   └── chat_memory.py
-│   │
 │   ├── services/
 │   │   ├── repo_service.py
 │   │   └── qa_service.py
-│   │
 │   └── utils/
 │       ├── logger.py
 │       └── helpers.py
+│
+├── api/                          # FastAPI REST backend
+│   ├── main.py                   # App entry point, CORS, router registration
+│   ├── dependencies.py           # Supabase client, JWT auth dependencies
+│   ├── routers/
+│   │   ├── repo.py               # Repository indexing endpoints
+│   │   ├── chat.py               # Chat session + SSE streaming endpoints
+│   │   ├── eval.py               # Evaluation endpoints
+│   │   └── suggestions.py        # LLM-generated question suggestions
+│   ├── models/
+│   │   ├── repo.py               # Pydantic models for repo endpoints
+│   │   ├── chat.py               # Pydantic models for chat endpoints
+│   │   └── eval.py               # Pydantic models for eval endpoints
+│   └── services/
+│       ├── chat_service.py       # SSE streaming + session cache
+│       ├── indexing_service.py   # Async indexing pipeline with SSE
+│       └── supabase_service.py   # All Supabase DB operations
 │
 ├── ui/
 │   └── streamlit_app.py
@@ -276,6 +326,115 @@ codebase-copilot/
 ├── .gitignore
 └── README.md
 ```
+
+---
+
+# 🌐 REST API Reference
+
+The FastAPI backend is served at `http://localhost:8000` and exposes the following endpoints. All endpoints require a valid Supabase JWT in the `Authorization: Bearer <token>` header.
+
+## Health
+
+| Method | Endpoint       | Description                             |
+| ------ | -------------- | --------------------------------------- |
+| `GET`  | `/api/health`  | Returns LLM provider, ColBERT status, and embed model info |
+
+---
+
+## Repository — `/api/repo`
+
+| Method   | Endpoint                           | Description                                                    |
+| -------- | ---------------------------------- | -------------------------------------------------------------- |
+| `POST`   | `/api/repo/index`                  | Create a repo record and begin indexing (returns `repo_id`)    |
+| `GET`    | `/api/repo/{repo_id}/index-progress` | **SSE stream** — real-time indexing progress events          |
+| `GET`    | `/api/repo/list`                   | List all repositories for the authenticated user               |
+| `GET`    | `/api/repo/{repo_id}`              | Get status and metadata for a single repository                |
+| `DELETE` | `/api/repo/{repo_id}`              | Delete a repository, its ChromaDB index, and cloned files      |
+| `GET`    | `/api/repo/{repo_id}/suggestions`  | Return 6 LLM-generated suggested questions for the repository  |
+
+### Indexing SSE Events
+
+```json
+{ "step": "cloning",   "message": "Cloning repository...", "progress": 10 }
+{ "step": "filtering", "message": "Filtering files...",    "progress": 25 }
+{ "step": "parsing",   "message": "Parsing 47 files...",   "progress": 40 }
+{ "step": "embedding", "message": "Building embeddings...", "progress": 65 }
+{ "step": "indexing",  "message": "Building summary index...", "progress": 80 }
+{ "step": "done",      "message": "Indexing complete!", "progress": 100, "file_count": 47, "node_count": 312 }
+{ "step": "error",     "message": "..." }
+```
+
+---
+
+## Chat — `/api/chat`
+
+| Method   | Endpoint                             | Description                                        |
+| -------- | ------------------------------------ | -------------------------------------------------- |
+| `POST`   | `/api/chat/session`                  | Create a new chat session for a repository         |
+| `POST`   | `/api/chat/{chat_id}/message/stream` | **SSE stream** — stream AI response token-by-token |
+| `GET`    | `/api/chat/{chat_id}/messages`       | Fetch full message history for a chat              |
+| `GET`    | `/api/chat/list?repo_id=...`         | List all chats for a repository                    |
+| `DELETE` | `/api/chat/{chat_id}`                | Delete a chat session and all its messages         |
+
+### Chat SSE Events
+
+```json
+{ "type": "token",    "content": "..." }
+{ "type": "metadata", "query_mode": "code_lookup", "retrieved_files": [...], "latency_retrieval_ms": 95, "latency_llm_ms": 2100, "latency_total_ms": 2210 }
+{ "type": "done" }
+{ "type": "error",   "message": "..." }
+```
+
+Each message is persisted to Supabase after streaming completes, including `query_mode`, `retrieved_files`, and `latency_ms`.
+
+---
+
+## Evaluation — `/api/eval`
+
+| Method | Endpoint                     | Description                                                         |
+| ------ | ---------------------------- | ------------------------------------------------------------------- |
+| `POST` | `/api/eval/run`              | **SSE stream** — run the full evaluation suite (~3–10 min)         |
+| `GET`  | `/api/eval/{repo_id}/latest` | Retrieve the most recent evaluation results for a repository        |
+
+### Eval SSE Events
+
+```json
+{ "type": "progress", "message": "Running query 3/10..." }
+{ "type": "result",   "summary": { "hit_rate": 0.8, "mrr": 0.65, ... } }
+{ "type": "done" }
+{ "type": "error",    "message": "..." }
+```
+
+Results are automatically persisted to Supabase on completion.
+
+---
+
+# 🗄️ Supabase Schema
+
+The backend uses five Supabase tables:
+
+| Table            | Purpose                                                  |
+| ---------------- | -------------------------------------------------------- |
+| `profiles`       | User profile data                                        |
+| `repositories`   | Indexed repo records (status, file/node count, provider) |
+| `chats`          | Chat sessions linked to a repository                     |
+| `messages`       | Individual messages with role, content, mode, latency    |
+| `evaluations`    | Stored evaluation summaries with all metric fields       |
+
+All Supabase operations are centralized in `api/services/supabase_service.py`. Routers never make raw Supabase calls directly.
+
+---
+
+# 🔐 Authentication
+
+The API uses Supabase JWT authentication:
+
+* the frontend sends `Authorization: Bearer <supabase_access_token>`
+* `api/dependencies.py` verifies the token using the Supabase service role key
+* `get_current_user()` — raises `401` if the token is missing or invalid
+* `get_optional_user()` — returns `None` for unauthenticated requests (guest mode)
+
+The Supabase client uses the **service role key** (never exposed to the frontend).
 
 ---
 
@@ -412,6 +571,7 @@ The memory system:
 * stores previous interactions
 * enables follow-up questions
 * preserves context across turns
+* persists messages to Supabase via the API layer
 
 ---
 
@@ -429,6 +589,7 @@ The system supports:
 * local inference
 * cloud inference
 * evaluation-specific LLM switching
+* token-level SSE streaming via the FastAPI backend
 
 ---
 
@@ -472,6 +633,28 @@ The retrieval stack is highly optimized:
 * retrieval latency is extremely low (~0.1s)
 * reranking adds modest overhead (~1s)
 * the primary bottleneck is local LLM inference
+
+---
+
+## Backend Architecture
+
+The `api/` layer is deliberately thin:
+
+* routers handle HTTP concerns only (auth, validation, response shaping)
+* all business logic lives in `app/` (provider-agnostic core)
+* `api/services/` handles Supabase persistence and SSE coordination
+* this separation means the Streamlit UI and FastAPI backend share the same core RAG engine without duplication
+
+---
+
+## Streaming Design
+
+Both indexing and chat use Server-Sent Events (SSE):
+
+* indexing progress is streamed step-by-step so the frontend can show a live progress bar
+* chat responses are streamed token-by-token using LlamaIndex's `stream_complete()` 
+* a `metadata` event is emitted after the full response, carrying `query_mode`, `retrieved_files`, and latency breakdowns
+* messages are persisted to Supabase after the stream closes
 
 ---
 
@@ -574,11 +757,30 @@ OLLAMA_EMBED_MODEL=nomic-embed-text
 
 USE_COLBERT=true
 USE_FAST_LLM=false
+
+# Required for FastAPI backend
+SUPABASE_URL=https://xxxx.supabase.co
+SUPABASE_SERVICE_KEY=eyJ...
+
+# Optional — used for CORS
+FRONTEND_URL=http://localhost:3000
 ```
 
 ---
 
-## 5️⃣ Launch Streamlit App
+## 5️⃣ Start the FastAPI Backend
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+The API will be available at `http://localhost:8000`.
+
+Interactive API docs (Swagger UI): `http://localhost:8000/docs`
+
+---
+
+## 6️⃣ Launch Streamlit App (optional)
 
 ```bash
 streamlit run ui/streamlit_app.py
@@ -588,8 +790,17 @@ streamlit run ui/streamlit_app.py
 
 # 🧪 Running Evaluation
 
+### Via CLI (standalone)
+
 ```bash
 python evaluate.py
+```
+
+### Via API (persists results to Supabase)
+
+```bash
+POST /api/eval/run
+{ "repo_id": "<uuid>", "index_name": "<index_name>" }
 ```
 
 ---
@@ -607,7 +818,6 @@ python evaluate.py
 
 ## LLM
 
-* streaming responses
 * tool-using agents
 * autonomous debugging workflows
 * structured reasoning pipelines
@@ -616,10 +826,10 @@ python evaluate.py
 
 ## Product Features
 
-* Supabase integration
-* authentication
-* persistent long-term memory
+* authentication UI (sign up / login flow)
+* persistent long-term memory across sessions
 * multi-user support
+* streaming already implemented — frontend integration pending
 
 ---
 
@@ -636,7 +846,9 @@ This project demonstrates practical understanding of:
 * routing systems
 * latency optimization
 * AI infrastructure design
-* production-style AI workflows
+* production-style REST API design (FastAPI + Supabase)
+* Server-Sent Events for real-time AI streaming
+* JWT authentication and multi-user data isolation
 
 ---
 
@@ -648,6 +860,7 @@ Codebase Copilot was built to deeply explore:
 * architectural reasoning
 * evaluation methodology
 * scalable AI system design
+* production API engineering
 
 with a strong focus on:
 
