@@ -151,7 +151,7 @@ The pipeline supports:
 
 ```text
                     ┌──────────────────────┐
-                    │     Streamlit UI     │
+                    │   Next.js Frontend   │
                     └──────────┬───────────┘
                                │
                                ▼
@@ -244,7 +244,8 @@ The pipeline supports:
 
 ## Frontend
 
-* Streamlit
+* Next.js (App Router, TypeScript, Tailwind)
+* Streamlit (internal prototype/testing UI)
 
 ## Evaluation
 
@@ -308,8 +309,14 @@ codebase-copilot/
 │       ├── indexing_service.py   # Async indexing pipeline with SSE
 │       └── supabase_service.py   # All Supabase DB operations
 │
+├── frontend/                     # Next.js production frontend
+│   ├── app/
+│   ├── components/
+│   ├── hooks/
+│   └── lib/
+│
 ├── ui/
-│   └── streamlit_app.py
+│   └── streamlit_app.py          # Streamlit internal prototype UI
 │
 ├── data/
 │   ├── repos/
@@ -317,7 +324,7 @@ codebase-copilot/
 │   └── eval_results*.json
 │
 ├── evaluate.py
-├── copy_codes.py
+├── run_complete_features.py      # Single-command launcher (backend + frontend)
 │
 ├── requirements.txt
 ├── requirements-llamaindex.txt
@@ -768,7 +775,28 @@ FRONTEND_URL=http://localhost:3000
 
 ---
 
-## 5️⃣ Start the FastAPI Backend
+## 5️⃣ Start Everything (recommended)
+
+```bash
+python run_complete_features.py
+```
+
+This starts:
+
+- FastAPI backend (`http://localhost:8000`)
+- Next.js frontend (`http://localhost:3000`)
+
+Optional:
+
+```bash
+python run_complete_features.py --with-streamlit
+```
+
+---
+
+## 6️⃣ Start services manually (alternative)
+
+### FastAPI backend
 
 ```bash
 uvicorn api.main:app --reload --port 8000
@@ -780,7 +808,15 @@ Interactive API docs (Swagger UI): `http://localhost:8000/docs`
 
 ---
 
-## 6️⃣ Launch Streamlit App (optional)
+### Next.js frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### Streamlit app (optional)
 
 ```bash
 streamlit run ui/streamlit_app.py
@@ -826,10 +862,10 @@ POST /api/eval/run
 
 ## Product Features
 
-* authentication UI (sign up / login flow)
+* social/OAuth login expansion and profile settings
 * persistent long-term memory across sessions
 * multi-user support
-* streaming already implemented — frontend integration pending
+* advanced observability for streaming/session analytics
 
 ---
 

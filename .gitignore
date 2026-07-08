@@ -9,6 +9,7 @@ __pycache__/
 venv/
 env/
 .venv/
+venv_copilot/
 
 # Environment variables
 .env
@@ -25,6 +26,17 @@ data/index/
 
 # VS Code
 .vscode/
+.idea/
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+frontend/.env.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
 
 # Streamlit cache
 .streamlit/

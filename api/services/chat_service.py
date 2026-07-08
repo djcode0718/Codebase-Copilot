@@ -60,6 +60,7 @@ async def stream_chat_response(
     index_name: str,
     repo_id: str,
     chat_id: str,
+    supabase=None,  # Supabase client for memory rehydration
 ) -> AsyncGenerator[str, None]:
     """
     SSE generator for /chat/{chat_id}/message/stream.
@@ -67,8 +68,15 @@ async def stream_chat_response(
     Yields:
         data: {"type": "token", "content": "..."}\\n\\n     (one per token)
         data: {"type": "metadata", ...}\\n\\n               (after full response)
-        data: {"type": "done"}\\n\\n
-        data: {"type": "error", "message": "..."}\\n\\n     (on failure)
+        data: {"type": "done"}\\n\\n                        (stream ended successfully)
+        data: {"type": "error", "message": "..."}\\n\\n     (stream ended with error — terminal)
+
+    CONTRACT: "error" events are TERMINAL — no "done" is emitted after an error.
+    This makes the frontend state machine unambiguous: either the stream ends with
+    "done" (success) or "error" (failure), never both.
+
+    MEMORY FIX: If in-process cache is empty (e.g., after server restart),
+    rehydrates chat memory from Supabase prior messages before running the query.
 
     Internally uses the same dual-mode routing as qa_service.handle_user_query()
     but with streaming output.
@@ -81,6 +89,7 @@ async def stream_chat_response(
     query_mode_value = "code_lookup"
     t_retrieval_ms = 0
     t_llm_ms = 0
+    error_occurred = False  # Track whether we've already emitted an error
 
     try:
         # ── Load indexes ───────────────────────────────────────────────────
@@ -92,10 +101,28 @@ async def stream_chat_response(
             None, _get_indexes, index_name
         )
 
-        # ── Get/create memory ──────────────────────────────────────────────
+        # ── Get/create memory with rehydration ─────────────────────────────
+        # MEMORY FIX: Rehydrate from Supabase if in-process cache is empty
+        from api.services import supabase_service
+        
         chat_engine, memory, last_mode = _get_or_init_session(repo_id, chat_id)
         if memory is None:
             memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
+            
+            # Rehydrate from Supabase if this is the first access after restart
+            try:
+                prior_messages = supabase_service.get_messages_for_chat(supabase, chat_id)
+                for msg in prior_messages:
+                    # Reconstruct (role, content) pairs from DB
+                    if msg.get("role") and msg.get("content"):
+                        memory.put({
+                            "role": msg["role"],
+                            "content": msg["content"],
+                        })
+                logger.info(f"Rehydrated chat {chat_id} with {len(prior_messages)} prior messages from Supabase.")
+            except Exception as rehydrate_err:
+                logger.warning(f"Failed to rehydrate memory from Supabase: {rehydrate_err}")
+                # Continue anyway with empty memory
 
         # ── Route query ────────────────────────────────────────────────────
         query_mode = await asyncio.get_event_loop().run_in_executor(
@@ -211,16 +238,19 @@ async def stream_chat_response(
             "latency_total_ms": t_total_ms,
         }
         yield f"data: {json.dumps(metadata)}\n\n"
+        
+        # ── Emit done (success) ─────────────────────────────────────────────
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     except Exception as e:
         logger.error(f"Streaming chat error: {e}", exc_info=True)
+        error_occurred = True
+        # Emit error as TERMINAL — no done follows
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
-    finally:
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-    # Return full_response and metadata for DB persistence
-    # (caller can access via the returned values if needed)
+    # Note: finally block deliberately removed to make error truly terminal
+    # If no error occurred, we already emitted "done" above.
+    # If an error occurred, we emit "error" and stop.
     return
 
 

@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #0a0a0b;
+  --bg-secondary: #131316;
+  --bg-elevated: #1c1c21;
+  --border-subtle: #2a2a30;
+  --text-primary: #e4e4e7;
+  --text-secondary: #9a9aa3;
+  --accent: #6366f1;
+  --mode-code: #5dade2;
+  --mode-arch: #58d68d;
+  --success: #22c55e;
+  --error: #ef4444;
+  --warning: #eab308;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  border-color: var(--border-subtle);
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}

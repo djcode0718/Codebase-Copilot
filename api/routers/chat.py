@@ -133,7 +133,7 @@ async def stream_message(
         full_response = ""
         metadata_event = None
 
-        async for sse_line in stream_chat_response(query, index_name, repo_id, chat_id):
+        async for sse_line in stream_chat_response(query, index_name, repo_id, chat_id, supabase):
             yield sse_line
 
             # Parse events to collect full response and metadata

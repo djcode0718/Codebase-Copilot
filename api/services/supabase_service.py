@@ -47,7 +47,19 @@ def update_repo_status(
     status: str,
     file_count: Optional[int] = None,
     node_count: Optional[int] = None,
+    index_name: Optional[str] = None,
 ) -> None:
+    """Update repository status and metadata after indexing.
+    
+    Args:
+        supabase: Supabase client
+        repo_id: Repository ID
+        status: New status ('ready', 'failed', 'indexing', etc.)
+        file_count: Optional file count to persist
+        node_count: Optional node count to persist
+        index_name: Optional actual index_name computed during indexing
+                   (should match the dirname where ChromaDB index is stored)
+    """
     update_data: Dict[str, Any] = {"status": status}
     if status == "ready":
         update_data["indexed_at"] = datetime.now(timezone.utc).isoformat()
@@ -55,6 +67,8 @@ def update_repo_status(
         update_data["file_count"] = file_count
     if node_count is not None:
         update_data["node_count"] = node_count
+    if index_name is not None:
+        update_data["index_name"] = index_name
 
     supabase.table("repositories").update(update_data).eq("id", repo_id).execute()
 

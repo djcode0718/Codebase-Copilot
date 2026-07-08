@@ -33,6 +33,10 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# ── Track in-flight indexing jobs to prevent duplicate concurrent runs ────────
+# Key: repo_id → tracks which repos are currently being indexed
+_indexing_in_flight: set = set()
+
 
 async def run_indexing_pipeline(
     source: str,
@@ -190,47 +194,91 @@ async def indexing_event_generator(
         data: {"step": "cloning", "message": "...", "progress": 10}\\n\\n
 
     Also updates the Supabase repositories table as steps complete.
+    
+    IDEMPOTENCY FIX: Checks if repo is already indexed or currently being indexed,
+    and rejects duplicate concurrent attempts.
     """
     from api.services import supabase_service
 
-    queue: asyncio.Queue = asyncio.Queue()
+    # ── Check if already indexed or in-flight ──────────────────────────────────
+    repo = supabase_service.get_repo(supabase, repo_id)
+    if not repo:
+        yield f"data: {json.dumps({'step': 'error', 'message': 'Repository not found.', 'progress': 0})}\n\n"
+        return
+    
+    # If already successfully indexed, return the existing index metadata
+    if repo["status"] == "ready":
+        logger.info(f"Repository {repo_id} is already indexed. Returning existing metadata.")
+        ready_event = {
+            'step': 'done',
+            'message': f'Repository already indexed: {repo.get("file_count", 0)} files, {repo.get("node_count", 0)} chunks.',
+            'progress': 100,
+            'file_count': repo.get("file_count", 0),
+            'node_count': repo.get("node_count", 0),
+            'index_name': repo.get("index_name", ""),
+        }
+        yield f"data: {json.dumps(ready_event)}\n\n"
+        return
+    
+    # If currently being indexed by another request, reject with 409-like error
+    if repo_id in _indexing_in_flight:
+        logger.warning(f"Indexing already in progress for repo {repo_id}. Rejecting concurrent attempt.")
+        in_flight_event = {
+            'step': 'error',
+            'message': 'Indexing already in progress for this repository. Please wait for it to complete.',
+            'progress': 0,
+        }
+        yield f"data: {json.dumps(in_flight_event)}\n\n"
+        return
+    
+    # Mark this repo as in-flight
+    _indexing_in_flight.add(repo_id)
+    
+    try:
+        queue: asyncio.Queue = asyncio.Queue()
 
-    # Start indexing in background task
-    indexing_task = asyncio.create_task(
-        run_indexing_pipeline(source, repo_id, queue)
-    )
+        # Start indexing in background task
+        indexing_task = asyncio.create_task(
+            run_indexing_pipeline(source, repo_id, queue)
+        )
 
-    # Stream progress events until done or error
-    while True:
-        try:
-            event = await asyncio.wait_for(queue.get(), timeout=300)
-        except asyncio.TimeoutError:
-            yield f"data: {json.dumps({'step': 'error', 'message': 'Indexing timed out after 5 minutes.', 'progress': 0})}\n\n"
-            break
-
-        yield f"data: {json.dumps(event)}\n\n"
-
-        if event["step"] == "done":
-            # Update Supabase with final status
+        # Stream progress events until done or error
+        while True:
             try:
-                supabase_service.update_repo_status(
-                    supabase,
-                    repo_id,
-                    status="ready",
-                    file_count=event.get("file_count"),
-                    node_count=event.get("node_count"),
-                )
-            except Exception as db_err:
-                logger.warning(f"Failed to update repo status in DB: {db_err}")
-            break
+                event = await asyncio.wait_for(queue.get(), timeout=300)
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'step': 'error', 'message': 'Indexing timed out after 5 minutes.', 'progress': 0})}\n\n"
+                break
 
-        if event["step"] == "error":
-            try:
-                supabase_service.update_repo_status(supabase, repo_id, status="failed")
-            except Exception:
-                pass
-            break
+            yield f"data: {json.dumps(event)}\n\n"
 
-    # Ensure the task is cleaned up
-    if not indexing_task.done():
-        indexing_task.cancel()
+            if event["step"] == "done":
+                # Update Supabase with final status
+                try:
+                    supabase_service.update_repo_status(
+                        supabase,
+                        repo_id,
+                        status="ready",
+                        file_count=event.get("file_count"),
+                        node_count=event.get("node_count"),
+                        index_name=event.get("index_name"),
+                    )
+                except Exception as db_err:
+                    logger.warning(f"Failed to update repo status in DB: {db_err}")
+                break
+
+            if event["step"] == "error":
+                try:
+                    supabase_service.update_repo_status(supabase, repo_id, status="failed")
+                except Exception:
+                    pass
+                break
+
+        # Ensure the task is cleaned up
+        if not indexing_task.done():
+            indexing_task.cancel()
+
+    finally:
+        # Always remove from in-flight set when done (whether success, error, or exception)
+        _indexing_in_flight.discard(repo_id)
+
