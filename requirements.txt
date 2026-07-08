@@ -21,3 +21,4 @@ chromadb
 tree-sitter-language-pack
 tree-sitter-languages
 
+httpx>=0.27.0

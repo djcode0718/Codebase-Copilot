@@ -1,0 +1,167 @@
+"""
+tests/test_app_config.py
+─────────────────────────
+Unit tests for app/config.py — env var loading, defaults, directory creation.
+Pure Python, no external services needed.
+"""
+
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import pytest
+import importlib
+from unittest.mock import patch
+
+
+def reload_config(env_overrides: dict):
+    """Re-import config with patched env vars and return the fresh module."""
+    with patch.dict(os.environ, env_overrides, clear=False):
+        import app.config as cfg
+        importlib.reload(cfg)
+        return cfg
+
+
+class TestLLMProviderConfig:
+    def test_default_llm_provider_is_ollama(self):
+        cfg = reload_config({"LLM_PROVIDER": "ollama"})
+        assert cfg.LLM_PROVIDER == "ollama"
+
+    def test_llm_provider_groq(self):
+        cfg = reload_config({"LLM_PROVIDER": "GROQ"})
+        assert cfg.LLM_PROVIDER == "groq"  # lowercased
+
+    def test_llm_provider_gemini(self):
+        cfg = reload_config({"LLM_PROVIDER": "Gemini"})
+        assert cfg.LLM_PROVIDER == "gemini"
+
+    def test_llm_provider_openai(self):
+        cfg = reload_config({"LLM_PROVIDER": "openai"})
+        assert cfg.LLM_PROVIDER == "openai"
+
+
+class TestFastLLMToggle:
+    def test_use_fast_llm_false_by_default(self):
+        cfg = reload_config({"USE_FAST_LLM": "false"})
+        assert cfg.USE_FAST_LLM is False
+
+    def test_use_fast_llm_true(self):
+        cfg = reload_config({"USE_FAST_LLM": "true"})
+        assert cfg.USE_FAST_LLM is True
+
+    def test_use_fast_llm_case_insensitive(self):
+        cfg = reload_config({"USE_FAST_LLM": "TRUE"})
+        assert cfg.USE_FAST_LLM is True
+
+    def test_use_fast_llm_invalid_defaults_false(self):
+        cfg = reload_config({"USE_FAST_LLM": "yes"})
+        assert cfg.USE_FAST_LLM is False
+
+    def test_groq_fast_model_is_a_non_empty_string(self):
+        """GROQ_FAST_MODEL must be set to a non-empty model name (may come from .env)."""
+        cfg = reload_config({})
+        assert isinstance(cfg.GROQ_FAST_MODEL, str)
+        assert len(cfg.GROQ_FAST_MODEL) > 0
+
+    def test_groq_fast_model_can_be_70b(self):
+        cfg = reload_config({"GROQ_FAST_MODEL": "llama-3.3-70b-versatile"})
+        assert cfg.GROQ_FAST_MODEL == "llama-3.3-70b-versatile"
+
+    def test_groq_fast_model_custom(self):
+        cfg = reload_config({"GROQ_FAST_MODEL": "llama-3.1-8b-instant"})
+        assert cfg.GROQ_FAST_MODEL == "llama-3.1-8b-instant"
+
+
+class TestAPIKeys:
+    def test_api_keys_are_strings(self):
+        import app.config as cfg
+        assert isinstance(cfg.GEMINI_API_KEY, str)
+        assert isinstance(cfg.GROQ_API_KEY, str)
+        assert isinstance(cfg.OPENAI_API_KEY, str)
+
+    def test_missing_key_defaults_to_empty_string(self):
+        cfg = reload_config({"GEMINI_API_KEY": "", "GROQ_API_KEY": "", "OPENAI_API_KEY": ""})
+        assert cfg.GEMINI_API_KEY == ""
+        assert cfg.GROQ_API_KEY == ""
+        assert cfg.OPENAI_API_KEY == ""
+
+    def test_custom_api_key(self):
+        cfg = reload_config({"GROQ_API_KEY": "test-groq-key-123"})
+        assert cfg.GROQ_API_KEY == "test-groq-key-123"
+
+
+class TestOllamaConfig:
+    def test_default_base_url(self):
+        cfg = reload_config({"OLLAMA_BASE_URL": "http://localhost:11434"})
+        assert cfg.OLLAMA_BASE_URL == "http://localhost:11434"
+
+    def test_custom_base_url(self):
+        cfg = reload_config({"OLLAMA_BASE_URL": "http://192.168.1.10:11434"})
+        assert cfg.OLLAMA_BASE_URL == "http://192.168.1.10:11434"
+
+    def test_default_embed_model(self):
+        cfg = reload_config({"OLLAMA_EMBED_MODEL": "nomic-embed-text"})
+        assert cfg.OLLAMA_EMBED_MODEL == "nomic-embed-text"
+
+    def test_custom_llm_model(self):
+        cfg = reload_config({"OLLAMA_LLM_MODEL": "mistral"})
+        assert cfg.OLLAMA_LLM_MODEL == "mistral"
+
+
+class TestDirectories:
+    def test_dirs_are_strings(self):
+        import app.config as cfg
+        assert isinstance(cfg.BASE_DIR, str)
+        assert isinstance(cfg.DATA_DIR, str)
+        assert isinstance(cfg.REPOS_DIR, str)
+        assert isinstance(cfg.INDEX_DIR, str)
+
+    def test_repos_dir_under_data(self):
+        import app.config as cfg
+        assert cfg.REPOS_DIR.startswith(cfg.DATA_DIR)
+
+    def test_index_dir_under_data(self):
+        import app.config as cfg
+        assert cfg.INDEX_DIR.startswith(cfg.DATA_DIR)
+
+    def test_dirs_are_created(self):
+        import app.config as cfg
+        assert os.path.isdir(cfg.REPOS_DIR)
+        assert os.path.isdir(cfg.INDEX_DIR)
+
+
+class TestRetrievalConfig:
+    def test_top_k_values_are_positive_integers(self):
+        import app.config as cfg
+        assert isinstance(cfg.TOP_K_FILES, int) and cfg.TOP_K_FILES > 0
+        assert isinstance(cfg.TOP_K_CHUNKS, int) and cfg.TOP_K_CHUNKS > 0
+        assert isinstance(cfg.TOP_K_RERANK, int) and cfg.TOP_K_RERANK > 0
+
+    def test_rerank_less_than_or_equal_to_chunks(self):
+        import app.config as cfg
+        assert cfg.TOP_K_RERANK <= cfg.TOP_K_CHUNKS
+
+    def test_chunk_lines_positive(self):
+        import app.config as cfg
+        assert cfg.CHUNK_LINES > 0
+
+    def test_chunk_max_chars_positive(self):
+        import app.config as cfg
+        assert cfg.CHUNK_MAX_CHARS > 0
+
+
+class TestColbertConfig:
+    def test_use_colbert_is_bool(self):
+        import app.config as cfg
+        assert isinstance(cfg.USE_COLBERT, bool)
+
+    def test_use_colbert_false(self):
+        cfg = reload_config({"USE_COLBERT": "false"})
+        assert cfg.USE_COLBERT is False
+
+    def test_use_colbert_true(self):
+        cfg = reload_config({"USE_COLBERT": "true"})
+        assert cfg.USE_COLBERT is True
+
+    def test_use_colbert_case_insensitive(self):
+        cfg = reload_config({"USE_COLBERT": "TRUE"})
+        assert cfg.USE_COLBERT is True

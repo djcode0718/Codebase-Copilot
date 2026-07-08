@@ -60,19 +60,27 @@ def update_repo_status(
 
 
 def get_repo(supabase: Client, repo_id: str) -> Optional[Dict[str, Any]]:
-    result = supabase.table("repositories").select("*").eq("id", repo_id).execute()
-    return result.data[0] if result.data else None
+    try:
+        result = supabase.table("repositories").select("*").eq("id", repo_id).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        logger.warning(f"get_repo failed for id='{repo_id}': {e}")
+        return None
 
 
 def get_repos_for_user(supabase: Client, user_id: str) -> List[Dict[str, Any]]:
-    result = (
-        supabase.table("repositories")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return result.data or []
+    try:
+        result = (
+            supabase.table("repositories")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.warning(f"get_repos_for_user failed for user_id='{user_id}': {e}")
+        return []
 
 
 def delete_repo(supabase: Client, repo_id: str) -> None:
@@ -98,14 +106,18 @@ def create_chat(
 
 
 def get_chats_for_repo(supabase: Client, repo_id: str) -> List[Dict[str, Any]]:
-    result = (
-        supabase.table("chats")
-        .select("*")
-        .eq("repo_id", repo_id)
-        .order("updated_at", desc=True)
-        .execute()
-    )
-    return result.data or []
+    try:
+        result = (
+            supabase.table("chats")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.warning(f"get_chats_for_repo failed for repo_id='{repo_id}': {e}")
+        return []
 
 
 def update_chat_title(supabase: Client, chat_id: str, title: str) -> None:
@@ -120,8 +132,12 @@ def delete_chat(supabase: Client, chat_id: str) -> None:
 
 
 def get_chat(supabase: Client, chat_id: str) -> Optional[Dict[str, Any]]:
-    result = supabase.table("chats").select("*").eq("id", chat_id).execute()
-    return result.data[0] if result.data else None
+    try:
+        result = supabase.table("chats").select("*").eq("id", chat_id).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        logger.warning(f"get_chat failed for id='{chat_id}': {e}")
+        return None
 
 
 # ── Messages ──────────────────────────────────────────────────────────────────
@@ -157,7 +173,7 @@ def get_messages_for_chat(supabase: Client, chat_id: str) -> List[Dict[str, Any]
         supabase.table("messages")
         .select("*")
         .eq("chat_id", chat_id)
-        .order("created_at", asc=True)
+        .order("created_at", desc=False)
         .execute()
     )
     return result.data or []
@@ -194,12 +210,16 @@ def save_evaluation(
 def get_latest_evaluation(
     supabase: Client, repo_id: str
 ) -> Optional[Dict[str, Any]]:
-    result = (
-        supabase.table("evaluations")
-        .select("*")
-        .eq("repo_id", repo_id)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    return result.data[0] if result.data else None
+    try:
+        result = (
+            supabase.table("evaluations")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        logger.warning(f"get_latest_evaluation failed for repo_id='{repo_id}': {e}")
+        return None

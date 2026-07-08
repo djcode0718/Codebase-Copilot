@@ -39,7 +39,7 @@ def get_supabase() -> Client:
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env"
             )
-        _supabase_client = create_client(url, key)
+        _supabase_client = create_client(str(url), str(key))
     return _supabase_client
 
 

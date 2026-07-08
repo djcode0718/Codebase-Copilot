@@ -83,7 +83,7 @@ def _default_suggestions() -> List[str]:
     return [
         "Explain the overall architecture of this project.",
         "What are the main limitations of this codebase?",
-        "How does the retrieval pipeline work?",
+        "How does the code pipeline work?",
         "Which files are most important to understand first?",
         "What would you improve to make this production-ready?",
         "How does the query routing logic work?",
