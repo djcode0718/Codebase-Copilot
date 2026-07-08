@@ -31,3 +31,6 @@ data/index/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
+
+# Frontend (Skipping per user request)
+codebase-copilot-frontend/
