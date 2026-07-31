@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { createClient } from '@/lib/supabase/client';
 import { getRepo, deleteRepo } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
 
