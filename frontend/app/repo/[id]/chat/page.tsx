@@ -43,31 +43,65 @@ export default function ChatPage() {
       const t = data.session?.access_token ?? '';
       setToken(t);
       if (!t) return;
+
+      let activeChatId = '';
+      let hasHistory = false;
+      let hasSavedSuggestions = false;
+
       try {
         // Try to load existing chat
         const chats = await listChats(t, repoId);
         if (chats.length > 0) {
           const activeChat = chats[0];
-          setChatId(activeChat.id);
-          const history = await getMessages(t, activeChat.id);
+          activeChatId = activeChat.id;
+          setChatId(activeChatId);
+          const history = await getMessages(t, activeChatId);
           setMessages(history);
+          hasHistory = history.length > 0;
           setSessionReady(true);
+
+          // Try to restore suggestions from localStorage
+          const saved = localStorage.getItem(`chat_suggestions_${activeChatId}`);
+          if (saved) {
+            try {
+              setSuggestions(JSON.parse(saved));
+              hasSavedSuggestions = true;
+            } catch {
+              // fallback
+            }
+          }
         } else {
           // No chats exist, create new
           const session = await createChatSession(t, repoId);
-          setChatId(session.chat_id);
+          activeChatId = session.chat_id;
+          setChatId(activeChatId);
           setSessionReady(true);
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to initialize chat');
       }
-      try {
-        const s = await getSuggestions(t, repoId);
-        setSuggestions(s.questions?.slice(0, 4) ?? []);
-      } catch { /* suggestions are optional */ }
+
+      // Fetch default repo suggestions ONLY if there is no chat history and no saved suggestions in localStorage
+      if (!hasHistory && !hasSavedSuggestions) {
+        try {
+          const s = await getSuggestions(t, repoId);
+          setSuggestions(s.questions?.slice(0, 4) ?? []);
+        } catch { /* suggestions are optional */ }
+      }
     }
     init();
   }, [repoId]);
+
+  // Sync suggestions to localStorage whenever they change
+  useEffect(() => {
+    if (chatId && suggestions.length > 0) {
+      try {
+        localStorage.setItem(`chat_suggestions_${chatId}`, JSON.stringify(suggestions));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, [chatId, suggestions]);
 
   // Scroll to bottom on new message or streaming
   useEffect(() => {

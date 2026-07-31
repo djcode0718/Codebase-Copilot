@@ -259,7 +259,7 @@ export default function EvalPage() {
                       fontSize: '12px',
                       color: 'var(--popover-foreground)',
                     }}
-                    formatter={(value: number | string) => [`${Number(value || 0).toFixed(1)}%`, 'Score']}
+                    formatter={(value: unknown) => [`${Number(value || 0).toFixed(1)}%`, 'Score']}
                   />
                 </RadarChart>
               </ResponsiveContainer>
