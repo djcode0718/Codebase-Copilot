@@ -11,3 +11,7 @@ pydantic>=2.0
 
 # ─── Environment ──────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
+
+# ─── Optional AI / indexing runtime ────────────────────────────────────────────
+-r requirements-llamaindex.txt
+

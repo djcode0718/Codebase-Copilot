@@ -254,7 +254,7 @@ codebase-copilot/
 │   ├── hooks/
 │   │   ├── useChatStream.ts
 │   │   └── useIndexingStream.ts
-│   └── middleware.ts               # Supabase session middleware
+│   └── proxy.ts                    # Supabase session proxy for route protection
 │
 ├── ui/
 │   └── streamlit_app.py          # Legacy/lightweight local UI
@@ -285,6 +285,7 @@ codebase-copilot/
 ├── pytest.ini
 ├── requirements.txt
 ├── start.ps1                     # One-command launcher for backend + frontend
+├── start.sh                      # One-command launcher for macOS/Linux
 ├── .env
 ├── .gitignore
 └── README.md
@@ -317,13 +318,15 @@ The FastAPI backend is served at `http://localhost:8000` and exposes the followi
 
 ```json
 { "step": "cloning",   "message": "Cloning repository...", "progress": 10 }
-{ "step": "filtering", "message": "Filtering files...",    "progress": 25 }
+{ "step": "filtering", "message": "Filtering files...",    "progress": 20 }
 { "step": "parsing",   "message": "Parsing 47 files...",   "progress": 40 }
 { "step": "embedding", "message": "Building embeddings...", "progress": 65 }
-{ "step": "indexing",  "message": "Building summary index...", "progress": 80 }
+{ "step": "summary",   "message": "Finalising architectural context...", "progress": 90 }
 { "step": "done",      "message": "Indexing complete!", "progress": 100, "file_count": 47, "node_count": 312 }
-{ "step": "error",     "message": "..." }
+{ "step": "error",     "message": "...", "progress": 100 }
 ```
+
+If Python AI dependencies are missing (for example `llama_index`), the stream emits a terminal `error` event with installation guidance instead of hanging silently.
 
 ### Chat — `/api/chat`
 
@@ -384,7 +387,7 @@ All Supabase operations are centralized in `api/services/supabase_service.py`. R
 
 The API uses Supabase JWT authentication:
 
-* the Next.js frontend sends `Authorization: Bearer <supabase_access_token>`, managed via `frontend/middleware.ts`
+* the Next.js frontend sends `Authorization: Bearer <supabase_access_token>`, managed via `frontend/proxy.ts`
 * `api/dependencies.py` verifies the token using the Supabase service role key
 * `get_current_user()` — raises `401` if the token is missing or invalid
 * `get_optional_user()` — returns `None` for unauthenticated requests (guest mode)
@@ -585,7 +588,19 @@ Run both the FastAPI backend and the Next.js frontend together from one terminal
 powershell -ExecutionPolicy Bypass -File "start.ps1"
 ```
 
-Both servers start as background jobs in the same window, with colour-coded output (`[backend]` / `[frontend]`). Press **Ctrl+C** to stop both.
+```bash
+# macOS / Linux
+./start.sh
+```
+
+If your clone strips executable bits, run `chmod +x start.sh` once.
+
+Both scripts:
+
+* free ports `8000` and `3000` before startup
+* stream prefixed logs in one terminal (`[backend]` / `[frontend]`)
+* stop both services on **Ctrl+C**
+* exit if either backend or frontend stops unexpectedly
 
 | Service  | URL                      |
 | -------- | ------------------------ |
@@ -595,7 +610,11 @@ Both servers start as background jobs in the same window, with colour-coded outp
 ### 5️⃣a Start the FastAPI Backend (standalone)
 
 ```bash
-.\venv_copilot\Scripts\python.exe -m uvicorn api.main:app --reload --port 8000
+# Windows
+./venv_copilot/Scripts/python.exe -m uvicorn api.main:app --reload --port 8000
+
+# macOS / Linux
+./venv_copilot/bin/python -m uvicorn api.main:app --reload --port 8000
 ```
 
 The API is available at `http://localhost:8000`, with interactive Swagger docs at `http://localhost:8000/docs`.

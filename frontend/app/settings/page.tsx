@@ -2,7 +2,7 @@
 /**
  * app/settings/page.tsx
  */
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { motion } from 'framer-motion';
 import { Settings, User, Cpu, AlertTriangle, SunMedium, MoonStar, Monitor } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -14,12 +14,16 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { useTheme } from 'next-themes';
 
+const subscribe = () => () => {};
+
 export default function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme, resolvedTheme } = useTheme();
   const [apiBase, setApiBase] = useState(
     process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
   );
+  const mounted = useSyncExternalStore(subscribe, () => true, () => false);
+  const selectedTheme = mounted ? (theme === 'system' ? (resolvedTheme ?? 'system') : theme) : undefined;
 
   async function handleSignOut() {
     await createClient().auth.signOut();
@@ -110,7 +114,7 @@ export default function SettingsPage() {
             { key: 'dark', label: 'Dark', icon: MoonStar },
             { key: 'system', label: 'System', icon: Monitor },
           ].map((option) => {
-            const active = theme === option.key || (option.key === 'system' && !theme) || (option.key === 'system' && theme === 'system');
+            const active = selectedTheme === option.key;
             return (
               <button
                 key={option.key}
@@ -121,7 +125,7 @@ export default function SettingsPage() {
                 <option.icon size={16} className={active ? 'text-brand' : ''} />
                 <div>
                   <p className="text-sm font-medium">{option.label}</p>
-                  <p className="text-xs text-muted-foreground">{option.key === 'system' ? `Follows ${resolvedTheme ?? 'OS'} mode` : `Set the UI to ${option.label.toLowerCase()}`}</p>
+                  <p className="text-xs text-muted-foreground">{option.key === 'system' ? `Follows ${mounted ? resolvedTheme ?? 'OS' : 'OS'} mode` : `Set the UI to ${option.label.toLowerCase()}`}</p>
                 </div>
               </button>
             );

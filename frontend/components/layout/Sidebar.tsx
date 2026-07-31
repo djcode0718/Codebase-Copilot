@@ -5,7 +5,7 @@
  */
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import {
   GitBranch,
   LayoutDashboard,
@@ -45,25 +45,34 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === 'undefined') {
-      return false;
-    }
+  const collapsed = useSyncExternalStore(
+    (onStoreChange) => {
+      window.addEventListener('storage', onStoreChange);
+      window.addEventListener('codebase-sidebar-collapsed-change', onStoreChange);
+      return () => {
+        window.removeEventListener('storage', onStoreChange);
+        window.removeEventListener('codebase-sidebar-collapsed-change', onStoreChange);
+      };
+    },
+    () => {
+      try {
+        return window.localStorage.getItem(STORAGE_KEY) === '1';
+      } catch {
+        return false;
+      }
+    },
+    () => false
+  );
 
+  function setCollapsed(nextValue: boolean) {
     try {
-      return window.localStorage.getItem(STORAGE_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0');
+      window.localStorage.setItem(STORAGE_KEY, nextValue ? '1' : '0');
     } catch {
       // ignore storage errors
     }
-  }, [collapsed]);
+
+    window.dispatchEvent(new Event('codebase-sidebar-collapsed-change'));
+  }
 
   const sortedRepos = useMemo(
     () => [...repos].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')),
@@ -108,7 +117,7 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
           {!collapsed && <ThemeToggle className="hidden lg:inline-flex" />}
           <button
             type="button"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={() => setCollapsed(!collapsed)}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sidebar-border bg-sidebar-accent/60 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
