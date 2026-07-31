@@ -116,44 +116,41 @@ def parse_documents(documents: List[Document]) -> List:
         else:
             other_docs.append(doc)
 
-    # 🔥 Code splitting — one CodeSplitter per language
+    # Code splitting - one CodeSplitter per language
     for lang, docs in code_docs_by_lang.items():
         try:
-            from tree_sitter_language_pack import get_parser
-
             splitter = CodeSplitter(
                 language=lang,
                 chunk_lines=CHUNK_LINES,
                 chunk_lines_overlap=10,
                 max_chars=CHUNK_MAX_CHARS,
-                parser=get_parser(lang),
             )
             nodes = splitter.get_nodes_from_documents(docs)
             all_nodes.extend(nodes)
-            logger.info(f"CodeSplitter [{lang}]: {len(docs)} files → {len(nodes)} nodes")
+            logger.info(f"CodeSplitter [{lang}]: {len(docs)} files -> {len(nodes)} nodes")
         except Exception as e:
-            # Fallback to sentence splitter if tree-sitter fails for this language
-            logger.warning(f"CodeSplitter failed for {lang}: {e} — falling back to SentenceSplitter")
+            # Fallback to sentence splitter if CodeSplitter fails for this language.
+            logger.warning(f"CodeSplitter failed for {lang}: {e}; falling back to SentenceSplitter")
             fallback = SentenceSplitter(chunk_size=512, chunk_overlap=64)
             nodes = fallback.get_nodes_from_documents(docs)
             all_nodes.extend(nodes)
 
-    # 🔥 Markdown splitting
+    # Markdown splitting
     if markdown_docs:
         md_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
         md_nodes = md_splitter.get_nodes_from_documents(markdown_docs)
         all_nodes.extend(md_nodes)
-        logger.info(f"SentenceSplitter [markdown]: {len(markdown_docs)} files → {len(md_nodes)} nodes")
+        logger.info(f"SentenceSplitter [markdown]: {len(markdown_docs)} files -> {len(md_nodes)} nodes")
 
-    # 🔥 Other files (HTML, shell scripts, etc.)
+    # Other files (HTML, shell scripts, etc.)
     if other_docs:
         other_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
         other_nodes = other_splitter.get_nodes_from_documents(other_docs)
         all_nodes.extend(other_nodes)
-        logger.info(f"SentenceSplitter [other]: {len(other_docs)} files → {len(other_nodes)} nodes")
+        logger.info(f"SentenceSplitter [other]: {len(other_docs)} files -> {len(other_nodes)} nodes")
 
     logger.info(
-        f"Parsing complete — {len(all_nodes)} total nodes from {len(documents)} documents "
+        f"Parsing complete -- {len(all_nodes)} total nodes from {len(documents)} documents "
         f"in {time.time() - start_time:.2f}s"
     )
     return all_nodes

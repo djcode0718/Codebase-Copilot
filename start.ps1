@@ -87,7 +87,7 @@ Write-Host "Starting backend (uvicorn) ..." -ForegroundColor Cyan
 $backend = Start-Job -Name "backend" -ScriptBlock {
     param($r, $pythonExe)
     Set-Location $r
-    & $pythonExe -m uvicorn api.main:app --reload --port 8000 2>&1
+    & $pythonExe -m uvicorn api.main:app --reload --port 8000 --reload-dir api --reload-dir app --reload-exclude "data/repos/*" --reload-exclude "data/index/*" 2>&1
 } -ArgumentList $root, $backendPython
 
 Write-Host "Starting frontend (npm run dev) ..." -ForegroundColor Cyan

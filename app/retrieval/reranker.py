@@ -63,7 +63,7 @@ def _load_colbert(top_k: int):
         return None
 
     except Exception as e:
-        logger.warning(f"ColBERT load failed: {e} — falling back to RRF scores")
+        logger.warning(f"ColBERT load failed: {e}; falling back to RRF scores")
         return None
     # ── END COLBERT ON ────────────────────────────────────────────────────
 
@@ -98,24 +98,37 @@ def rerank_with_colbert(
         if reranker is not None:
             try:
                 import time
+                import torch
                 from llama_index.core import QueryBundle
 
                 start = time.time()
 
                 # ColbertRerank is a NodePostprocessor — takes nodes + query bundle
-                reranked = reranker.postprocess_nodes(
-                    nodes,
-                    query_bundle=QueryBundle(query_str=query),
-                )
+                with torch.no_grad():
+                    reranked = reranker.postprocess_nodes(
+                        nodes,
+                        query_bundle=QueryBundle(query_str=query),
+                    )
+
+                # Normalize scores to plain floats in case the postprocessor returns tensors.
+                for node in reranked:
+                    score = node.score
+                    if score is None:
+                        continue
+                    if hasattr(score, "detach"):
+                        score = score.detach()
+                    if hasattr(score, "item"):
+                        score = score.item()
+                    node.score = float(score)
 
                 logger.info(
-                    f"ColBERT reranked {len(nodes)} → {len(reranked)} nodes "
+                    f"ColBERT reranked {len(nodes)} -> {len(reranked)} nodes "
                     f"in {time.time() - start:.2f}s"
                 )
                 return reranked[:top_k]
 
             except Exception as e:
-                logger.warning(f"ColBERT reranking failed: {e} — using RRF scores")
+                logger.warning(f"ColBERT reranking failed: {e}; using RRF scores")
     # ── END COLBERT ON ────────────────────────────────────────────────────
 
     # Fallback: sort by RRF scores from QueryFusionRetriever
