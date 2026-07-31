@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { PipelineVisual } from './PipelineVisual';
 
-export function Hero() {
+export function Hero({ signedIn }: { signedIn?: boolean }) {
   return (
     <section className="relative overflow-hidden px-4 pb-20 pt-24 text-center sm:pt-28">
       <div className="absolute inset-0 bg-[linear-gradient(rgba(51,65,85,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(51,65,85,0.12)_1px,transparent_1px)] bg-[size:48px_48px] pointer-events-none opacity-50 [mask-image:linear-gradient(to_bottom,white,transparent)]" />
@@ -26,9 +26,9 @@ export function Hero() {
           AI-powered RAG system for any GitHub repository. Get grounded, inspectable answers backed by real code retrieval.
         </p>
         <div className="flex flex-col justify-center gap-3 pt-4 sm:flex-row">
-          <Link href="/auth/sign-in">
+          <Link href={signedIn ? '/dashboard' : '/auth/sign-in'}>
             <Button size="lg" className="h-12 cursor-pointer bg-brand px-8 text-base font-semibold text-green-950 hover:bg-green-400">
-              Index a Repo
+              {signedIn ? 'Open workspace' : 'Index a Repo'}
             </Button>
           </Link>
           <Link href="/dashboard">

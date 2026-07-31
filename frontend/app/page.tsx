@@ -1,9 +1,19 @@
 import { Hero } from '@/components/landing/Hero';
 import { FeatureSection } from '@/components/landing/FeatureSection';
-import Link from 'next/link';
-import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/layout/ThemeToggle';
+import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { LandingAuthActions } from '@/components/landing/LandingAuthActions';
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  const signedIn = Boolean(session?.user);
+  const isGuest = Boolean(session?.user?.is_anonymous);
+  const email = session?.user?.email ?? undefined;
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/75 backdrop-blur-xl">
@@ -15,18 +25,18 @@ export default function LandingPage() {
             <span className="font-heading text-lg font-semibold tracking-tight">Codebase Copilot</span>
           </div>
           <div className="flex items-center gap-2">
-            <Link href="/auth/sign-in">
-              <Button variant="outline" className="border-border">Sign in</Button>
-            </Link>
-            <Link href="/dashboard">
-              <Button className="bg-brand text-green-950 hover:bg-green-400">Open workspace</Button>
-            </Link>
+            <ThemeToggle variant="landing" />
+            <LandingAuthActions
+              initialSignedIn={signedIn}
+              initialIsGuest={isGuest}
+              initialEmail={email}
+            />
           </div>
         </div>
       </header>
 
       <main>
-        <Hero />
+        <Hero signedIn={signedIn} />
         <FeatureSection />
       </main>
 

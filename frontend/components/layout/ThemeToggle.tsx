@@ -5,9 +5,20 @@ import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-export function ThemeToggle({ className }: { className?: string }) {
+export function ThemeToggle({
+  className,
+  variant = 'sidebar',
+}: {
+  className?: string;
+  variant?: 'sidebar' | 'landing';
+}) {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === 'dark';
+
+  const variantClass =
+    variant === 'landing'
+      ? 'border-border bg-card/80 text-foreground hover:bg-muted'
+      : 'border-sidebar-border bg-sidebar-accent/70 text-sidebar-foreground hover:bg-sidebar-accent';
 
   return (
     <Button
@@ -15,7 +26,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       variant="outline"
       size="icon-sm"
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
-      className={cn('border-sidebar-border bg-sidebar-accent/70 text-sidebar-foreground hover:bg-sidebar-accent', className)}
+      className={cn(variantClass, className)}
       aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
       title={isDark ? 'Light theme' : 'Dark theme'}
     >
