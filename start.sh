@@ -21,21 +21,34 @@ FRONTEND_LOG=""
 kill_pid_tree() {
   local pid="${1:-}"
   [[ -z "$pid" ]] && return 0
-  [[ "$pid" == "$$" ]] && return 0
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -KILL -P "$pid" 2>/dev/null || true
+  if [[ "$pid" == "$$" ]]; then
+    return 0
   fi
-  kill -KILL "$pid" 2>/dev/null || true
+
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$pid" 2>/dev/null || true
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 0.2
+  if kill -0 "$pid" 2>/dev/null; then
+    if command -v pkill >/dev/null 2>&1; then
+      pkill -KILL -P "$pid" 2>/dev/null || true
+    fi
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  return 0
 }
 
 free_port() {
   local port="$1"
   if command -v lsof >/dev/null 2>&1; then
     lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null | while read -r pid; do
-      [[ -z "$pid" || "$pid" == "$$" ]] && continue
+      if [[ -z "$pid" || "$pid" == "$$" ]]; then
+        continue
+      fi
       echo "Freeing port $port (PID $pid) ..."
-      kill_pid_tree "$pid"
-    done
+      kill_pid_tree "$pid" || true
+    done || true
   elif command -v fuser >/dev/null 2>&1; then
     fuser -k "${port}/tcp" 2>/dev/null || true
   fi
@@ -68,14 +81,17 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # Kill previous instances of this script.
-current_pid="$$"
-ps -eo pid=,command= 2>/dev/null | while read -r pid cmd; do
-  [[ -z "${pid:-}" || "$pid" == "$current_pid" ]] && continue
-  if [[ "$cmd" == *"start.sh"* ]]; then
+kill_previous_start_instances() {
+  local current_pid="$$"
+  # Find other start.sh instances, excluding the current script PID, grep, and the ps output command itself
+  local other_pids
+  other_pids=$(ps -eo pid=,command= | grep "start.sh" | grep -v "grep" | grep -v "ps -eo" | awk '{print $1}' | grep -v "^${current_pid}$" || true)
+  for pid in $other_pids; do
     echo "Killing previous start.sh instance (PID $pid) ..."
-    kill_pid_tree "$pid" 2>/dev/null || true
-  fi
-done
+    kill_pid_tree "$pid" || true
+  done
+}
+kill_previous_start_instances
 
 free_port "$BACKEND_PORT"
 free_port "$FRONTEND_PORT"
