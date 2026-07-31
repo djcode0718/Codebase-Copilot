@@ -394,6 +394,55 @@ The API uses Supabase JWT authentication:
 
 The Supabase client uses the **service role key** (never exposed to the frontend).
 
+## 🛡️ Reliability and Hardening
+
+This project is production-oriented, but large-scale and regulated environments usually require additional hardening. The checklist below captures the recommended baseline.
+
+### 1) Robust Error Handling
+
+* Standardize API error payloads across all routers (for example: `code`, `message`, `request_id`, `retryable`, `details`) so frontend error handling is deterministic.
+* Preserve SSE reliability by always emitting a terminal `error` or `done` event, including partial-failure paths.
+* Add timeout, cancellation, and cleanup guards for long-running indexing/evaluation jobs to prevent stuck work.
+* Classify failures into `user`, `dependency`, `transient`, and `internal`, with retry guidance per class.
+* Include correlation IDs in both logs and response payloads so one frontend failure can be traced end-to-end.
+* Add explicit fallback messages for missing AI dependencies (for example `llama_index`) and model/provider unavailability.
+
+### 2) Security Hardening (Including Test Security)
+
+* Keep `mock_supabase` only for fast unit tests; move security confidence to real integration/security tests.
+* Replace mock-only security validation with an ephemeral Supabase/Postgres test environment in CI using short-lived credentials.
+* Add contract tests for JWT validation edge cases (expired tokens, malformed claims, wrong audience, revoked sessions).
+* Enforce secret hygiene: `.env` never committed, service-role key only in backend runtime, optional secret scanning in CI.
+* Add authorization regression tests for repository/chat/eval ownership boundaries and cross-tenant access attempts.
+* Treat the security lane as a required merge gate for auth/authz-sensitive changes.
+
+### 3) Evaluation Pipeline Optimization
+
+* Parallelize independent evaluation queries with bounded worker pools to reduce wall-clock runtime.
+* Add caching for immutable artifacts (parsed nodes, embeddings, retrieval candidates, rerank outputs where valid).
+* Split evaluation into stages: retrieval-only, generation-only, and end-to-end to isolate bottlenecks faster.
+* Persist per-stage timings and resource metrics so regressions can be detected automatically.
+* Add provider-aware execution policies (local/offline vs cloud) to keep CI reliable and cost-aware.
+* Add resumable evaluation runs (stage checkpoints) so failures do not require restarting the entire pipeline.
+
+### 4) Scalability Design
+
+* Run API instances statelessly behind a load balancer; move any process-local state to shared infrastructure.
+* Use a distributed cache (for example Redis) for hot retrieval artifacts and short-lived chat metadata.
+* Offload indexing/evaluation to worker queues so API latency is not coupled to heavy background workloads.
+* Add database index/partition tuning for `repositories`, `chats`, `messages`, and `evaluations` as data grows.
+* Introduce observability SLIs/SLOs (latency, error rate, queue depth, throughput) before high-scale rollout.
+* Add concurrency limits and backpressure on SSE and long-running endpoints to protect service stability under load.
+
+### 5) Expanded Testing Strategy
+
+* Keep the fast unit suite and enforce a two-lane strategy: mocked fast lane + ephemeral real-backend security lane.
+* Expand the test pyramid explicitly: unit -> integration -> end-to-end -> security -> performance.
+* Add SSE contract tests that verify event ordering, terminal events, and error propagation behavior.
+* Add integration tests that run against real persistence/auth boundaries (ephemeral environment, not production).
+* Add performance guard tests for indexing and retrieval latency budgets.
+* Add chaos-style failure tests for dependency outages (LLM provider, vector store, Supabase) and retry behavior.
+
 ---
 
 ## 🔄 End-to-End Workflow
@@ -485,7 +534,9 @@ The project ships with a dedicated `tests/` suite built on **pytest** and **pyte
 | `test_router_suggestions.py`   | Cached vs. generated question suggestions, default fallback behavior       |
 | `conftest.py`                  | Shared fixtures — FastAPI `TestClient`, mocked Supabase client, fake users  |
 
-Integration tests use FastAPI's `TestClient` with a mocked Supabase backend (via `unittest.mock`), so the full suite runs fast and with **zero external network calls or live credentials**.
+Integration tests use FastAPI's `TestClient` with a mocked Supabase backend (via `unittest.mock`) for fast local feedback and **zero external network calls**.
+
+For stronger security assurance, run a CI security lane against an ephemeral Supabase/Postgres target with real JWT verification and row-level authorization checks; treat this lane as the source of truth for auth/authz behavior and as a required gate for security-sensitive merges.
 
 ### Running the Tests
 
@@ -611,10 +662,10 @@ Both scripts:
 
 ```bash
 # Windows
-./venv_copilot/Scripts/python.exe -m uvicorn api.main:app --reload --port 8000
+./.venv/Scripts/python.exe -m uvicorn api.main:app --reload --port 8000
 
 # macOS / Linux
-./venv_copilot/bin/python -m uvicorn api.main:app --reload --port 8000
+./.venv/bin/python -m uvicorn api.main:app --reload --port 8000
 ```
 
 The API is available at `http://localhost:8000`, with interactive Swagger docs at `http://localhost:8000/docs`.
@@ -662,7 +713,7 @@ POST /api/eval/run
 
 **Streaming Design** — both indexing and chat use Server-Sent Events (SSE): indexing progress is streamed step-by-step so the frontend can show a live progress bar, and chat responses are streamed token-by-token using LlamaIndex's `stream_complete()`. A `metadata` event is emitted after the full response, carrying `query_mode`, `retrieved_files`, and latency breakdowns. Messages are persisted to Supabase after the stream closes.
 
-**Test Strategy** — the FastAPI routers are tested against a mocked Supabase client rather than a live database, keeping the suite fast, deterministic, and safe to run in CI without provisioning real infrastructure.
+**Test Strategy** — testing is split into two lanes: a fast mocked lane for rapid feedback and an ephemeral real-backend lane for auth/authz and persistence confidence, balancing speed with security assurance.
 
 **Local AI Optimization** — the system was optimized specifically for Apple Silicon Macs, 16GB RAM systems, and local inference workflows.
 
@@ -672,11 +723,15 @@ POST /api/eval/run
 
 ## 🔮 Future Improvements
 
-**Retrieval** — GraphRAG integration, dependency graph reasoning, AST-aware retrieval, cross-repository retrieval.
+**Reliability** — global error schema, request correlation IDs, retries with backoff, idempotent indexing/evaluation jobs.
 
-**LLM** — tool-using agents, autonomous debugging workflows, structured reasoning pipelines.
+**Security** — expanded authz tests, secure integration lane beyond mocks, secret scanning, dependency and supply-chain scanning.
 
-**Product Features** — multi-user collaboration on shared repositories, richer analytics on the eval dashboard, CI integration for the test suite.
+**Evaluation** — parallel query execution, caching layers, stage-level metrics, richer scenario-based benchmark packs.
+
+**Scalability** — queue-based workers, distributed cache, horizontal API scaling, database indexing/partition strategy.
+
+**Retrieval + Product** — GraphRAG integration, dependency graph reasoning, AST-aware retrieval, cross-repository retrieval, collaboration and analytics enhancements.
 
 ---
 
