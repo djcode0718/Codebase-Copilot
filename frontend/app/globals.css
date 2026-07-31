@@ -1,0 +1,281 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── Google Fonts ─────────────────────────────────────── */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-code);
+  --font-heading: var(--font-heading);
+
+  /* Brand tokens */
+  --color-brand: var(--brand);
+  --color-brand-dim: var(--brand-dim);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+/* ── Design Tokens: Codebase Copilot ─────────────────── */
+/* Source: ui-ux-pro-max query → "AI developer tools RAG" */
+/* Style: code dark + run green                           */
+:root {
+  /* Always dark — no light mode variant for this product */
+  --background:            #0F172A;  /* slate-900 */
+  --foreground:            #F8FAFC;  /* slate-50  */
+
+  --card:                  #1E293B;  /* slate-800 */
+  --card-foreground:       #F8FAFC;
+
+  --popover:               #1E293B;
+  --popover-foreground:    #F8FAFC;
+
+  --primary:               #22C55E;  /* green-500 — accent/CTA */
+  --primary-foreground:    #052e16;  /* green-950 */
+
+  --secondary:             #334155;  /* slate-700 */
+  --secondary-foreground:  #F8FAFC;
+
+  --muted:                 #1E293B;
+  --muted-foreground:      #94A3B8;  /* slate-400 */
+
+  --accent:                #1A3A28;  /* green-tinted surface */
+  --accent-foreground:     #22C55E;
+
+  --destructive:           #EF4444;  /* red-500 */
+  --border:                #334155;  /* slate-700 */
+  --input:                 #1E293B;
+  --ring:                  #22C55E;
+
+  /* Brand shortcuts */
+  --brand:                 #22C55E;
+  --brand-dim:             #166534;  /* green-900 */
+
+  /* Eval chart colours */
+  --chart-1:               #22C55E;  /* green  */
+  --chart-2:               #3B82F6;  /* blue   */
+  --chart-3:               #F59E0B;  /* amber  */
+  --chart-4:               #A78BFA;  /* violet */
+  --chart-5:               #F43F5E;  /* rose   */
+
+  --radius: 0.5rem;
+
+  /* Sidebar */
+  --sidebar:                        #151f32;
+  --sidebar-foreground:             #F8FAFC;
+  --sidebar-primary:                #22C55E;
+  --sidebar-primary-foreground:     #052e16;
+  --sidebar-accent:                 #1E293B;
+  --sidebar-accent-foreground:      #F8FAFC;
+  --sidebar-border:                 #334155;
+  --sidebar-ring:                   #22C55E;
+
+  /* Typography */
+  --font-body:    'IBM Plex Sans', system-ui, sans-serif;
+  --font-code:    'JetBrains Mono', 'Fira Code', monospace;
+  --font-heading: 'JetBrains Mono', monospace;
+}
+
+/* dark class mirrors :root — the entire app is always dark */
+.dark {
+  --background:            #0F172A;
+  --foreground:            #F8FAFC;
+  --card:                  #1E293B;
+  --card-foreground:       #F8FAFC;
+  --popover:               #1E293B;
+  --popover-foreground:    #F8FAFC;
+  --primary:               #22C55E;
+  --primary-foreground:    #052e16;
+  --secondary:             #334155;
+  --secondary-foreground:  #F8FAFC;
+  --muted:                 #1E293B;
+  --muted-foreground:      #94A3B8;
+  --accent:                #1A3A28;
+  --accent-foreground:     #22C55E;
+  --destructive:           #EF4444;
+  --border:                #334155;
+  --input:                 #1E293B;
+  --ring:                  #22C55E;
+  --brand:                 #22C55E;
+  --brand-dim:             #166534;
+  --chart-1:               #22C55E;
+  --chart-2:               #3B82F6;
+  --chart-3:               #F59E0B;
+  --chart-4:               #A78BFA;
+  --chart-5:               #F43F5E;
+  --sidebar:               #151f32;
+  --sidebar-foreground:    #F8FAFC;
+  --sidebar-primary:       #22C55E;
+  --sidebar-primary-foreground: #052e16;
+  --sidebar-accent:        #1E293B;
+  --sidebar-accent-foreground: #F8FAFC;
+  --sidebar-border:        #334155;
+  --sidebar-ring:          #22C55E;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-body);
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
+  code, pre, kbd, samp {
+    font-family: var(--font-code);
+  }
+}
+
+/* ── Utilities ──────────────────────────────────────── */
+@layer utilities {
+  .font-body    { font-family: var(--font-body); }
+  .font-code    { font-family: var(--font-code); }
+  .font-heading { font-family: var(--font-heading); }
+
+  /* Streaming caret */
+  .streaming-caret::after {
+    content: '▌';
+    display: inline-block;
+    color: #22C55E;
+    animation: caret-blink 0.8s ease-in-out infinite;
+    margin-left: 1px;
+  }
+
+  /* Pipeline step pulse */
+  .step-active-dot {
+    animation: step-pulse 1.5s ease-in-out infinite;
+  }
+
+  /* Scrollbar styling */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #334155 transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+  /* Custom focus ring consistent with brand */
+  .focus-brand:focus-visible {
+    outline: 2px solid #22C55E;
+    outline-offset: 2px;
+  }
+}
+
+/* ── Animations ──────────────────────────────────────── */
+@keyframes caret-blink {
+  0%, 50%  { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+@keyframes step-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+}
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Prose (markdown in chat) ─────────────────────────── */
+.prose-dark {
+  color: #E2E8F0;
+  line-height: 1.7;
+}
+.prose-dark h1,.prose-dark h2,.prose-dark h3 {
+  color: #F8FAFC;
+  font-family: var(--font-heading);
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+}
+.prose-dark code {
+  background: #0F172A;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  font-family: var(--font-code);
+  font-size: 0.88em;
+  color: #22C55E;
+}
+.prose-dark pre {
+  background: #0F172A;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+.prose-dark pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #E2E8F0;
+}
+.prose-dark a { color: #22C55E; text-decoration: underline; }
+.prose-dark blockquote {
+  border-left: 3px solid #334155;
+  padding-left: 1rem;
+  color: #94A3B8;
+  font-style: italic;
+}
+.prose-dark ul, .prose-dark ol { padding-left: 1.5rem; }
+.prose-dark li { margin-bottom: 0.25rem; }
+.prose-dark strong { color: #F8FAFC; }
+.prose-dark hr { border-color: #334155; }
+
+/* ── Reduced motion ───────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .streaming-caret::after { animation: none; }
+  .step-active-dot { animation: none; }
+}
