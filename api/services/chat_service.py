@@ -55,6 +55,56 @@ def _ensure_llamaindex():
         Settings.embed_model = get_embed_model()
 
 
+_FOLLOWUP_SUGGESTION_PROMPT = """You are helping a developer understand a codebase.
+Based on the developer's question and the AI's response below, suggest exactly 3-4 natural follow-up questions that the developer might want to ask next.
+
+Rules:
+- Make them logical next steps / deeper questions based on the conversation
+- Be specific to the codebase details mentioned in the response (e.g. classes, functions, files)
+- Keep each question short (under 10 words)
+- No numbering, no bullets — just the question text, one per line
+- Make sure they end with a question mark
+
+Developer Question: {query}
+AI Response: {response}
+
+Output exactly 3-4 follow-up questions, one per line, nothing else."""
+
+
+def _default_followup_suggestions() -> List[str]:
+    return [
+        "Can you show me where this is implemented?",
+        "Are there any tests for this code?",
+        "What are the parameters/options available?",
+    ]
+
+
+async def _generate_followup_suggestions(query: str, response_text: str) -> List[str]:
+    """Generates 3-4 dynamic follow-up questions based on the query and response."""
+    from llama_index.core import Settings
+    from app.llm.llm_client import get_llm
+
+    if Settings.llm is None:
+        Settings.llm = get_llm()
+
+    prompt = _FOLLOWUP_SUGGESTION_PROMPT.format(query=query, response=response_text[:3000])
+
+    try:
+        response = await asyncio.get_event_loop().run_in_executor(
+            None, Settings.llm.complete, prompt
+        )
+        raw = str(response).strip()
+        questions = [q.strip() for q in raw.split("\n") if q.strip()]
+        # Filter out invalid questions or preambles
+        questions = [q for q in questions if q.endswith("?")][:4]
+        if not questions:
+            questions = _default_followup_suggestions()
+        return questions
+    except Exception as e:
+        logger.warning(f"Failed to generate follow-up suggestions: {e}")
+        return _default_followup_suggestions()
+
+
 async def stream_chat_response(
     query: str,
     index_name: str,
@@ -211,6 +261,10 @@ async def stream_chat_response(
             "latency_total_ms": t_total_ms,
         }
         yield f"data: {json.dumps(metadata)}\n\n"
+
+        # ── Generate dynamic follow-up suggestions ─────────────────────────
+        followup_questions = await _generate_followup_suggestions(query, full_response)
+        yield f"data: {json.dumps({'type': 'suggestions', 'questions': followup_questions})}\n\n"
 
     except Exception as e:
         logger.error(f"Streaming chat error: {e}", exc_info=True)
