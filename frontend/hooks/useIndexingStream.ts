@@ -57,19 +57,10 @@ export function useIndexingStream(
   const [indexName, setIndexName] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
 
-  const startTimeRef = useRef<number>(Date.now());
+  const startTimeRef = useRef<number>(0);
   const stepStartRef = useRef<Partial<Record<IndexingStepName, number>>>({});
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
-
-  // Elapsed timer
-  useEffect(() => {
-    if (!enabled || isComplete || hasError) return;
-    timerRef.current = setInterval(() => {
-      setElapsedMs(Date.now() - startTimeRef.current);
-    }, 100);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [enabled, isComplete, hasError]);
 
   const updateStep = useCallback((
     stepId: IndexingStepName,
@@ -85,6 +76,15 @@ export function useIndexingStream(
 
     let aborted = false;
     startTimeRef.current = Date.now();
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    timerRef.current = setInterval(() => {
+      if (startTimeRef.current) {
+        setElapsedMs(Date.now() - startTimeRef.current);
+      }
+    }, 100);
 
     async function readStream() {
       try {
@@ -196,7 +196,12 @@ export function useIndexingStream(
     }
 
     readStream();
-    return () => { aborted = true; };
+    return () => {
+      aborted = true;
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
   }, [repoId, token, enabled, apiBase, updateStep]);
 
   return {

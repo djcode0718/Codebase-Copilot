@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, AlertCircle, MessageSquare, RotateCcw, ArrowLeft } from 'lucide-react';
+import { CheckCircle2, AlertCircle, MessageSquare, RotateCcw, ArrowLeft, Activity, Sparkles, Clock3, FileCode2, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import PipelineStep from '@/components/indexing/PipelineStep';
@@ -72,121 +72,131 @@ export default function IndexingPage() {
   }, [isComplete, repoId, router]);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Back link */}
-      <div className="px-8 pt-6">
-        <Link
-          href="/dashboard"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-        >
-          <ArrowLeft size={14} />
-          Dashboard
-        </Link>
-      </div>
+    <div className="space-y-6">
+      <Link
+        href="/dashboard"
+        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft size={14} />
+        Dashboard
+      </Link>
 
-      <div className="flex-1 flex items-start justify-center px-4 py-12">
-        <div className="w-full max-w-2xl">
-          {/* Title */}
+      <motion.section
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm"
+      >
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-4">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/70 px-3 py-1 text-xs text-muted-foreground">
+              <Activity size={12} className="text-brand" />
+              Indexing pipeline
+            </div>
+            <div>
+              <h1 className="font-heading text-3xl font-bold tracking-tight">
+                {isComplete ? 'Indexing complete' : hasError ? 'Indexing failed' : 'Indexing repository'}
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                {isComplete && indexName
+                  ? `“${indexName}” is ready to chat.`
+                  : hasError
+                  ? 'Review the error details below and retry when ready.'
+                  : 'Processing files, embeddings, and repository structure in real time.'}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3 sm:min-w-[20rem]">
+            {[
+              { label: 'Files found', value: fileCount, icon: FileCode2 },
+              { label: 'Chunks indexed', value: nodeCount, icon: Layers },
+              { label: 'Elapsed', value: null, custom: formatElapsed(elapsedMs), icon: Clock3 },
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-2xl border border-border bg-background/70 p-3">
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+                  <stat.icon size={11} className="text-brand" />
+                  {stat.label}
+                </div>
+                <div className="mt-2 font-heading text-lg font-semibold">
+                  {stat.custom ? stat.custom : <AnimatedCounter value={stat.value ?? null} />}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </motion.section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Pipeline steps</h2>
+              <p className="text-xs text-muted-foreground mt-1">Live status and execution order from the indexing stream.</p>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-xs text-muted-foreground">
+              <Sparkles size={11} className="text-brand" />
+              {hasError ? 'Attention required' : isComplete ? 'Completed' : `${progress}%`}
+            </div>
+          </div>
+          <Progress
+            value={progress}
+            className={`h-2 mb-5 ${hasError ? '[&>div]:bg-destructive' : '[&>div]:bg-brand'}`}
+          />
+          <div className="space-y-0">
+            {steps.map((step, i) => (
+              <PipelineStep
+                key={step.id}
+                step={step}
+                isLast={i === steps.length - 1}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-6">
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="mb-8 text-center"
+            transition={{ delay: 0.15 }}
+            className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
           >
-            <h1 className="font-heading text-xl font-bold mb-1">
-              {isComplete ? 'Indexing complete' : hasError ? 'Indexing failed' : 'Indexing repository'}
-            </h1>
-            <p className="text-muted-foreground text-sm">
-              {isComplete && indexName
-                ? `"${indexName}" is ready to chat`
-                : hasError
-                ? 'An error occurred. See details below.'
-                : 'Processing your repository through the RAG pipeline…'}
-            </p>
-          </motion.div>
-
-          {/* Progress bar */}
-          <div className="mb-8">
-            <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
-              <span>{hasError ? 'Failed' : `${progress}%`}</span>
-              <span>{formatElapsed(elapsedMs)}</span>
-            </div>
-            <Progress
-              value={progress}
-              className={`h-1.5 ${hasError ? '[&>div]:bg-destructive' : '[&>div]:bg-brand'}`}
-            />
-          </div>
-
-          {/* Pipeline steps */}
-          <div className="bg-card border border-border rounded-xl p-6 mb-6">
-            <div className="space-y-0">
-              {steps.map((step, i) => (
-                <PipelineStep
-                  key={step.id}
-                  step={step}
-                  isLast={i === steps.length - 1}
-                />
+            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-3">Live summary</h2>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              {[
+                { label: 'Progress', value: `${progress}%` },
+                { label: 'Files', value: String(fileCount ?? 0) },
+                { label: 'Chunks', value: String(nodeCount ?? 0) },
+              ].map((item) => (
+                <div key={item.label} className="rounded-2xl border border-border bg-background/70 px-4 py-3">
+                  <div className="text-xs text-muted-foreground">{item.label}</div>
+                  <div className="mt-1 font-heading text-lg font-semibold">{item.value}</div>
+                </div>
               ))}
             </div>
-          </div>
-
-          {/* Live stats bar */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.3 }}
-            className="grid grid-cols-3 gap-4 mb-6"
-          >
-            {[
-              { label: 'Files found', value: fileCount },
-              { label: 'Chunks indexed', value: nodeCount },
-              { label: 'Elapsed', value: null, custom: formatElapsed(elapsedMs) },
-            ].map((stat) => (
-              <div
-                key={stat.label}
-                className="bg-card border border-border rounded-lg p-4 text-center"
-              >
-                <div className="text-lg font-heading font-bold mb-1">
-                  {stat.custom ? (
-                    <span className="text-foreground font-semibold font-mono text-base">
-                      {stat.custom}
-                    </span>
-                  ) : (
-                    <AnimatedCounter value={stat.value ?? null} />
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground">{stat.label}</div>
-              </div>
-            ))}
           </motion.div>
 
-          {/* Error block */}
           <AnimatePresence>
             {hasError && errorMessage && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-destructive/5 border border-destructive/20 rounded-xl p-5 mb-6"
+                className="rounded-[1.5rem] border border-destructive/20 bg-destructive/5 p-5 shadow-lg shadow-black/5"
               >
                 <div className="flex items-start gap-3">
                   <AlertCircle size={18} className="text-destructive flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-sm font-medium text-destructive mb-1">
-                      Indexing failed
-                    </p>
-                    <pre className="text-xs text-muted-foreground font-code whitespace-pre-wrap">
-                      {errorMessage}
-                    </pre>
+                    <p className="text-sm font-medium text-destructive mb-1">Indexing failed</p>
+                    <pre className="text-xs text-muted-foreground font-code whitespace-pre-wrap">{errorMessage}</pre>
                   </div>
                 </div>
-                <div className="flex gap-2 mt-4">
+                <div className="flex flex-wrap gap-2 mt-4">
                   <Button
                     size="sm"
                     variant="outline"
                     className="border-border cursor-pointer"
-                    onClick={() => router.push('/repo/new')}
+                    onClick={() => router.push('/dashboard')}
                   >
                     <RotateCcw size={13} className="mr-1.5" />
-                    Retry with new URL
+                    Index another repository
                   </Button>
                   <Button
                     size="sm"
@@ -201,16 +211,15 @@ export default function IndexingPage() {
             )}
           </AnimatePresence>
 
-          {/* Success CTA */}
           <AnimatePresence>
             {isComplete && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="bg-brand/5 border border-brand/20 rounded-xl p-5 text-center"
+                className="rounded-[1.5rem] border border-brand/20 bg-brand/5 p-5 text-center shadow-lg shadow-black/5"
               >
                 <CheckCircle2 size={32} className="text-brand mx-auto mb-3" />
-                <p className="font-heading font-semibold mb-1">Ready to chat!</p>
+                <p className="font-heading font-semibold mb-1">Ready to chat</p>
                 <p className="text-sm text-muted-foreground mb-4">
                   {fileCount} files · {nodeCount} chunks indexed
                 </p>
@@ -225,7 +234,7 @@ export default function IndexingPage() {
             )}
           </AnimatePresence>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

@@ -1,16 +1,27 @@
 import { Hero } from '@/components/landing/Hero';
 import { FeatureSection } from '@/components/landing/FeatureSection';
+import Link from 'next/link';
+import { Button } from '@/components/ui/button';
 
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-background">
-      {/* Navbar placeholder */}
-      <header className="absolute top-0 w-full p-6 flex justify-between items-center z-50">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center">
-            <span className="font-code font-bold text-sm text-green-950">CC</span>
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/75 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-2xl border border-brand/20 bg-brand/10 text-brand shadow-sm shadow-black/5">
+              <span className="font-code text-sm font-bold">CC</span>
+            </div>
+            <span className="font-heading text-lg font-semibold tracking-tight">Codebase Copilot</span>
           </div>
-          <span className="font-heading font-semibold text-lg">Codebase Copilot</span>
+          <div className="flex items-center gap-2">
+            <Link href="/auth/sign-in">
+              <Button variant="outline" className="border-border">Sign in</Button>
+            </Link>
+            <Link href="/dashboard">
+              <Button className="bg-brand text-green-950 hover:bg-green-400">Open workspace</Button>
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -19,7 +30,7 @@ export default function LandingPage() {
         <FeatureSection />
       </main>
 
-      <footer className="py-8 text-center text-sm text-muted-foreground border-t border-border mt-20">
+      <footer className="border-t border-border/60 py-8 text-center text-sm text-muted-foreground">
         <p>&copy; 2026 Codebase Copilot. All rights reserved.</p>
       </footer>
     </div>

@@ -11,7 +11,7 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis,
   ResponsiveContainer, Tooltip,
 } from 'recharts';
-import { BarChart2, Zap, Play, Loader2, Target, CheckCircle2 } from 'lucide-react';
+import { BarChart2, Zap, Play, Loader2, Target, CheckCircle2, Activity, Sparkles, Clock3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
 import { getLatestEval, evalRunUrl, authHeaders } from '@/lib/api';
@@ -112,59 +112,69 @@ export default function EvalPage() {
     : [];
 
   return (
-    <div className="p-8 max-w-5xl">
-      {/* Header */}
-      <motion.div
+    <div className="space-y-6">
+      <motion.section
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between mb-8"
+        className="rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm"
       >
-        <div>
-          <h1 className="font-heading text-2xl font-bold flex items-center gap-2">
-            <BarChart2 size={20} className="text-violet-400" />
-            Evaluation Dashboard
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            RAG pipeline quality metrics over your test queries
-          </p>
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="space-y-3">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/70 px-3 py-1 text-xs text-muted-foreground">
+              <Activity size={12} className="text-brand" />
+              Evaluation dashboard
+            </div>
+            <div>
+              <h1 className="font-heading text-3xl font-bold tracking-tight flex items-center gap-2">
+                <BarChart2 size={20} className="text-violet-400" />
+                Evaluation Dashboard
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                Measure retrieval quality, answer fidelity, and latency with a polished enterprise-grade review surface.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={runEval}
+            disabled={running}
+            className="bg-violet-500 hover:bg-violet-400 text-white cursor-pointer"
+          >
+            {running ? (
+              <><Loader2 size={14} className="animate-spin mr-2" />Running…</>
+            ) : (
+              <><Play size={14} className="mr-2" />Run evaluation</>
+            )}
+          </Button>
         </div>
-        <Button
-          onClick={runEval}
-          disabled={running}
-          className="bg-violet-500 hover:bg-violet-400 text-white cursor-pointer"
-        >
-          {running ? (
-            <><Loader2 size={14} className="animate-spin mr-2" />Running…</>
-          ) : (
-            <><Play size={14} className="mr-2" />Run evaluation</>
-          )}
-        </Button>
-      </motion.div>
+      </motion.section>
 
-      {/* Run log */}
       {runLog.length > 0 && (
-        <div className="bg-card border border-border rounded-xl p-4 mb-6 space-y-1">
-          {runLog.map((msg, i) => (
-            <p key={i} className="text-xs font-code text-muted-foreground">{msg}</p>
-          ))}
+        <div className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5">
+          <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+            <Sparkles size={11} className="text-brand" />
+            Run log
+          </div>
+          <div className="space-y-1">
+            {runLog.map((msg, i) => (
+              <p key={i} className="text-xs font-code text-muted-foreground">{msg}</p>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Loading */}
       {loading && (
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-24 bg-card border border-border rounded-xl animate-pulse" />
+            <div key={i} className="h-24 rounded-[1.25rem] border border-border bg-card/60 animate-pulse" />
           ))}
         </div>
       )}
 
-      {/* No data */}
       {!loading && !evalData && (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <Target size={32} className="text-muted-foreground mb-3" />
-          <h3 className="font-heading font-semibold mb-2">No evaluation data yet</h3>
-          <p className="text-muted-foreground text-sm mb-4 max-w-xs">
+        <div className="rounded-[1.5rem] border border-border bg-card/80 px-6 py-16 text-center shadow-lg shadow-black/5 backdrop-blur-sm">
+          <Target size={32} className="text-muted-foreground mx-auto mb-3" />
+          <h3 className="font-heading text-lg font-semibold mb-2">No evaluation data yet</h3>
+          <p className="mx-auto mb-5 max-w-sm text-sm text-muted-foreground">
             Run an evaluation to see quality metrics, latency breakdown, and a radar chart.
           </p>
           <Button
@@ -178,40 +188,37 @@ export default function EvalPage() {
         </div>
       )}
 
-      {/* Results */}
       {evalData && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="space-y-6"
         >
-          {/* Info bar */}
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
               <CheckCircle2 size={12} className="text-brand" />
               {evalData.total_queries ?? '—'} test queries
-            </div>
-            <div className="flex items-center gap-1.5">
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
               <Zap size={12} className={evalData.colbert_enabled ? 'text-brand' : 'text-muted-foreground'} />
               ColBERT reranking: {evalData.colbert_enabled ? 'enabled' : 'disabled'}
-            </div>
-            <div className="text-muted-foreground/60">
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
+              <Clock3 size={12} />
               {new Date(evalData.created_at).toLocaleString()}
-            </div>
+            </span>
           </div>
 
-          {/* Quality metrics + radar */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Metric cards */}
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_0.95fr]">
             <div className="space-y-3">
-              <h2 className="font-heading text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                 Quality metrics
               </h2>
-              <div className="grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-1 gap-3">
                 {METRIC_CARDS.map((m) => {
                   const value = evalData[m.key as keyof EvalSummary] as number;
                   return (
-                    <div key={m.key} className="bg-card border border-border rounded-xl px-4 py-3 flex items-center justify-between">
+                    <div key={m.key} className="rounded-[1.25rem] border border-border bg-card/80 px-4 py-3 flex items-center justify-between shadow-sm shadow-black/5">
                       <div>
                         <p className="text-xs text-muted-foreground">{m.label}</p>
                         <p className="text-xs text-muted-foreground/60 mt-0.5">{m.desc}</p>
@@ -225,50 +232,49 @@ export default function EvalPage() {
               </div>
             </div>
 
-            {/* Radar chart */}
-            <div className="bg-card border border-border rounded-xl p-4">
-              <h2 className="font-heading text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">
-                Quality radar
-              </h2>
-              <ResponsiveContainer width="100%" height={280}>
+            <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5">
+              <div className="mb-4 flex items-center gap-2">
+                <Sparkles size={15} className="text-brand" />
+                <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Quality radar</h2>
+              </div>
+              <ResponsiveContainer width="100%" height={320}>
                 <RadarChart data={radarData}>
                   <PolarGrid stroke="#334155" />
                   <PolarAngleAxis
                     dataKey="metric"
-                    tick={{ fill: '#94A3B8', fontSize: 11, fontFamily: 'IBM Plex Sans' }}
+                    tick={{ fill: 'currentColor', fontSize: 11, fontFamily: 'IBM Plex Sans' }}
                   />
                   <Radar
                     dataKey="value"
                     stroke="#22C55E"
                     fill="#22C55E"
-                    fillOpacity={0.15}
+                    fillOpacity={0.16}
                     strokeWidth={2}
                   />
                   <Tooltip
                     contentStyle={{
-                      background: '#1E293B',
-                      border: '1px solid #334155',
-                      borderRadius: '8px',
+                      background: 'var(--popover)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '14px',
                       fontSize: '12px',
-                      color: '#F8FAFC',
+                      color: 'var(--popover-foreground)',
                     }}
-                    formatter={(v: any) => [`${Number(v || 0).toFixed(1)}%`, 'Score']}
+                    formatter={(value: number | string) => [`${Number(value || 0).toFixed(1)}%`, 'Score']}
                   />
                 </RadarChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Latency breakdown */}
           <div>
-            <h2 className="font-heading text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-3">
               Average latency
             </h2>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               {LATENCY_CARDS.map((lc) => {
                 const value = evalData[lc.key as keyof EvalSummary] as number;
                 return (
-                  <div key={lc.key} className="bg-card border border-border rounded-xl p-4">
+                  <div key={lc.key} className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5">
                     <div className="flex items-center gap-2 mb-2">
                       <span className={cn('w-2 h-2 rounded-full', lc.color)} />
                       <span className="text-xs text-muted-foreground">{lc.label}</span>

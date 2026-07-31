@@ -120,24 +120,24 @@ export default function MessageBubble({ message, onInspect, isInspected, index }
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: Math.min(index * 0.05, 0.3), duration: 0.2 }}
-      className={cn('flex gap-3', isUser ? 'flex-row-reverse' : 'flex-row')}
+      className={cn('group flex gap-3', isUser ? 'flex-row-reverse' : 'flex-row')}
     >
       {/* Avatar */}
       <div className={cn(
-        'w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-1 text-xs font-medium',
-        isUser ? 'bg-secondary text-foreground' : 'bg-brand/10 border border-brand/20 text-brand'
+        'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1 text-xs font-medium shadow-sm',
+        isUser ? 'bg-secondary text-foreground border border-border' : 'bg-brand/10 border border-brand/20 text-brand'
       )}>
         {isUser ? 'U' : <Cpu size={13} />}
       </div>
 
       {/* Content */}
-      <div className={cn('max-w-[75%] space-y-2', isUser ? 'items-end' : 'items-start')}>
+      <div className={cn('max-w-[78%] space-y-2', isUser ? 'items-end' : 'items-start')}>
         {isUser ? (
-          <div className="bg-secondary text-foreground rounded-xl rounded-tr-sm px-4 py-2.5 text-sm">
+          <div className="rounded-2xl rounded-tr-sm border border-border bg-secondary/90 px-4 py-3 text-sm text-foreground shadow-sm shadow-black/5">
             {message.content}
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2 rounded-2xl border border-border bg-card/70 p-4 shadow-sm shadow-black/5">
             {/* Markdown content */}
             <div className="text-foreground">
               <SimpleMarkdown content={message.content} />
@@ -147,7 +147,7 @@ export default function MessageBubble({ message, onInspect, isInspected, index }
             {(message.query_mode || message.retrieved_files?.length || message.latency_ms) && (
               <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
                 {message.query_mode && (
-                  <span className={cn('font-mono font-semibold', MODE_COLORS[message.query_mode])}>
+                  <span className={cn('font-mono font-semibold tracking-wide', MODE_COLORS[message.query_mode])}>
                     {MODE_LABELS[message.query_mode]}
                   </span>
                 )}
@@ -170,6 +170,12 @@ export default function MessageBubble({ message, onInspect, isInspected, index }
                 )}
               </div>
             )}
+
+            {!message.query_mode && !message.retrieved_files?.length && !message.latency_ms && onInspect && (
+              <div className="text-xs text-muted-foreground">
+                Grounded response ready for inspection.
+              </div>
+            )}
           </div>
         )}
 
@@ -177,7 +183,7 @@ export default function MessageBubble({ message, onInspect, isInspected, index }
         {!isUser && (
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            className="flex items-center gap-1 text-xs text-muted-foreground transition-colors cursor-pointer hover:text-foreground"
           >
             {copied ? <Check size={11} className="text-brand" /> : <Copy size={11} />}
             {copied ? 'Copied' : 'Copy'}

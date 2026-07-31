@@ -38,13 +38,13 @@ export default function PipelineStep({ step, isLast }: Props) {
     >
       {/* Connector line */}
       {!isLast && (
-        <div className="absolute left-4 top-9 bottom-0 w-px bg-border" />
+        <div className="absolute left-4 top-9 bottom-0 w-px bg-border/80" />
       )}
 
-      <div className="flex items-start gap-3 py-2">
+      <div className="flex items-start gap-3 rounded-2xl px-1.5 py-3 transition-colors hover:bg-background/60">
         {/* Status icon */}
         <div className={cn(
-          'w-8 h-8 rounded-full border flex items-center justify-center flex-shrink-0 mt-0.5',
+          'w-8 h-8 rounded-full border flex items-center justify-center flex-shrink-0 mt-0.5 shadow-sm',
           iconClass
         )}>
           {step.status === 'done' && <Check size={13} strokeWidth={2.5} />}
@@ -119,7 +119,7 @@ export default function PipelineStep({ step, isLast }: Props) {
                   <Terminal size={11} />
                   <span>Raw log</span>
                 </div>
-                <pre className="text-xs font-code bg-background border border-border rounded-lg p-3 text-muted-foreground whitespace-pre-wrap leading-relaxed overflow-x-auto scrollbar-thin">
+                <pre className="text-xs font-code bg-background border border-border rounded-xl p-3 text-muted-foreground whitespace-pre-wrap leading-relaxed overflow-x-auto scrollbar-thin">
                   {step.message}
                 </pre>
               </motion.div>

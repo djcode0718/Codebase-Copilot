@@ -27,13 +27,13 @@ const features = [
 
 export function FeatureSection() {
   return (
-    <section className="py-24 px-4 bg-background">
-      <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-16">
-          <h2 className="text-3xl font-heading font-bold">Why Codebase Copilot?</h2>
-          <p className="text-muted-foreground mt-4">Built differently from standard AI chat interfaces.</p>
+    <section className="bg-background px-4 py-24">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-16 text-center">
+          <h2 className="text-3xl font-heading font-bold tracking-tight md:text-4xl">Why Codebase Copilot?</h2>
+          <p className="mt-4 text-muted-foreground">Built differently from standard AI chat interfaces.</p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
           {features.map((feature, i) => (
             <motion.div
               key={i}
@@ -41,13 +41,13 @@ export function FeatureSection() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: i * 0.1, duration: 0.5 }}
-              className="p-6 rounded-2xl bg-card border border-border hover:border-brand/50 transition-colors"
+              className="rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-sm shadow-black/5 transition-colors hover:border-brand/40 hover:shadow-lg hover:shadow-black/10"
             >
-              <div className="w-12 h-12 rounded-lg bg-accent flex items-center justify-center mb-4 text-brand">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-brand/20 bg-brand/10 text-brand">
                 <feature.icon size={24} />
               </div>
-              <h3 className="text-lg font-semibold mb-2">{feature.title}</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">{feature.description}</p>
+              <h3 className="mb-2 text-lg font-semibold">{feature.title}</h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">{feature.description}</p>
             </motion.div>
           ))}
         </div>

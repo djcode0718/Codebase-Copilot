@@ -39,7 +39,7 @@ const MODE_CONFIG = {
 
 function ScoreBar({ score }: { score: number }) {
   return (
-    <div className="w-12 h-1 bg-secondary rounded-full overflow-hidden flex-shrink-0">
+    <div className="w-12 h-1.5 bg-secondary rounded-full overflow-hidden flex-shrink-0">
       <div
         className="h-full bg-brand rounded-full"
         style={{ width: `${Math.min(score * 100 * 2, 100)}%` }} // score is 0-1, scale to 100%
@@ -57,7 +57,7 @@ function FileChunk({ file, index }: { file: RetrievedFile; index: number }) {
       initial={{ opacity: 0, x: 8 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay: index * 0.04, duration: 0.2 }}
-      className="flex items-center gap-2 py-1.5 border-b border-border/50 last:border-0"
+      className="flex items-center gap-2 py-2 border-b border-border/60 last:border-0"
     >
       <span className="text-xs text-muted-foreground font-mono w-4 flex-shrink-0">
         {index + 1}
@@ -150,9 +150,9 @@ export default function AIInspector({ data, streaming }: AIInspectorProps) {
   const modeConfig = data?.queryMode ? MODE_CONFIG[data.queryMode] : null;
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto scrollbar-thin">
+    <div className="h-full flex flex-col overflow-y-auto scrollbar-thin bg-card/40">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex-shrink-0">
+      <div className="px-4 py-4 border-b border-border flex-shrink-0 bg-background/60 backdrop-blur-sm">
         <div className="flex items-center gap-2">
           <Zap size={13} className="text-brand" />
           <span className="text-xs font-semibold text-foreground uppercase tracking-wider">
@@ -177,7 +177,7 @@ export default function AIInspector({ data, streaming }: AIInspectorProps) {
       {streaming && !data && (
         <div className="p-4 space-y-2">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-4 bg-secondary rounded animate-pulse" />
+            <div key={i} className="h-4 rounded bg-secondary animate-pulse" />
           ))}
         </div>
       )}
@@ -192,15 +192,15 @@ export default function AIInspector({ data, streaming }: AIInspectorProps) {
           >
             {/* Query mode */}
             {modeConfig && (
-              <div>
-                <p className="text-xs text-muted-foreground mb-1.5">Query Mode</p>
+              <div className="rounded-2xl border border-border bg-background/70 p-4 shadow-sm shadow-black/5">
+                <p className="text-xs text-muted-foreground mb-2">Query mode</p>
                 <div className={cn(
-                  'inline-flex items-center gap-1.5 px-2 py-1 rounded border text-xs font-mono font-semibold',
+                  'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs font-mono font-semibold',
                   modeConfig.className
                 )}>
                   {modeConfig.label}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
+                <p className="text-xs text-muted-foreground mt-2">
                   {modeConfig.description}
                 </p>
               </div>
@@ -208,7 +208,7 @@ export default function AIInspector({ data, streaming }: AIInspectorProps) {
 
             {/* Retrieved chunks */}
             {data.retrievedFiles.length > 0 && (
-              <div>
+              <div className="rounded-2xl border border-border bg-background/70 p-4 shadow-sm shadow-black/5">
                 <button
                   onClick={() => setChunksOpen(!chunksOpen)}
                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer mb-2 w-full"
@@ -226,7 +226,7 @@ export default function AIInspector({ data, streaming }: AIInspectorProps) {
                       exit={{ opacity: 0, height: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="bg-background border border-border rounded-lg p-3">
+                      <div className="space-y-1 rounded-xl border border-border bg-card/80 p-3">
                         {data.retrievedFiles.map((f, i) => (
                           <FileChunk key={`${f.path}-${i}`} file={f} index={i} />
                         ))}
@@ -239,9 +239,9 @@ export default function AIInspector({ data, streaming }: AIInspectorProps) {
 
             {/* Latency breakdown */}
             {data.latencyTotalMs !== null && (
-              <div>
+              <div className="rounded-2xl border border-border bg-background/70 p-4 shadow-sm shadow-black/5">
                 <p className="text-xs text-muted-foreground mb-2">Latency breakdown</p>
-                <div className="bg-background border border-border rounded-lg p-3">
+                <div className="bg-card/80 border border-border rounded-xl p-3">
                   <LatencyBar
                     retrieval={data.latencyRetrievalMs}
                     llm={data.latencyLlmMs}

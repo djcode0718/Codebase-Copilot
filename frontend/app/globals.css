@@ -56,101 +56,97 @@
   --radius-xl: calc(var(--radius) * 1.4);
 }
 
-/* ── Design Tokens: Codebase Copilot ─────────────────── */
-/* Source: ui-ux-pro-max query → "AI developer tools RAG" */
-/* Style: code dark + run green                           */
+/* ── Design Tokens: enterprise light + dark ───────────── */
 :root {
-  /* Always dark — no light mode variant for this product */
-  --background:            #0F172A;  /* slate-900 */
-  --foreground:            #F8FAFC;  /* slate-50  */
+  color-scheme: light;
+  --background: #f6f8fc;
+  --foreground: #0f172a;
 
-  --card:                  #1E293B;  /* slate-800 */
-  --card-foreground:       #F8FAFC;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
 
-  --popover:               #1E293B;
-  --popover-foreground:    #F8FAFC;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
 
-  --primary:               #22C55E;  /* green-500 — accent/CTA */
-  --primary-foreground:    #052e16;  /* green-950 */
+  --primary: #16a34a;
+  --primary-foreground: #f8fafc;
 
-  --secondary:             #334155;  /* slate-700 */
-  --secondary-foreground:  #F8FAFC;
+  --secondary: #e2e8f0;
+  --secondary-foreground: #0f172a;
 
-  --muted:                 #1E293B;
-  --muted-foreground:      #94A3B8;  /* slate-400 */
+  --muted: #eef2f7;
+  --muted-foreground: #64748b;
 
-  --accent:                #1A3A28;  /* green-tinted surface */
-  --accent-foreground:     #22C55E;
+  --accent: #dcfce7;
+  --accent-foreground: #166534;
 
-  --destructive:           #EF4444;  /* red-500 */
-  --border:                #334155;  /* slate-700 */
-  --input:                 #1E293B;
-  --ring:                  #22C55E;
+  --destructive: #dc2626;
+  --border: #d7dee9;
+  --input: #d7dee9;
+  --ring: #16a34a;
 
-  /* Brand shortcuts */
-  --brand:                 #22C55E;
-  --brand-dim:             #166534;  /* green-900 */
+  --brand: #16a34a;
+  --brand-dim: #bbf7d0;
 
-  /* Eval chart colours */
-  --chart-1:               #22C55E;  /* green  */
-  --chart-2:               #3B82F6;  /* blue   */
-  --chart-3:               #F59E0B;  /* amber  */
-  --chart-4:               #A78BFA;  /* violet */
-  --chart-5:               #F43F5E;  /* rose   */
+  --chart-1: #16a34a;
+  --chart-2: #2563eb;
+  --chart-3: #d97706;
+  --chart-4: #7c3aed;
+  --chart-5: #e11d48;
 
-  --radius: 0.5rem;
+  --radius: 0.9rem;
 
-  /* Sidebar */
-  --sidebar:                        #151f32;
-  --sidebar-foreground:             #F8FAFC;
-  --sidebar-primary:                #22C55E;
-  --sidebar-primary-foreground:     #052e16;
-  --sidebar-accent:                 #1E293B;
-  --sidebar-accent-foreground:      #F8FAFC;
-  --sidebar-border:                 #334155;
-  --sidebar-ring:                   #22C55E;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #0f172a;
+  --sidebar-primary: #16a34a;
+  --sidebar-primary-foreground: #f8fafc;
+  --sidebar-accent: #eef2f7;
+  --sidebar-accent-foreground: #0f172a;
+  --sidebar-border: #d7dee9;
+  --sidebar-ring: #16a34a;
 
-  /* Typography */
-  --font-body:    'IBM Plex Sans', system-ui, sans-serif;
-  --font-code:    'JetBrains Mono', 'Fira Code', monospace;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-code: 'JetBrains Mono', 'Fira Code', monospace;
   --font-heading: 'JetBrains Mono', monospace;
+  --background-grad: radial-gradient(circle at top left, rgba(22, 163, 74, 0.12), transparent 28%), radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 22%), linear-gradient(180deg, #f8fbff 0%, #f6f8fc 100%);
 }
 
-/* dark class mirrors :root — the entire app is always dark */
 .dark {
-  --background:            #0F172A;
-  --foreground:            #F8FAFC;
-  --card:                  #1E293B;
-  --card-foreground:       #F8FAFC;
-  --popover:               #1E293B;
-  --popover-foreground:    #F8FAFC;
-  --primary:               #22C55E;
-  --primary-foreground:    #052e16;
-  --secondary:             #334155;
-  --secondary-foreground:  #F8FAFC;
-  --muted:                 #1E293B;
-  --muted-foreground:      #94A3B8;
-  --accent:                #1A3A28;
-  --accent-foreground:     #22C55E;
-  --destructive:           #EF4444;
-  --border:                #334155;
-  --input:                 #1E293B;
-  --ring:                  #22C55E;
-  --brand:                 #22C55E;
-  --brand-dim:             #166534;
-  --chart-1:               #22C55E;
-  --chart-2:               #3B82F6;
-  --chart-3:               #F59E0B;
-  --chart-4:               #A78BFA;
-  --chart-5:               #F43F5E;
-  --sidebar:               #151f32;
-  --sidebar-foreground:    #F8FAFC;
-  --sidebar-primary:       #22C55E;
+  color-scheme: dark;
+  --background: #07111f;
+  --foreground: #e5edf7;
+  --card: #0f1b2d;
+  --card-foreground: #e5edf7;
+  --popover: #0f1b2d;
+  --popover-foreground: #e5edf7;
+  --primary: #22c55e;
+  --primary-foreground: #052e16;
+  --secondary: #1a2740;
+  --secondary-foreground: #e5edf7;
+  --muted: #132033;
+  --muted-foreground: #94a3b8;
+  --accent: #153622;
+  --accent-foreground: #86efac;
+  --destructive: #f87171;
+  --border: #22324c;
+  --input: #22324c;
+  --ring: #22c55e;
+  --brand: #22c55e;
+  --brand-dim: #14532d;
+  --chart-1: #22c55e;
+  --chart-2: #60a5fa;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #fb7185;
+  --sidebar: #0a1627;
+  --sidebar-foreground: #e5edf7;
+  --sidebar-primary: #22c55e;
   --sidebar-primary-foreground: #052e16;
-  --sidebar-accent:        #1E293B;
-  --sidebar-accent-foreground: #F8FAFC;
-  --sidebar-border:        #334155;
-  --sidebar-ring:          #22C55E;
+  --sidebar-accent: #132033;
+  --sidebar-accent-foreground: #e5edf7;
+  --sidebar-border: #22324c;
+  --sidebar-ring: #22c55e;
+  --background-grad: radial-gradient(circle at top left, rgba(34, 197, 94, 0.14), transparent 30%), radial-gradient(circle at top right, rgba(59, 130, 246, 0.1), transparent 24%), linear-gradient(180deg, #07111f 0%, #0b1728 100%);
 }
 
 @layer base {
@@ -161,13 +157,17 @@
     font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
   }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-body);
+    background-image: var(--background-grad);
+    background-attachment: fixed;
   }
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-heading);
+    letter-spacing: -0.02em;
   }
   code, pre, kbd, samp {
     font-family: var(--font-code);
@@ -197,16 +197,21 @@
   /* Scrollbar styling */
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: #334155 transparent;
+    scrollbar-color: var(--border) transparent;
   }
   .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
 
   /* Custom focus ring consistent with brand */
   .focus-brand:focus-visible {
     outline: 2px solid #22C55E;
     outline-offset: 2px;
+  }
+
+  .surface-glass {
+    background: color-mix(in oklab, var(--card) 88%, transparent);
+    backdrop-filter: blur(18px);
   }
 }
 
@@ -226,28 +231,28 @@
 
 /* ── Prose (markdown in chat) ─────────────────────────── */
 .prose-dark {
-  color: #E2E8F0;
-  line-height: 1.7;
+  color: var(--foreground);
+  line-height: 1.75;
 }
 .prose-dark h1,.prose-dark h2,.prose-dark h3 {
-  color: #F8FAFC;
+  color: var(--foreground);
   font-family: var(--font-heading);
   margin-top: 1.2em;
   margin-bottom: 0.5em;
 }
 .prose-dark code {
-  background: #0F172A;
-  border: 1px solid #334155;
+  background: color-mix(in oklab, var(--background) 86%, var(--card));
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.15em 0.4em;
   font-family: var(--font-code);
   font-size: 0.88em;
-  color: #22C55E;
+  color: var(--brand);
 }
 .prose-dark pre {
-  background: #0F172A;
-  border: 1px solid #334155;
-  border-radius: 8px;
+  background: color-mix(in oklab, var(--background) 85%, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 16px;
   padding: 1rem;
   overflow-x: auto;
 }
@@ -255,9 +260,9 @@
   background: none;
   border: none;
   padding: 0;
-  color: #E2E8F0;
+  color: var(--foreground);
 }
-.prose-dark a { color: #22C55E; text-decoration: underline; }
+.prose-dark a { color: var(--brand); text-decoration: underline; }
 .prose-dark blockquote {
   border-left: 3px solid #334155;
   padding-left: 1rem;

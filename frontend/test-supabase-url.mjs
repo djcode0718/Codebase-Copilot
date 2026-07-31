@@ -19,7 +19,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function run() {
   console.log('--- Testing Sign Up ---');
-  const { data, error } = await supabase.auth.signUp({ email: 'test@example.com', password: 'password123' });
+  const { error } = await supabase.auth.signUp({ email: 'test@example.com', password: 'password123' });
   if (error) console.log('Response Error:', error.message);
   
   console.log('\n--- Testing Guest Mode ---');

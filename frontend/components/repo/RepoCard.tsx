@@ -53,18 +53,17 @@ export default function RepoCard({ repo, onDelete, index = 0 }: RepoCardProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05, duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
     >
-      <div className="group relative bg-card border border-border rounded-xl overflow-hidden hover:border-brand/30 transition-all duration-200">
+      <div className="group relative overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-sm shadow-black/5 transition-all duration-200 hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-lg hover:shadow-black/10">
         {/* Top accent line for ready repos */}
         {repo.status === 'ready' && (
-          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-brand/0 via-brand to-brand/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-brand/0 via-brand to-brand/0 opacity-80 transition-opacity duration-300" />
         )}
 
         <Link href={href} className="block p-5">
-          {/* Header */}
-          <div className="flex items-start justify-between gap-2 mb-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-8 h-8 bg-secondary rounded-lg flex items-center justify-center flex-shrink-0">
-                <GitBranch size={14} className="text-muted-foreground" />
+          <div className="flex items-start justify-between gap-2 mb-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-2xl border border-border bg-background/80 flex items-center justify-center flex-shrink-0">
+                <GitBranch size={15} className="text-muted-foreground" />
               </div>
               <div className="min-w-0">
                 <h3 className="font-heading font-semibold text-sm truncate">
@@ -79,7 +78,7 @@ export default function RepoCard({ repo, onDelete, index = 0 }: RepoCardProps) {
             {/* Status badge */}
             <div
               className={cn(
-                'flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium flex-shrink-0',
+                'flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium flex-shrink-0',
                 status.className
               )}
             >
@@ -90,7 +89,7 @@ export default function RepoCard({ repo, onDelete, index = 0 }: RepoCardProps) {
 
           {/* Stats */}
           {repo.status === 'ready' && (
-            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
               {repo.file_count !== undefined && (
                 <div className="flex items-center gap-1">
                   <FileCode2 size={11} />
@@ -115,13 +114,13 @@ export default function RepoCard({ repo, onDelete, index = 0 }: RepoCardProps) {
           )}
 
           {repo.status === 'indexing' && (
-            <div className="h-1 bg-secondary rounded-full overflow-hidden mt-3">
+            <div className="h-1.5 bg-secondary rounded-full overflow-hidden mt-3">
               <div className="h-full bg-amber-400 rounded-full animate-pulse w-1/3" />
             </div>
           )}
 
           {/* Footer */}
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-4 pt-4 border-t border-border/80">
             <Clock size={11} />
             <span>{formattedDate}</span>
           </div>
