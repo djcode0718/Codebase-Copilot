@@ -212,6 +212,36 @@ async def stream_chat_response(
         }
         yield f"data: {json.dumps(metadata)}\n\n"
 
+        # ── Dynamic Follow-up Suggestions ──────────────────────────────────
+        try:
+            from app.llm.prompts import FOLLOWUP_SUGGESTIONS_PROMPT
+            followup_prompt = FOLLOWUP_SUGGESTIONS_PROMPT.format(
+                history_str=history_str,
+                full_response=full_response
+            )
+            followup_resp = await asyncio.get_event_loop().run_in_executor(
+                None, Settings.llm.complete, followup_prompt
+            )
+            raw_q = str(followup_resp).strip()
+            # Parse questions
+            questions = [q.strip() for q in raw_q.split("\n") if q.strip()]
+            
+            # Clean prefixes like "1. ", "-", "*", "Q:"
+            cleaned = []
+            for q in questions:
+                q = q.lstrip("1234567890.-* \t")
+                if q.lower().startswith("question"):
+                    q = q.split(":", 1)[-1].strip()
+                if len(q) > 10:
+                    if not q.endswith("?"):
+                        q += "?"
+                    cleaned.append(q)
+            
+            if cleaned:
+                yield f"data: {json.dumps({'type': 'suggestions', 'questions': cleaned[:3]})}\n\n"
+        except Exception as sugg_err:
+            logger.warning(f"Failed to generate dynamic suggestions: {sugg_err}")
+
     except Exception as e:
         logger.error(f"Streaming chat error: {e}", exc_info=True)
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"

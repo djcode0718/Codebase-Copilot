@@ -57,7 +57,7 @@ export function useIndexingStream(
   const [indexName, setIndexName] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
 
-  const startTimeRef = useRef<number>(Date.now());
+  const startTimeRef = useRef<number>(0);
   const stepStartRef = useRef<Partial<Record<IndexingStepName, number>>>({});
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
