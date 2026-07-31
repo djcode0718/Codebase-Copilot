@@ -125,8 +125,8 @@ export default function IndexingPage() {
         </div>
       </motion.section>
 
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm">
+      <section className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
+        <div className="min-w-0 rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Pipeline steps</h2>
@@ -152,12 +152,12 @@ export default function IndexingPage() {
           </div>
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.15 }}
-            className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
+            className="min-w-0 rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
           >
             <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-3">Live summary</h2>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-1">
@@ -179,13 +179,13 @@ export default function IndexingPage() {
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="rounded-[1.5rem] border border-destructive/20 bg-destructive/5 p-5 shadow-lg shadow-black/5"
+                className="min-w-0 rounded-[1.5rem] border border-destructive/20 bg-destructive/5 p-5 shadow-lg shadow-black/5"
               >
                 <div className="flex items-start gap-3">
                   <AlertCircle size={18} className="text-destructive flex-shrink-0 mt-0.5" />
                   <div>
                     <p className="text-sm font-medium text-destructive mb-1">Indexing failed</p>
-                    <pre className="text-xs text-muted-foreground font-code whitespace-pre-wrap">{errorMessage}</pre>
+                    <pre className="overflow-x-auto break-words whitespace-pre-wrap text-xs text-muted-foreground font-code">{errorMessage}</pre>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 mt-4">

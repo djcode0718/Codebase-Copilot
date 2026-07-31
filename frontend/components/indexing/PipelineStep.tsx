@@ -71,7 +71,7 @@ export default function PipelineStep({ step, isLast }: Props) {
                 {step.label}
               </span>
               {step.status !== 'pending' && (
-                <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                <p className="mt-0.5 text-xs text-muted-foreground break-words whitespace-normal">
                   {step.message ?? step.description}
                 </p>
               )}
