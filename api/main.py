@@ -144,31 +144,39 @@ app.include_router(suggestions.router, prefix="/api/repo",  tags=["Suggestions"]
 @app.on_event("startup")
 async def startup_event():
     """
-    Force-configure LlamaIndex to use Groq + Ollama embeddings.
-
-    FIX: LlamaIndex auto-sets Settings.embed_model = OpenAIEmbedding at import
-    time when OPENAI_API_KEY is present in the environment. configure_llamaindex_settings()
-    overrides this unconditionally — no `if None` guards — so Ollama is always used.
+    Force-configure LlamaIndex to use Groq + Ollama embeddings when available.
     """
     try:
         from app.llm.llm_client import configure_llamaindex_settings
         configure_llamaindex_settings()
+    except ModuleNotFoundError:
+        # Optional dependency is not installed in minimal backend setups.
+        # Startup should stay clean and allow non-AI endpoints to run.
+        pass
     except Exception as e:
-        # Don't crash startup — Ollama might not be running yet.
-        # It will be configured again at first request via indexing_service.
+        # Don't crash startup — Ollama or provider credentials may be unavailable.
         print(f"[startup] LlamaIndex config warning: {e}")
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
-    from llama_index.core import Settings
     from app.config import LLM_PROVIDER, USE_COLBERT, USE_FAST_LLM
+
+    embed_model_name = "not installed"
+    try:
+        from llama_index.core import Settings
+        embed_model_name = (
+            type(Settings.embed_model).__name__ if Settings.embed_model else "not set"
+        )
+    except ModuleNotFoundError:
+        embed_model_name = "not installed"
+
     return {
         "status": "ok",
         "llm_provider": LLM_PROVIDER,
         "use_fast_llm": USE_FAST_LLM,
         "colbert_enabled": USE_COLBERT,
-        # Show what embed model is actually active — useful for debugging
-        "embed_model": type(Settings.embed_model).__name__ if Settings.embed_model else "not set",
+        # Show what embed model is actually active — useful for debugging.
+        "embed_model": embed_model_name,
     }

@@ -284,6 +284,7 @@ codebase-copilot/
 ├── evaluate.py
 ├── pytest.ini
 ├── requirements.txt
+├── start.ps1                     # One-command launcher for backend + frontend
 ├── .env
 ├── .gitignore
 └── README.md
@@ -575,15 +576,31 @@ SUPABASE_SERVICE_KEY=eyJ...
 FRONTEND_URL=http://localhost:3000
 ```
 
-### 5️⃣ Start the FastAPI Backend
+### 5️⃣ Start Both Servers with a Single Script (Recommended)
+
+Run both the FastAPI backend and the Next.js frontend together from one terminal window:
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File "start.ps1"
+```
+
+Both servers start as background jobs in the same window, with colour-coded output (`[backend]` / `[frontend]`). Press **Ctrl+C** to stop both.
+
+| Service  | URL                      |
+| -------- | ------------------------ |
+| Backend  | http://localhost:8000    |
+| Frontend | http://localhost:3000    |
+
+### 5️⃣a Start the FastAPI Backend (standalone)
 
 ```bash
-uvicorn api.main:app --reload --port 8000
+.\venv_copilot\Scripts\python.exe -m uvicorn api.main:app --reload --port 8000
 ```
 
 The API is available at `http://localhost:8000`, with interactive Swagger docs at `http://localhost:8000/docs`.
 
-### 6️⃣ Launch the Next.js Frontend
+### 6️⃣ Launch the Next.js Frontend (standalone)
 
 ```bash
 cd frontend

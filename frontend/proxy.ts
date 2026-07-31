@@ -1,16 +1,23 @@
 /**
- * middleware.ts — Supabase SSR auth middleware
+ * proxy.ts — Supabase SSR auth proxy (replaces deprecated middleware.ts)
  * Refreshes sessions on every request and protects /dashboard and /repo routes.
  */
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-export async function middleware(request: NextRequest) {
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+export async function proxy(request: NextRequest) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY,
     {
       cookies: {
         getAll() {
@@ -29,18 +36,19 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Refresh session if it exists — do NOT write code between createServerClient and getUser
+  // Refresh session — do NOT add code between createServerClient and getUser
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
   const isProtected =
-    pathname.startsWith('/dashboard') || pathname.startsWith('/repo') || pathname.startsWith('/settings');
+    pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/repo') ||
+    pathname.startsWith('/settings');
   const isAuth = pathname.startsWith('/auth');
 
   if (isProtected && !user) {
-    // Redirect unauthenticated users to sign-in
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = '/auth/sign-in';
     redirectUrl.searchParams.set('next', pathname);
@@ -48,7 +56,6 @@ export async function middleware(request: NextRequest) {
   }
 
   if (isAuth && user) {
-    // Redirect authenticated users away from auth pages
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = '/dashboard';
     return NextResponse.redirect(redirectUrl);
@@ -62,3 +69,4 @@ export const config = {
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };
+

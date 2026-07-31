@@ -27,7 +27,6 @@ from api.models.chat import (
     ChatListItem,
 )
 from api.services import supabase_service
-from api.services.chat_service import stream_chat_response
 from app.utils.logger import get_logger
 
 router = APIRouter()
@@ -109,6 +108,18 @@ async def stream_message(
 
     index_name = repo["index_name"]
     repo_id = repo["id"]
+
+    # Lazy import keeps API startup resilient when optional AI deps are not installed yet.
+    try:
+        from api.services.chat_service import stream_chat_response
+    except ModuleNotFoundError as import_err:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Chat dependencies are not installed. "
+                "Install runtime requirements and retry."
+            ),
+        ) from import_err
 
     # Persist user message to DB immediately (before streaming)
     # This ensures it shows even if the stream fails halfway

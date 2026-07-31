@@ -1,3 +1,5 @@
+-r requirements-api.txt
+
 streamlit
 faiss-cpu
 sentence-transformers
