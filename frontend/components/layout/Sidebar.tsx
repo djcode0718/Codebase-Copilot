@@ -82,11 +82,11 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
     <aside
       className={cn(
         'flex h-screen flex-col border-r border-sidebar-border bg-sidebar/95 text-sidebar-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-all duration-200',
-        collapsed ? 'w-[4.75rem]' : 'w-72'
+        collapsed ? 'w-20' : 'w-72'
       )}
     >
       {/* Brand + collapse */}
-      <div className={cn('flex items-center gap-2 border-b border-sidebar-border p-4', collapsed ? 'justify-center' : 'justify-between')}>
+      <div className={cn('flex items-center gap-2 border-b border-sidebar-border p-4', collapsed ? 'justify-between px-3' : 'justify-between')}>
         <Link href="/dashboard" className={cn('flex items-center gap-2 group', collapsed && 'justify-center')} title="Codebase Copilot">
           <div className="w-10 h-10 rounded-2xl bg-brand/15 border border-brand/20 flex items-center justify-center flex-shrink-0 shadow-lg shadow-brand/10">
             <Terminal size={15} className="text-brand" />
@@ -99,8 +99,8 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
           )}
         </Link>
 
-        <div className="hidden lg:flex items-center gap-2">
-          <ThemeToggle />
+        <div className="flex items-center gap-2">
+          {!collapsed && <ThemeToggle className="hidden lg:inline-flex" />}
           <button
             type="button"
             onClick={() => setCollapsed((value) => !value)}
