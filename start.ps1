@@ -4,6 +4,24 @@ $currentPid = $PID
 $managedPorts = @(8000, 3000)
 $global:shutdownRequested = $false
 
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+
+$backendPythonCandidates = @(
+    (Join-Path $root ".venv\Scripts\python.exe")
+)
+$backendPython = $backendPythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if (-not $backendPython) {
+    throw "Python interpreter not found. Expected one of: $($backendPythonCandidates -join ', ')"
+}
+
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    throw "npm is not available on PATH. Install Node.js or open a shell where npm is available."
+}
+
 # Track child process IDs so we can kill them instantly on exit
 $global:trackedPids = [System.Collections.Generic.List[int]]::new()
 
@@ -28,8 +46,8 @@ function Get-PortPids {
 
 function Cleanup-Fast {
     # Kill tracked PIDs immediately (no port scan needed — we know exact PIDs)
-    foreach ($pid in $global:trackedPids) {
-        Stop-ProcessTree -ProcessId $pid
+    foreach ($trackedPid in $global:trackedPids) {
+        Stop-ProcessTree -ProcessId $trackedPid
     }
     # Also stop any lingering PS jobs
     foreach ($job in (Get-Job -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @("backend","frontend") })) {
@@ -67,15 +85,19 @@ $cancelEvent = Register-ObjectEvent -InputObject ([Console]) -EventName CancelKe
 
 Write-Host "Starting backend (uvicorn) ..." -ForegroundColor Cyan
 $backend = Start-Job -Name "backend" -ScriptBlock {
-    param($r)
+    param($r, $pythonExe)
     Set-Location $r
-    & ".\venv_copilot\Scripts\python.exe" -m uvicorn api.main:app --reload --port 8000 2>&1
-} -ArgumentList $root
+    & $pythonExe -m uvicorn api.main:app --reload --port 8000 2>&1
+} -ArgumentList $root, $backendPython
 
 Write-Host "Starting frontend (npm run dev) ..." -ForegroundColor Cyan
 $frontend = Start-Job -Name "frontend" -ScriptBlock {
     param($r)
     Set-Location "$r\frontend"
+    # Keep dev logs plain so PS job output remains readable.
+    $env:NO_COLOR = "1"
+    $env:FORCE_COLOR = "0"
+    $env:CI = "1"
     npm run dev 2>&1
 } -ArgumentList $root
 
@@ -90,10 +112,6 @@ foreach ($port in $managedPorts) {
 }
 
 Write-Host ""
-Write-Host "Both servers are running. Press Ctrl+C to stop." -ForegroundColor Green
-Write-Host "  Backend:  http://localhost:8000" -ForegroundColor Yellow
-Write-Host "  Frontend: http://localhost:3000" -ForegroundColor Yellow
-Write-Host ""
 
 function Write-JobOutput {
     param($Job, [string]$Prefix, [string]$Color)
@@ -105,9 +123,60 @@ function Write-JobOutput {
         else { $line = [string]$item }
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         if ($line -eq "System.Management.Automation.RemoteException") { continue }
+
+        # Remove ANSI/control artifacts and any non-ASCII symbols that print as mojibake.
+        $line = $line -replace "`e\[[0-9;?]*[ -/]*[@-~]", ""
+        $line = $line -replace "[^\x09\x0A\x0D\x20-\x7E]", ""
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
         Write-Host ("[{0}] {1}" -f $Prefix, $line) -ForegroundColor $Color
     }
 }
+
+function Wait-ForPortsReady {
+    param([int[]]$Ports, [int]$TimeoutSeconds = 30)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        # Stream startup logs while waiting so failures are visible immediately.
+        Write-JobOutput -Job $backend -Prefix "backend" -Color "DarkCyan"
+        Write-JobOutput -Job $frontend -Prefix "frontend" -Color "DarkYellow"
+
+        $backendPortUp = [bool](Get-PortPids -Port 8000)
+        $frontendPortUp = [bool](Get-PortPids -Port 3000)
+        $allReady = $backendPortUp -and $frontendPortUp
+
+        if ($allReady) { return $true }
+
+        # Fail fast only if a startup job exited and its port is still down.
+        if (($backend.State -in @("Failed","Stopped","Completed") -and -not $backendPortUp) -or
+            ($frontend.State -in @("Failed","Stopped","Completed") -and -not $frontendPortUp)) {
+            return $false
+        }
+
+        Start-Sleep -Milliseconds 250
+    }
+
+    return $false
+}
+
+$ready = Wait-ForPortsReady -Ports $managedPorts -TimeoutSeconds 30
+if ($ready) {
+    Write-Host "Both servers are running. Press Ctrl+C to stop." -ForegroundColor Green
+    Write-Host "  Backend:  http://localhost:8000" -ForegroundColor Yellow
+    Write-Host "  Frontend: http://localhost:3000" -ForegroundColor Yellow
+    Write-Host ""
+} else {
+    Write-Host "One or more servers exited before becoming ready." -ForegroundColor Red
+    Write-JobOutput -Job $backend -Prefix "backend" -Color "DarkCyan"
+    Write-JobOutput -Job $frontend -Prefix "frontend" -Color "DarkYellow"
+    $global:shutdownRequested = $true
+}
+
+$backendPortMisses = 0
+$frontendPortMisses = 0
+$maxPortMissesBeforeShutdown = 10  # ~2 seconds with 200ms loop
+
 
 try {
     while (-not $global:shutdownRequested) {
@@ -123,8 +192,28 @@ try {
             }
         }
 
-        if ($backend.State -in @("Failed","Stopped","Completed") -or
-            $frontend.State -in @("Failed","Stopped","Completed")) {
+        # Only immediate-fail on explicit job failure.
+        if ($backend.State -eq "Failed" -or
+            $frontend.State -eq "Failed") {
+            $global:shutdownRequested = $true
+        }
+
+        if (Get-PortPids -Port 8000) {
+            $backendPortMisses = 0
+        } else {
+            $backendPortMisses++
+        }
+
+        if (Get-PortPids -Port 3000) {
+            $frontendPortMisses = 0
+        } else {
+            $frontendPortMisses++
+        }
+
+        if ($backendPortMisses -ge $maxPortMissesBeforeShutdown) {
+            $global:shutdownRequested = $true
+        }
+        if ($frontendPortMisses -ge $maxPortMissesBeforeShutdown) {
             $global:shutdownRequested = $true
         }
         Start-Sleep -Milliseconds 200
