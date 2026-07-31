@@ -101,10 +101,6 @@ export function LandingAuthActions({
     router.refresh();
   }
 
-  function openWorkspace() {
-    router.push('/dashboard');
-  }
-
   function openSignIn() {
     router.push('/auth/sign-in');
   }
@@ -115,9 +111,6 @@ export function LandingAuthActions({
         <span className="hidden rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground sm:inline-flex">
           Checking session...
         </span>
-        <Button className="bg-brand text-green-950 hover:bg-green-400" onClick={openWorkspace}>
-          Open workspace
-        </Button>
       </div>
     );
   }
@@ -127,9 +120,6 @@ export function LandingAuthActions({
       <div className="flex items-center gap-2">
         <Button variant="outline" className="border-border" onClick={openSignIn}>
           Sign in
-        </Button>
-        <Button className="bg-brand text-green-950 hover:bg-green-400" onClick={openWorkspace}>
-          Open workspace
         </Button>
       </div>
     );
@@ -144,9 +134,6 @@ export function LandingAuthActions({
         <Button variant="outline" className="border-border" onClick={handleSignOut} disabled={signingOut}>
           {signingOut ? 'Signing out…' : 'Sign out'}
         </Button>
-        <Button className="bg-brand text-green-950 hover:bg-green-400" onClick={openWorkspace}>
-          Open workspace
-        </Button>
       </div>
     );
   }
@@ -160,9 +147,6 @@ export function LandingAuthActions({
       ) : null}
       <Button variant="outline" className="border-border" onClick={handleSignOut} disabled={signingOut}>
         {signingOut ? 'Signing out…' : 'Sign out'}
-      </Button>
-      <Button className="bg-brand text-green-950 hover:bg-green-400" onClick={openWorkspace}>
-        Open workspace
       </Button>
     </div>
   );

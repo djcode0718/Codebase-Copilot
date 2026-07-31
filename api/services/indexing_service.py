@@ -415,7 +415,18 @@ async def indexing_event_generator(
             try:
                 event = await asyncio.wait_for(progress_queue.get(), timeout=180.0)
             except asyncio.TimeoutError:
-                yield f"data: {json.dumps({'step': 'error', 'message': 'Indexing timed out after 3 minutes.'})}\n\n"
+                timeout_event = {
+                    "step": "error",
+                    "message": "Indexing timed out after 3 minutes.",
+                    "progress": 100,
+                }
+                yield f"data: {json.dumps(timeout_event)}\n\n"
+                try:
+                    supabase_service.update_repo_status(
+                        supabase, repo_id, status="failed"
+                    )
+                except Exception:
+                    pass
                 break
 
             yield f"data: {json.dumps(event)}\n\n"

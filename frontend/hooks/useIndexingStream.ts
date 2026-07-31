@@ -87,6 +87,17 @@ export function useIndexingStream(
     }, 100);
 
     async function readStream() {
+      // Reset per indexing run to avoid stale UI state from previous attempts.
+      setSteps(PIPELINE_ORDER.map((id) => makeStep(id, 'pending')));
+      setProgress(0);
+      setFileCount(null);
+      setNodeCount(null);
+      setIsComplete(false);
+      setHasError(false);
+      setErrorMessage(null);
+      setIndexName(null);
+      setElapsedMs(0);
+
       // Retry a few times on connection errors (uvicorn may still be starting up)
       const MAX_RETRIES = 4;
       const RETRY_DELAY_MS = 1500;
@@ -95,13 +106,19 @@ export function useIndexingStream(
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (aborted) return;
         try {
-          res = await fetch(
-            `${apiBase}/api/repo/${repoId}/index-progress`,
-            {
-              headers: { Authorization: `Bearer ${token}` },
-              signal: AbortSignal.timeout(200_000),
-            }
-          );
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 200_000);
+          try {
+            res = await fetch(
+              `${apiBase}/api/repo/${repoId}/index-progress`,
+              {
+                headers: { Authorization: `Bearer ${token}` },
+                signal: controller.signal,
+              }
+            );
+          } finally {
+            clearTimeout(timeout);
+          }
           break; // success — stop retrying
         } catch (fetchErr) {
           if (attempt < MAX_RETRIES && !aborted) {
@@ -112,9 +129,8 @@ export function useIndexingStream(
           // All retries exhausted
           if (!aborted) {
             setHasError(true);
-            setErrorMessage(
-              fetchErr instanceof Error ? fetchErr.message : 'Failed to connect to indexing stream'
-            );
+            const message = fetchErr instanceof Error ? fetchErr.message : '';
+            setErrorMessage(message || 'Failed to connect to indexing stream');
             if (timerRef.current) clearInterval(timerRef.current);
           }
           return;
@@ -158,7 +174,7 @@ export function useIndexingStream(
             }
 
             const { step, message, progress: prog } = event;
-            setProgress(prog);
+            setProgress(typeof prog === 'number' ? prog : step === 'error' ? 100 : 0);
 
             if (step === 'error') {
               // Mark active step (or first pending) as error
