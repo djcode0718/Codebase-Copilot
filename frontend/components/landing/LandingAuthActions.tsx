@@ -5,12 +5,18 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
-import type { Session } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/supabase-js';
 
 type LandingAuthActionsProps = {
   initialSignedIn: boolean;
   initialIsGuest: boolean;
   initialEmail?: string;
+};
+
+type AuthState = {
+  signedIn: boolean;
+  isGuest: boolean;
+  email?: string;
 };
 
 export function LandingAuthActions({
@@ -20,38 +26,53 @@ export function LandingAuthActions({
 }: LandingAuthActionsProps) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
-  const [signedIn, setSignedIn] = useState(initialSignedIn);
-  const [isGuest, setIsGuest] = useState(initialIsGuest);
-  const [email, setEmail] = useState(initialEmail);
+  const [authState, setAuthState] = useState<AuthState>({
+    signedIn: initialSignedIn,
+    isGuest: initialIsGuest,
+    email: initialEmail,
+  });
+  const [isResolving, setIsResolving] = useState(!initialSignedIn);
   const [signingOut, setSigningOut] = useState(false);
 
   const applySession = useCallback((session: Session | null) => {
-    setSignedIn(Boolean(session?.user));
-    setIsGuest(Boolean(session?.user?.is_anonymous));
-    setEmail(session?.user?.email ?? undefined);
+    setAuthState({
+      signedIn: Boolean(session?.user),
+      isGuest: Boolean(session?.user?.is_anonymous),
+      email: session?.user?.email ?? undefined,
+    });
+    setIsResolving(false);
+  }, []);
+
+  const applyUser = useCallback((user: User | null) => {
+    setAuthState({
+      signedIn: Boolean(user),
+      isGuest: Boolean(user?.is_anonymous),
+      email: user?.email ?? undefined,
+    });
+    setIsResolving(false);
   }, []);
 
   useEffect(() => {
     let mounted = true;
 
-    async function syncSession() {
+    async function syncUser() {
       const {
-        data: { session },
-      } = await supabase.auth.getSession();
+        data: { user },
+      } = await supabase.auth.getUser();
 
       if (!mounted) {
         return;
       }
 
-      applySession(session);
+      applyUser(user);
     }
 
-    syncSession();
+    syncUser();
 
     return () => {
       mounted = false;
     };
-  }, [supabase, applySession]);
+  }, [supabase, applyUser]);
 
   useEffect(() => {
     const {
@@ -74,9 +95,8 @@ export function LandingAuthActions({
     }
 
     toast.success('Signed out');
-    setSignedIn(false);
-    setIsGuest(false);
-    setEmail(undefined);
+    setAuthState({ signedIn: false, isGuest: false, email: undefined });
+    setIsResolving(false);
     router.push('/');
     router.refresh();
   }
@@ -89,7 +109,20 @@ export function LandingAuthActions({
     router.push('/auth/sign-in');
   }
 
-  if (!signedIn) {
+  if (isResolving) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="hidden rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground sm:inline-flex">
+          Checking session...
+        </span>
+        <Button className="bg-brand text-green-950 hover:bg-green-400" onClick={openWorkspace}>
+          Open workspace
+        </Button>
+      </div>
+    );
+  }
+
+  if (!authState.signedIn) {
     return (
       <div className="flex items-center gap-2">
         <Button variant="outline" className="border-border" onClick={openSignIn}>
@@ -102,7 +135,7 @@ export function LandingAuthActions({
     );
   }
 
-  if (isGuest) {
+  if (authState.isGuest) {
     return (
       <div className="flex items-center gap-2">
         <span className="hidden rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground sm:inline-flex">
@@ -120,9 +153,9 @@ export function LandingAuthActions({
 
   return (
     <div className="flex items-center gap-2">
-      {email ? (
+      {authState.email ? (
         <span className="hidden max-w-[220px] truncate rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground sm:inline-flex">
-          {email}
+          {authState.email}
         </span>
       ) : null}
       <Button variant="outline" className="border-border" onClick={handleSignOut} disabled={signingOut}>

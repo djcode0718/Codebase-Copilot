@@ -157,7 +157,7 @@
     font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    scroll-behavior: smooth;
+    /* scroll-behavior handled via data-scroll-behavior attribute per Next.js guidance */
   }
   body {
     @apply bg-background text-foreground;

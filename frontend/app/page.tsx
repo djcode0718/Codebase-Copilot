@@ -7,12 +7,12 @@ import { LandingAuthActions } from '@/components/landing/LandingAuthActions';
 export default async function LandingPage() {
   const supabase = await createServerSupabaseClient();
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const signedIn = Boolean(session?.user);
-  const isGuest = Boolean(session?.user?.is_anonymous);
-  const email = session?.user?.email ?? undefined;
+  const signedIn = Boolean(user);
+  const isGuest = Boolean(user?.is_anonymous);
+  const email = user?.email ?? undefined;
 
   return (
     <div className="min-h-screen bg-background">
@@ -27,6 +27,7 @@ export default async function LandingPage() {
           <div className="flex items-center gap-2">
             <ThemeToggle variant="landing" />
             <LandingAuthActions
+              key={`${signedIn ? 'in' : 'out'}-${isGuest ? 'guest' : 'member'}-${email ?? 'none'}`}
               initialSignedIn={signedIn}
               initialIsGuest={isGuest}
               initialEmail={email}

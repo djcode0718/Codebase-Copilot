@@ -1,9 +1,19 @@
 'use client';
 
+import { useSyncExternalStore } from 'react';
 import { MoonStar, SunMedium } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+
+// Stable subscribe / snapshot helpers for useSyncExternalStore
+function subscribe(cb: () => void) {
+  // Nothing to subscribe to — fires once after hydration
+  window.addEventListener('storage', cb);
+  return () => window.removeEventListener('storage', cb);
+}
+const getClientSnapshot = () => true;
+const getServerSnapshot = () => false;
 
 export function ThemeToggle({
   className,
@@ -13,7 +23,10 @@ export function ThemeToggle({
   variant?: 'sidebar' | 'landing';
 }) {
   const { resolvedTheme, setTheme } = useTheme();
-  const isDark = resolvedTheme === 'dark';
+  // mounted is false on server, true on client — no setState, no hydration mismatch
+  const mounted = useSyncExternalStore(subscribe, getClientSnapshot, getServerSnapshot);
+
+  const isDark = mounted && resolvedTheme === 'dark';
 
   const variantClass =
     variant === 'landing'
@@ -29,6 +42,7 @@ export function ThemeToggle({
       className={cn(variantClass, className)}
       aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
       title={isDark ? 'Light theme' : 'Dark theme'}
+      suppressHydrationWarning
     >
       {isDark ? <SunMedium size={14} /> : <MoonStar size={14} />}
     </Button>

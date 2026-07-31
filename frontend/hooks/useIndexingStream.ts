@@ -87,18 +87,49 @@ export function useIndexingStream(
     }, 100);
 
     async function readStream() {
-      try {
-        const res = await fetch(
-          `${apiBase}/api/repo/${repoId}/index-progress`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            signal: AbortSignal.timeout(200_000), // 200s max
-          }
-        );
+      // Retry a few times on connection errors (uvicorn may still be starting up)
+      const MAX_RETRIES = 4;
+      const RETRY_DELAY_MS = 1500;
 
+      let res: Response | null = null;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (aborted) return;
+        try {
+          res = await fetch(
+            `${apiBase}/api/repo/${repoId}/index-progress`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: AbortSignal.timeout(200_000),
+            }
+          );
+          break; // success — stop retrying
+        } catch (fetchErr) {
+          if (attempt < MAX_RETRIES && !aborted) {
+            // Connection refused / network error — wait and retry
+            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+            continue;
+          }
+          // All retries exhausted
+          if (!aborted) {
+            setHasError(true);
+            setErrorMessage(
+              fetchErr instanceof Error ? fetchErr.message : 'Failed to connect to indexing stream'
+            );
+            if (timerRef.current) clearInterval(timerRef.current);
+          }
+          return;
+        }
+      }
+
+      if (!res) return;
+
+      try {
         if (!res.ok || !res.body) {
           setHasError(true);
-          setErrorMessage('Failed to connect to indexing stream');
+          setErrorMessage(
+            `Indexing server error: ${res.status} ${res.statusText || 'check backend logs'}`
+          );
+          if (timerRef.current) clearInterval(timerRef.current);
           return;
         }
 
