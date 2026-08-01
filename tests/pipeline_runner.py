@@ -516,8 +516,9 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
 
         # Update memory
         try:
-            memory.put({"role": "user", "content": raw})
-            memory.put({"role": "assistant", "content": full_response})
+            from llama_index.core.base.llms.types import ChatMessage
+            memory.put(ChatMessage(role="user", content=raw))
+            memory.put(ChatMessage(role="assistant", content=full_response))
         except Exception:
             pass
 

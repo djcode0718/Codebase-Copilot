@@ -147,9 +147,17 @@ async def stream_chat_response(
         if memory is None:
             memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
 
+        # ── Query Resolution (Context-Aware Query Rewriting) ───────────────
+        from app.services.qa_service import resolve_ambiguous_query
+        resolved_query = await asyncio.get_event_loop().run_in_executor(
+            None, resolve_ambiguous_query, query, memory
+        )
+        if resolved_query != query:
+            logger.info(f"Resolved context-aware streaming query: '{resolved_query}'")
+
         # ── Route query ────────────────────────────────────────────────────
         query_mode = await asyncio.get_event_loop().run_in_executor(
-            None, classify_query, query
+            None, classify_query, resolved_query
         )
         query_mode_value = query_mode.value
 
@@ -171,7 +179,7 @@ async def stream_chat_response(
             retriever = vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS + 5)
 
         raw_nodes = await asyncio.get_event_loop().run_in_executor(
-            None, retriever.retrieve, query
+            None, retriever.retrieve, resolved_query
         )
         t_retrieval_ms = int((time.time() - t_ret_start) * 1000)
 
@@ -179,7 +187,7 @@ async def stream_chat_response(
         if USE_COLBERT and raw_nodes:
             from app.retrieval.reranker import rerank_with_colbert
             reranked_nodes = await asyncio.get_event_loop().run_in_executor(
-                None, rerank_with_colbert, query, raw_nodes, TOP_K_RERANK
+                None, rerank_with_colbert, resolved_query, raw_nodes, TOP_K_RERANK
             )
         else:
             reranked_nodes = sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
@@ -218,7 +226,7 @@ async def stream_chat_response(
             f"{system_prompt}\n\n"
             f"{'CONVERSATION HISTORY:' + chr(10) + history_str if history_str else ''}"
             f"Context:\n{context_str}\n\n"
-            f"Question: {query}\n\nAnswer:"
+            f"Question: {resolved_query}\n\nAnswer:"
         )
 
         # ── Stream LLM response ────────────────────────────────────────────
@@ -243,8 +251,9 @@ async def stream_chat_response(
 
         # ── Update memory ──────────────────────────────────────────────────
         try:
-            memory.put({"role": "user", "content": query})
-            memory.put({"role": "assistant", "content": full_response})
+            from llama_index.core.base.llms.types import ChatMessage
+            memory.put(ChatMessage(role="user", content=query))
+            memory.put(ChatMessage(role="assistant", content=full_response))
             _save_session(repo_id, chat_id, None, memory, query_mode)
         except Exception as mem_err:
             logger.warning(f"Memory update failed: {mem_err}")
@@ -263,7 +272,7 @@ async def stream_chat_response(
         yield f"data: {json.dumps(metadata)}\n\n"
 
         # ── Generate dynamic follow-up suggestions ─────────────────────────
-        followup_questions = await _generate_followup_suggestions(query, full_response)
+        followup_questions = await _generate_followup_suggestions(resolved_query, full_response)
         yield f"data: {json.dumps({'type': 'suggestions', 'questions': followup_questions})}\n\n"
 
     except Exception as e:

@@ -43,6 +43,78 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+_RESOLVE_QUERY_PROMPT = """Given a conversation history between a User and an Assistant, and a new follow-up question from the User, rewrite the follow-up question into a clear, self-contained standalone question.
+Resolve any references, pronouns (like "it", "its", "that", "this"), or context-dependent terms to refer explicitly to what was previously discussed.
+
+Rules:
+- Do NOT answer the question.
+- Do NOT add any introductory or explanatory text (e.g. "Standalone question:").
+- Keep the rewritten question natural and specific to the codebase elements discussed.
+- If the question is already standalone and does not need any rewriting, output the original question exactly.
+
+CONVERSATION HISTORY:
+{history}
+
+Follow-up Question: {query}
+
+Standalone Question:"""
+
+
+def resolve_ambiguous_query(query: str, memory: ChatMemoryBuffer) -> str:
+    """
+    Resolves pronouns and implicit references in follow-up queries using chat memory.
+    If there is no history, or rewriting fails, the original query is returned.
+    """
+    if memory is None:
+        return query
+
+    try:
+        history_msgs = memory.get()
+        if not history_msgs:
+            return query
+
+        history_str = ""
+        # Format the last 6 messages (3 turns)
+        for msg in history_msgs[-6:]:
+            role = ""
+            content = ""
+            if isinstance(msg, dict):
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+            elif hasattr(msg, "role"):
+                # Handle ChatMessage object or Enum
+                r_val = getattr(msg, "role")
+                role = getattr(r_val, "value", r_val) if r_val else ""
+                content = getattr(msg, "content", "") or ""
+            else:
+                try:
+                    role = getattr(msg, "role", "")
+                    role = getattr(role, "value", role)
+                    content = getattr(msg, "content", "")
+                except Exception:
+                    pass
+
+            if role and content:
+                history_str += f"{role.upper()}: {content}\n"
+
+        if not history_str.strip():
+            return query
+
+        prompt = _RESOLVE_QUERY_PROMPT.format(history=history_str, query=query)
+        response = Settings.llm.complete(prompt)
+        resolved = str(response).strip()
+        
+        if resolved:
+            # Clean up potential LLM prefixing or quotes
+            resolved = resolved.replace("Standalone question:", "").strip()
+            resolved = resolved.strip('"`\'')
+            return resolved
+    except Exception as e:
+        logger.warning(f"Failed to resolve ambiguous query: {e}")
+
+    return query
+
 # ── Session-level cache ────────────────────────────────────────────────────
 _index_cache = {}
 
@@ -175,8 +247,13 @@ def handle_user_query(
     if memory is None:
         memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
 
+    # ── Query Resolution (Context-Aware Query Rewriting) ───────────────────
+    resolved_query = resolve_ambiguous_query(query, memory)
+    if resolved_query != query:
+        logger.info(f"Resolved context-aware query: '{resolved_query}'")
+
     # ── Route query ────────────────────────────────────────────────────────
-    query_mode = classify_query(query)
+    query_mode = classify_query(resolved_query)
     logger.info(f"Query mode: {query_mode.value}")
 
     # Rebuild engine if mode changed (or first query)
@@ -197,10 +274,10 @@ def handle_user_query(
     if USE_COLBERT:
         # Retrieve nodes manually → rerank → inject into engine response
         try:
-            condensed_query = query  # CondensePlusContext will condense internally
+            condensed_query = resolved_query
             retriever = chat_engine._retriever
             raw_nodes = retriever.retrieve(condensed_query)
-            reranked_nodes = rerank_with_colbert(query, raw_nodes, top_k=TOP_K_RERANK)
+            reranked_nodes = rerank_with_colbert(resolved_query, raw_nodes, top_k=TOP_K_RERANK)
 
             # Build response using reranked context
             from llama_index.core.response_synthesizers import get_response_synthesizer
@@ -216,13 +293,14 @@ def handle_user_query(
                 f"[{n.node.metadata.get('path', 'unknown')}]\n{n.node.get_content()}"
                 for n in reranked_nodes
             ])
-            full_prompt = f"{system_prompt}\n\nContext:\n{context_str}\n\nQuestion: {query}\n\nAnswer:"
+            full_prompt = f"{system_prompt}\n\nContext:\n{context_str}\n\nQuestion: {resolved_query}\n\nAnswer:"
             response = Settings.llm.complete(full_prompt)
             response_str = str(response).strip()
 
-            # Update memory manually
-            memory.put({"role": "user", "content": query})
-            memory.put({"role": "assistant", "content": response_str})
+            # Update memory manually (storing the ORIGINAL user question)
+            from llama_index.core.base.llms.types import ChatMessage
+            memory.put(ChatMessage(role="user", content=query))
+            memory.put(ChatMessage(role="assistant", content=response_str))
 
             logger.info(f"ColBERT reranked response generated")
             return response_str, chat_engine, memory, query_mode
@@ -233,7 +311,7 @@ def handle_user_query(
 
     # Standard path (ColBERT disabled or failed)
     start = time.time()
-    response = chat_engine.chat(query)
+    response = chat_engine.chat(resolved_query)
     logger.info(f"Response in {time.time() - start:.2f}s")
 
     return str(response), chat_engine, memory, query_mode
