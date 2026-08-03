@@ -36,4 +36,5 @@ data/index/
 src/ui-ux-pro-max/
 codebase-copilot-frontend/
 .env
+env.api.example 
 frontend_implementation_plan2.md
