@@ -255,7 +255,13 @@ export default function ChatPage() {
             <div className="self-start xl:self-auto">
               <ExportMenu
                 repo={repo}
-                chatMessages={messages.map((m) => ({ role: m.role, content: m.content, created_at: m.created_at }))}
+                token={token}
+                chatMessages={messages.map((m) => ({
+                  role: m.role,
+                  content: m.content,
+                  created_at: m.created_at,
+                  chat_id: m.chat_id,
+                }))}
               />
             </div>
           )}

@@ -165,7 +165,7 @@ export default function RepoOverviewPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <ExportMenu repo={repo} />
+            <ExportMenu repo={repo} token={token} />
             <Button
               onClick={() => router.push(`/repo/${repoId}/chat`)}
               className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer"

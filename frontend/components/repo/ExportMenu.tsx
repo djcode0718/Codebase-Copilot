@@ -7,19 +7,55 @@ import { useState, useRef, useEffect } from 'react';
 import { Download, FileText, FileJson, FileCode2, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { getMessages, listChats } from '@/lib/api';
 import type { Repo } from '@/lib/types';
+
+interface ChatPreviewMessage {
+  role: string;
+  content: string;
+  created_at: string;
+  chat_id?: string;
+}
 
 interface ExportMenuProps {
   repo: Repo;
-  chatMessages?: { role: string; content: string; created_at: string }[];
+  token?: string;
+  chatMessages?: ChatPreviewMessage[];
 }
 
-function buildMarkdownReport(repo: Repo): string {
-  const now = new Date().toISOString();
+interface ExportableMessage {
+  role: string;
+  content: string;
+  created_at: string;
+  chat_id: string;
+  chat_title?: string;
+}
+
+function buildFilenameTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
+
+function slugifyRepoName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'repository';
+}
+
+function toReadableDate(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
+}
+
+function buildMarkdownReport(repo: Repo, generatedAtIso: string): string {
   return `# Repository Intelligence Report
 **Repository:** ${repo.name}
 **Source:** ${repo.source_url}
-**Generated:** ${now}
+**Generated:** ${generatedAtIso}
 **Status:** ${repo.status}
 
 ## Executive Summary
@@ -42,10 +78,10 @@ function buildMarkdownReport(repo: Repo): string {
 `;
 }
 
-function buildJsonReport(repo: Repo) {
+function buildJsonReport(repo: Repo, generatedAtIso: string) {
   return JSON.stringify({
     metadata: {
-      generated_at: new Date().toISOString(),
+      generated_at: generatedAtIso,
       platform: 'Codebase Copilot',
       version: '2.0',
     },
@@ -63,25 +99,90 @@ function buildJsonReport(repo: Repo) {
   }, null, 2);
 }
 
-function buildChatMarkdown(repo: Repo, messages: { role: string; content: string; created_at: string }[]): string {
+function buildChatMarkdown(repo: Repo, messages: ExportableMessage[], generatedAtIso: string): string {
+  const sorted = [...messages].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  const chatIds = Array.from(new Set(sorted.map((msg) => msg.chat_id)));
+
   const lines = [
-    `# Chat Export — ${repo.name}`,
-    `**Repository:** ${repo.source_url}`,
-    `**Exported:** ${new Date().toISOString()}`,
+    `# Repository Chat Export — ${repo.name}`,
+    '',
+    '## Repository Information',
+    `- **Repository Name:** ${repo.name}`,
+    `- **Repository ID:** ${repo.id}`,
+    `- **Source URL:** ${repo.source_url}`,
+    `- **Index Name:** ${repo.index_name}`,
+    `- **Status:** ${repo.status}`,
+    `- **Files Indexed:** ${repo.file_count ?? 'N/A'}`,
+    `- **Knowledge Chunks:** ${repo.node_count ?? 'N/A'}`,
+    `- **Generated At:** ${generatedAtIso}`,
+    `- **Total Chats:** ${chatIds.length}`,
+    `- **Total Messages:** ${sorted.length}`,
     '',
     '---',
     '',
   ];
-  for (const msg of messages) {
-    lines.push(`### ${msg.role === 'user' ? '👤 User' : '🤖 Codebase Copilot'}`);
-    lines.push(`*${new Date(msg.created_at).toLocaleString()}*`);
+
+  for (const chatId of chatIds) {
+    const chatMessages = sorted.filter((msg) => msg.chat_id === chatId);
+    const heading = chatMessages[0]?.chat_title?.trim() || `Chat ${chatId}`;
+
+    lines.push(`## ${heading}`);
+    lines.push(`- **Chat ID:** \`${chatId}\``);
+    lines.push(`- **Messages:** ${chatMessages.length}`);
     lines.push('');
-    lines.push(msg.content);
-    lines.push('');
+
+    for (let i = 0; i < chatMessages.length; i += 1) {
+      const msg = chatMessages[i];
+      const sectionLabel = msg.role === 'user'
+        ? 'Question'
+        : msg.role === 'assistant'
+          ? 'Answer'
+          : msg.role;
+
+      lines.push(`### ${sectionLabel} ${i + 1}`);
+      lines.push(`- **Role:** ${msg.role}`);
+      lines.push(`- **Timestamp:** ${toReadableDate(msg.created_at)}`);
+      lines.push('');
+      lines.push(msg.content || '_No content_');
+      lines.push('');
+    }
+
     lines.push('---');
     lines.push('');
   }
+
   return lines.join('\n');
+}
+
+async function fetchAllChatMessages(token: string, repo: Repo): Promise<ExportableMessage[]> {
+  const chats = await listChats(token, repo.id);
+  if (chats.length === 0) return [];
+
+  const chatMessages = await Promise.all(
+    chats.map(async (chat) => {
+      const messages = await getMessages(token, chat.id);
+      return messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        created_at: message.created_at,
+        chat_id: chat.id,
+        chat_title: chat.title,
+      }));
+    })
+  );
+
+  return chatMessages.flat();
+}
+
+function normalizeFallbackMessages(messages: ChatPreviewMessage[]): ExportableMessage[] {
+  return messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+    created_at: message.created_at,
+    chat_id: message.chat_id || 'active-chat',
+  }));
 }
 
 function downloadFile(content: string, filename: string, mimeType: string) {
@@ -100,7 +201,7 @@ const EXPORT_OPTIONS = [
   { id: 'chat-md',     icon: FileCode2, label: 'Chat Export (.md)',        desc: 'Conversation history' },
 ] as const;
 
-export default function ExportMenu({ repo, chatMessages = [] }: ExportMenuProps) {
+export default function ExportMenu({ repo, token, chatMessages = [] }: ExportMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -112,21 +213,36 @@ export default function ExportMenu({ repo, chatMessages = [] }: ExportMenuProps)
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  function handleExport(id: typeof EXPORT_OPTIONS[number]['id']) {
+  async function handleExport(id: typeof EXPORT_OPTIONS[number]['id']) {
     setOpen(false);
-    const slug = repo.name.toLowerCase().replace(/\s+/g, '-');
-    const ts = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const generatedAtIso = now.toISOString();
+    const slug = slugifyRepoName(repo.name);
+    const ts = buildFilenameTimestamp(now);
+
     try {
       if (id === 'md-report') {
-        downloadFile(buildMarkdownReport(repo), `${slug}-report-${ts}.md`, 'text/markdown');
+        downloadFile(buildMarkdownReport(repo, generatedAtIso), `${slug}-report-${ts}.md`, 'text/markdown');
       } else if (id === 'json-report') {
-        downloadFile(buildJsonReport(repo), `${slug}-report-${ts}.json`, 'application/json');
+        downloadFile(buildJsonReport(repo, generatedAtIso), `${slug}-report-${ts}.json`, 'application/json');
       } else if (id === 'chat-md') {
-        if (chatMessages.length === 0) {
+        let exportMessages = normalizeFallbackMessages(chatMessages);
+
+        if (token) {
+          try {
+            const fullHistory = await fetchAllChatMessages(token, repo);
+            if (fullHistory.length > 0) exportMessages = fullHistory;
+          } catch {
+            // Keep current chat fallback if history lookup fails.
+          }
+        }
+
+        if (exportMessages.length === 0) {
           toast.info('No chat messages to export yet.');
           return;
         }
-        downloadFile(buildChatMarkdown(repo, chatMessages), `${slug}-chat-${ts}.md`, 'text/markdown');
+
+        downloadFile(buildChatMarkdown(repo, exportMessages, generatedAtIso), `${slug}-chat-${ts}.md`, 'text/markdown');
       }
       toast.success('Export downloaded');
     } catch {
@@ -151,7 +267,9 @@ export default function ExportMenu({ repo, chatMessages = [] }: ExportMenuProps)
           {EXPORT_OPTIONS.map((opt) => (
             <button
               key={opt.id}
-              onClick={() => handleExport(opt.id)}
+              onClick={() => {
+                void handleExport(opt.id);
+              }}
               className="flex w-full items-start gap-3 px-3 py-2.5 text-left text-sm hover:bg-accent transition-colors cursor-pointer"
             >
               <opt.icon size={13} className="text-brand mt-0.5 flex-shrink-0" />
@@ -166,4 +284,3 @@ export default function ExportMenu({ repo, chatMessages = [] }: ExportMenuProps)
     </div>
   );
 }
-
