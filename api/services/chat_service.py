@@ -81,13 +81,13 @@ def _build_fallback_llms() -> List[Tuple[str, object]]:
     active = (LLM_PROVIDER or "").lower()
 
     if active == "groq":
-        providers_order = ["ollama", "openai", "gemini"]
+        providers_order = ["gemini", "openai", "ollama"]
     elif active == "openai":
-        providers_order = ["ollama", "groq", "gemini"]
+        providers_order = ["gemini", "groq", "ollama"]
     elif active == "gemini":
-        providers_order = ["ollama", "groq", "openai"]
+        providers_order = ["groq", "openai", "ollama"]
     else:
-        providers_order = ["groq", "openai", "gemini"]
+        providers_order = ["gemini", "groq", "openai", "ollama"]
 
     candidates: List[Tuple[str, object]] = []
     for provider in providers_order:
@@ -112,7 +112,7 @@ def _build_fallback_llms() -> List[Tuple[str, object]]:
                 candidates.append(("openai", OpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY)))
             elif provider == "gemini" and GEMINI_API_KEY:
                 from llama_index.llms.gemini import Gemini
-                candidates.append(("gemini", Gemini(model="models/gemini-1.5-flash", api_key=GEMINI_API_KEY)))
+                candidates.append(("gemini", Gemini(model="models/gemini-flash-latest", api_key=GEMINI_API_KEY)))
         except Exception as build_err:
             logger.warning(f"Skipping fallback provider '{provider}': {build_err}")
 
@@ -145,32 +145,12 @@ def _default_followup_suggestions() -> List[str]:
 
 async def _generate_followup_suggestions(query: str, response_text: str) -> List[str]:
     """Generates 3-4 dynamic follow-up questions based on the query and response."""
-    from llama_index.core import Settings
-    from app.llm.llm_client import get_llm
-
-    if Settings.llm is None:
-        Settings.llm = get_llm()
+    from app.services.llm_fallback import generate_with_fallback
 
     prompt = _FOLLOWUP_SUGGESTION_PROMPT.format(query=query, response=response_text[:3000])
 
     try:
-        llm_candidates: List[Tuple[str, object]] = [("primary", Settings.llm)] + _build_fallback_llms()
-        raw = ""
-
-        for idx, (provider_name, llm_obj) in enumerate(llm_candidates):
-            try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None, llm_obj.complete, prompt
-                )
-                raw = str(response).strip()
-                if idx > 0:
-                    logger.warning(f"Follow-up suggestions switched to fallback provider '{provider_name}'.")
-                break
-            except Exception as llm_err:
-                if idx < len(llm_candidates) - 1 and _is_rate_limit_error(llm_err):
-                    continue
-                raise
-
+        raw = await generate_with_fallback(prompt)
         questions = [q.strip() for q in raw.split("\n") if q.strip()]
 
         # Clean prefixes like "1. ", "-", "*", "Q:"
@@ -319,44 +299,21 @@ async def stream_chat_response(
         # ── Stream LLM response ────────────────────────────────────────────
         t_llm_start = time.time()
 
-        # stream_complete is available on all LlamaIndex LLM wrappers
-        # (Ollama, Groq, Gemini, OpenAI all support it)
-        llm_candidates: List[Tuple[str, object]] = [("primary", Settings.llm)] + _build_fallback_llms()
-        stream_succeeded = False
-        last_llm_error: Optional[Exception] = None
+        # Use resilient fallback streaming pipeline
+        from app.services.llm_fallback import stream_with_fallback
 
-        for idx, (provider_name, llm_obj) in enumerate(llm_candidates):
-            try:
-                stream_response = await asyncio.get_event_loop().run_in_executor(
-                    None, llm_obj.stream_complete, full_prompt
-                )
-
-                # stream_response is a generator of CompletionResponseStreamChunk
-                for chunk in stream_response:
-                    delta = chunk.delta or ""
-                    if delta:
-                        full_response += delta
-                        yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
-                        # Small yield to let the event loop breathe
-                        await asyncio.sleep(0)
-
-                stream_succeeded = True
-                if idx > 0:
-                    logger.warning(f"Primary LLM failed; fallback provider '{provider_name}' succeeded.")
-                break
-            except Exception as llm_err:
-                last_llm_error = llm_err
-                if idx < len(llm_candidates) - 1 and _is_rate_limit_error(llm_err):
-                    next_provider = llm_candidates[idx + 1][0]
-                    logger.warning(
-                        f"LLM provider '{provider_name}' hit rate limits/quota. "
-                        f"Retrying with fallback '{next_provider}'."
-                    )
-                    continue
-                break
-
-        if not stream_succeeded:
-            raise last_llm_error or RuntimeError("LLM streaming failed with no fallback available")
+        try:
+            stream_response = stream_with_fallback(full_prompt)
+            async for chunk in stream_response:
+                delta = chunk.delta or ""
+                if delta:
+                    full_response += delta
+                    yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
+                    # Small yield to let the event loop breathe
+                    await asyncio.sleep(0)
+        except Exception as llm_err:
+            logger.error(f"LLM streaming failed: {llm_err}")
+            raise llm_err
 
         t_llm_ms = int((time.time() - t_llm_start) * 1000)
 

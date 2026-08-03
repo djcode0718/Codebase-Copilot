@@ -268,3 +268,55 @@ class TestStreamMessage:
             json={},
         )
         assert resp.status_code == 422
+
+    def test_stream_error_handling(self, client, mock_supabase, fake_chat, fake_chat_id, monkeypatch):
+        # Mock chat lookup
+        chat_chain = MagicMock()
+        chat_chain.execute.return_value = MagicMock(data=[fake_chat])
+        
+        # Mock repository lookup
+        repo_data = {
+            "id": "some-repo",
+            "user_id": "test-user-id",
+            "index_name": "some-index",
+            "status": "ready",
+        }
+        repo_chain = MagicMock()
+        repo_chain.execute.return_value = MagicMock(data=[repo_data])
+        
+        # Setup mock tables
+        chats_table = MagicMock()
+        chats_table.select.return_value.eq.return_value = chat_chain
+        
+        repos_table = MagicMock()
+        repos_table.select.return_value.eq.return_value = repo_chain
+        
+        def mock_table(table_name):
+            if table_name == "chats":
+                return chats_table
+            elif table_name == "repositories":
+                return repos_table
+            return MagicMock()
+            
+        monkeypatch.setattr(mock_supabase, "table", mock_table)
+
+        # Mock stream_chat_response to raise an exception mid-stream
+        async def mock_stream(*args, **kwargs):
+            yield 'data: {"type": "token", "content": "Start"}\n\n'
+            raise RuntimeError("Mid-stream connection error")
+            
+        monkeypatch.setattr("api.services.chat_service.stream_chat_response", mock_stream)
+
+        # Trigger stream request
+        resp = client.post(
+            f"/api/chat/{fake_chat_id}/message/stream",
+            json={"query": "Let's trigger an error"},
+        )
+        assert resp.status_code == 200
+        
+        # Read the response SSE stream lines
+        chunks = [(line.decode("utf-8") if isinstance(line, bytes) else line) for line in resp.iter_lines() if line]
+        assert len(chunks) == 2
+        assert "token" in chunks[0]
+        assert "error" in chunks[1]
+        assert "Mid-stream connection error" in chunks[1]

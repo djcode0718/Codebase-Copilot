@@ -144,19 +144,23 @@ async def stream_message(
         full_response = ""
         metadata_event = None
 
-        async for sse_line in stream_chat_response(query, index_name, repo_id, chat_id):
-            yield sse_line
+        try:
+            async for sse_line in stream_chat_response(query, index_name, repo_id, chat_id):
+                yield sse_line
 
-            # Parse events to collect full response and metadata
-            if sse_line.startswith("data: "):
-                try:
-                    event = json.loads(sse_line[6:])
-                    if event.get("type") == "token":
-                        full_response += event.get("content", "")
-                    elif event.get("type") == "metadata":
-                        metadata_event = event
-                except Exception:
-                    pass
+                # Parse events to collect full response and metadata
+                if sse_line.startswith("data: "):
+                    try:
+                        event = json.loads(sse_line[6:])
+                        if event.get("type") == "token":
+                            full_response += event.get("content", "")
+                        elif event.get("type") == "metadata":
+                            metadata_event = event
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Error during SSE chat stream: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
         # After stream: persist assistant message to DB
         if full_response:

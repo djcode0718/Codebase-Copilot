@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+import sys
+load_dotenv(override="pytest" not in sys.modules)
 
 # ─── LLM Provider ────────────────────────────────────────────────────────────
 # Options: "ollama" | "gemini" | "groq" | "openai"
@@ -63,3 +64,18 @@ CHUNK_MAX_CHARS    = 1500  # hard char cap per chunk
 #
 # TO DISABLE COLBERT: set USE_COLBERT=false in .env
 USE_COLBERT = os.getenv("USE_COLBERT", "true").lower() == "true"
+
+# ─── LLM Fallback Configuration ──────────────────────────────────────────────
+# Maximum retry-after delay (in seconds) that we will wait for before falling back to the next model.
+LLM_FALLBACK_RETRY_THRESHOLD = int(os.getenv("LLM_FALLBACK_RETRY_THRESHOLD", "10"))
+
+# Configured fallback chain of model definitions (comma-separated "provider:model_name").
+LLM_FALLBACK_CHAIN_STR = os.getenv(
+    "LLM_FALLBACK_CHAIN",
+    "gemini:models/gemini-3.6-flash,"
+    "gemini:models/gemini-3.1-flash-lite,"
+    "gemini:models/gemini-2.0-flash,"
+    "gemini:models/gemini-2.0-flash-lite,"
+    "gemini:models/gemini-flash-latest,"
+    "groq:llama-3.3-70b-versatile"
+)

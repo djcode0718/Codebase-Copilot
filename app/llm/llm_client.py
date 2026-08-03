@@ -165,8 +165,45 @@ from app.config import (
     OPENAI_API_KEY,
 )
 from app.utils.logger import get_logger
+from llama_index.core.llms import CustomLLM, CompletionResponse, CompletionResponseGen, LLMMetadata
+from pydantic import Field
+from typing import Any
 
 logger = get_logger(__name__)
+
+class FallbackLLM(CustomLLM):
+    primary_llm: Any = Field(description="The primary LLM instance")
+    fallback_llm: Any = Field(description="The fallback LLM instance")
+
+    @property
+    def metadata(self) -> LLMMetadata:
+        return self.primary_llm.metadata
+
+    def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+        try:
+            logger.info("Attempting completion with primary LLM...")
+            return self.primary_llm.complete(prompt, **kwargs)
+        except Exception as e:
+            logger.warning(f"Primary LLM completion failed: {e}. Falling back to fallback LLM.")
+            return self.fallback_llm.complete(prompt, **kwargs)
+
+    def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
+        try:
+            logger.info("Attempting streaming completion with primary LLM...")
+            gen = self.primary_llm.stream_complete(prompt, **kwargs)
+            return self._wrap_generator(gen, prompt, **kwargs)
+        except Exception as e:
+            logger.warning(f"Primary LLM stream_complete failed: {e}. Falling back to fallback LLM.")
+            return self.fallback_llm.stream_complete(prompt, **kwargs)
+
+    def _wrap_generator(self, gen: Any, prompt: str, **kwargs: Any) -> CompletionResponseGen:
+        try:
+            for chunk in gen:
+                yield chunk
+        except Exception as e:
+            logger.warning(f"Primary LLM stream generator failed during iteration: {e}. Falling back to fallback LLM.")
+            for chunk in self.fallback_llm.stream_complete(prompt, **kwargs):
+                yield chunk
 
 
 def get_llm():
@@ -198,11 +235,8 @@ def get_llm():
         )
 
     elif LLM_PROVIDER == "gemini":
-        from llama_index.llms.gemini import Gemini
-        return Gemini(
-            model="models/gemini-1.5-flash",
-            api_key=GEMINI_API_KEY,
-        )
+        from app.services.llm_fallback import get_resilient_llm
+        return get_resilient_llm()
 
     elif LLM_PROVIDER == "groq":
         from llama_index.llms.groq import Groq
