@@ -133,6 +133,22 @@ export async function deleteRepo(token: string, repoId: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete repository');
 }
 
+/** POST /api/repo/{repo_id}/refresh — reset and re-index existing repo */
+export async function refreshRepo(
+  token: string,
+  repoId: string
+): Promise<IndexRepoResponse> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/refresh`), {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to refresh repository');
+  }
+  return res.json();
+}
+
 /** Returns the URL for the indexing SSE stream — open with EventSource or fetch */
 export function indexProgressUrl(repoId: string): string {
   return apiUrl(`/api/repo/${repoId}/index-progress`);

@@ -3,6 +3,7 @@ tests/test_router_repo.py
 ──────────────────────────
 Integration tests for the repository router endpoints:
   POST   /api/repo/index
+  POST   /api/repo/{repo_id}/refresh
   GET    /api/repo/list
   GET    /api/repo/{repo_id}
   DELETE /api/repo/{repo_id}
@@ -88,6 +89,51 @@ class TestIndexRepository:
     def test_index_whitespace_source_returns_422(self, client):
         resp = client.post("/api/repo/index", json={"source": "   "})
         assert resp.status_code == 422
+
+
+# ── POST /api/repo/{repo_id}/refresh ────────────────────────────────────────
+
+class TestRefreshRepository:
+    def test_refresh_success(self, client, mock_supabase, fake_repo, fake_repo_id):
+        select_chain = MagicMock()
+        select_chain.execute.return_value = MagicMock(data=[fake_repo])
+        mock_supabase.table.return_value.select.return_value.eq.return_value = select_chain
+
+        update_chain = MagicMock()
+        update_chain.execute.return_value = MagicMock(data=[])
+        mock_supabase.table.return_value.update.return_value.eq.return_value = update_chain
+
+        with patch("os.path.exists", return_value=False):
+            resp = client.post(f"/api/repo/{fake_repo_id}/refresh")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["repo_id"] == fake_repo_id
+        assert body["status"] == "indexing"
+
+    def test_refresh_404_if_not_found(self, client, mock_supabase, fake_repo_id):
+        chain = MagicMock()
+        chain.execute.return_value = MagicMock(data=[])
+        mock_supabase.table.return_value.select.return_value.eq.return_value = chain
+
+        resp = client.post(f"/api/repo/{fake_repo_id}/refresh")
+        assert resp.status_code == 404
+
+    def test_refresh_403_if_not_owner(self, client, mock_supabase, fake_repo_id):
+        repo_other = {
+            "id": fake_repo_id,
+            "user_id": "other-user",
+            "name": "test",
+            "source_url": "https://github.com/x/y",
+            "index_name": "y",
+            "status": "ready",
+        }
+        chain = MagicMock()
+        chain.execute.return_value = MagicMock(data=[repo_other])
+        mock_supabase.table.return_value.select.return_value.eq.return_value = chain
+
+        resp = client.post(f"/api/repo/{fake_repo_id}/refresh")
+        assert resp.status_code == 403
 
 
 # ── GET /api/repo/list ────────────────────────────────────────────────────────

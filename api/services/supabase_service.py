@@ -59,6 +59,16 @@ def update_repo_status(
     supabase.table("repositories").update(update_data).eq("id", repo_id).execute()
 
 
+def reset_repo_for_reindex(supabase: Client, repo_id: str) -> None:
+    """Prepare an existing repository record for a fresh indexing run."""
+    supabase.table("repositories").update({
+        "status": "indexing",
+        "file_count": None,
+        "node_count": None,
+        "indexed_at": None,
+    }).eq("id", repo_id).execute()
+
+
 def get_repo(supabase: Client, repo_id: str) -> Optional[Dict[str, Any]]:
     try:
         result = supabase.table("repositories").select("*").eq("id", repo_id).execute()

@@ -3,19 +3,19 @@ api/routers/repo.py
 ────────────────────
 Repository endpoints:
 
-  POST   /api/repo/index                  Start indexing a repo
+  POST   /api/repo/index                     Start indexing a repo
+  POST   /api/repo/{repo_id}/refresh         Reset and re-index an existing repo
   GET    /api/repo/{repo_id}/index-progress  SSE stream of indexing steps
-  GET    /api/repo/list                   List all repos for user
-  GET    /api/repo/{repo_id}              Get a single repo's status
-  DELETE /api/repo/{repo_id}              Delete a repo + its index from disk
+  GET    /api/repo/list                      List all repos for user
+  GET    /api/repo/{repo_id}                 Get a single repo's status
+  DELETE /api/repo/{repo_id}                 Delete a repo + its index from disk
 """
 
 import os
 import shutil
-import asyncio
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from supabase import Client
 
@@ -28,6 +28,29 @@ from app.utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _remove_repo_artifacts(index_name: str) -> None:
+    """Best-effort cleanup before delete/refresh to avoid stale index artifacts."""
+    index_path = os.path.join(INDEX_DIR, index_name)
+    if os.path.exists(index_path):
+        try:
+            shutil.rmtree(index_path)
+            logger.info(f"Removed index directory: {index_path}")
+
+            # Prevent stale SQLite handles in Chroma singleton after directory deletion.
+            import chromadb
+            chromadb.api.client.SharedSystemClient.clear_system_cache()
+        except Exception as e:
+            logger.warning(f"Could not remove index dir {index_path}: {e}")
+
+    repo_path = os.path.join(REPOS_DIR, index_name)
+    if os.path.exists(repo_path):
+        try:
+            shutil.rmtree(repo_path)
+            logger.info(f"Removed repo directory: {repo_path}")
+        except Exception as e:
+            logger.warning(f"Could not remove repo dir {repo_path}: {e}")
 
 
 @router.post("/index", response_model=IndexRepoResponse)
@@ -82,6 +105,39 @@ async def index_repository(
         index_name=name,
         status="indexing",
         message="Repository record created. Open the SSE stream to start indexing.",
+    )
+
+
+@router.post("/{repo_id}/refresh", response_model=IndexRepoResponse)
+async def refresh_repository(
+    repo_id: str,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Reset and re-index an existing repository to capture latest source changes."""
+    repo = supabase_service.get_repo(supabase, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if repo["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if repo.get("status") == "indexing":
+        return IndexRepoResponse(
+            repo_id=repo_id,
+            index_name=repo.get("index_name", repo.get("name", "repo")),
+            status="indexing",
+            message="Repository is already being indexed.",
+        )
+
+    index_name = repo.get("index_name", repo.get("name", "repo"))
+    _remove_repo_artifacts(index_name)
+    supabase_service.reset_repo_for_reindex(supabase, repo_id)
+
+    return IndexRepoResponse(
+        repo_id=repo_id,
+        index_name=index_name,
+        status="indexing",
+        message="Repository refresh started. Open the SSE stream to re-index latest changes.",
     )
 
 
@@ -164,30 +220,7 @@ async def delete_repository(
         raise HTTPException(status_code=403, detail="Access denied")
 
     index_name = repo["index_name"]
-
-    # Remove from disk (best-effort — don't fail if already gone)
-    index_path = os.path.join(INDEX_DIR, index_name)
-    if os.path.exists(index_path):
-        try:
-            shutil.rmtree(index_path)
-            logger.info(f"Removed index directory: {index_path}")
-            
-            # Clear ChromaDB's internal cache. 
-            # If we delete the directory while the singleton client holds an open SQLite handle,
-            # re-indexing the same repo immediately throws a "readonly database" error.
-            import chromadb
-            chromadb.api.client.SharedSystemClient.clear_system_cache()
-            
-        except Exception as e:
-            logger.warning(f"Could not remove index dir {index_path}: {e}")
-
-    repo_path = os.path.join(REPOS_DIR, index_name)
-    if os.path.exists(repo_path):
-        try:
-            shutil.rmtree(repo_path)
-            logger.info(f"Removed repo directory: {repo_path}")
-        except Exception as e:
-            logger.warning(f"Could not remove repo dir {repo_path}: {e}")
+    _remove_repo_artifacts(index_name)
 
     # Remove from DB (cascades to chats/messages via FK)
     supabase_service.delete_repo(supabase, repo_id)

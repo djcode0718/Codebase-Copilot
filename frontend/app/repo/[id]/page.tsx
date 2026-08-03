@@ -9,13 +9,13 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   MessageSquare, BarChart2, Trash2, FileCode2,
-  Layers, GitBranch, ExternalLink, Clock, Cpu, Activity, ArrowRight, ShieldCheck, Sparkles, Brain,
+  Layers, GitBranch, ExternalLink, Clock, Cpu, Activity, ArrowRight, ShieldCheck, Sparkles, Brain, RotateCcw,
 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { createClient } from '@/lib/supabase/client';
-import { getRepo, deleteRepo } from '@/lib/api';
+import { getRepo, deleteRepo, refreshRepo } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
@@ -49,6 +49,7 @@ export default function RepoOverviewPage() {
   const router = useRouter();
   const [repo, setRepo] = useState<Repo | null>(null);
   const [token, setToken] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -79,6 +80,20 @@ export default function RepoOverviewPage() {
     }
   }
 
+  async function handleRefresh() {
+    if (!token || !repo || refreshing || repo.status === 'indexing') return;
+
+    setRefreshing(true);
+    try {
+      const result = await refreshRepo(token, repoId);
+      toast.success(result.message || 'Repository refresh started');
+      router.push(`/repo/${repoId}/indexing`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to refresh repository');
+      setRefreshing(false);
+    }
+  }
+
   if (!repo) {
     return (
       <div className="p-8 space-y-4">
@@ -90,7 +105,8 @@ export default function RepoOverviewPage() {
   }
 
   const chips = detectTechChips(repo.name);
-  const formattedDate = new Date(repo.created_at).toLocaleString('en-US', {
+  const indexedAtValue = repo.indexed_at ?? repo.created_at;
+  const formattedDate = new Date(indexedAtValue).toLocaleString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
   });
   const kpis = [
@@ -166,6 +182,15 @@ export default function RepoOverviewPage() {
 
           <div className="flex flex-wrap items-center gap-2">
             <ExportMenu repo={repo} token={token} />
+            <Button
+              variant="outline"
+              className="border-border cursor-pointer"
+              onClick={handleRefresh}
+              disabled={!token || refreshing || repo.status === 'indexing'}
+            >
+              <RotateCcw size={14} className={`mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+              {repo.status === 'indexing' ? 'Indexing…' : refreshing ? 'Refreshing…' : 'Refresh index'}
+            </Button>
             <Button
               onClick={() => router.push(`/repo/${repoId}/chat`)}
               className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer"

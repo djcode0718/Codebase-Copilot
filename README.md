@@ -115,6 +115,13 @@ Every artifact is exportable:
 - Repository Data (`.json`) — structured data with full metadata
 - Chat History (`.md`) — complete conversation export with timestamps
 
+### 🔄 Repository Refresh
+
+From the repository overview page, you can now trigger a **Refresh index** action to ingest latest source changes:
+- Reuses the same repository record and ID
+- Clears stale local index/repo artifacts before re-indexing
+- Re-runs the indexing pipeline so health score and follow-up evaluations reflect current code
+
 ### 🧠 Hybrid Retrieval Pipeline
 
 Combines dense semantic retrieval, sparse keyword retrieval (BM25), and Reciprocal Rank Fusion (RRF), followed by an optional reranking pass — improving retrieval precision, contextual relevance, and architectural understanding.
@@ -380,6 +387,7 @@ The FastAPI backend is served at `http://localhost:8000` and exposes the followi
 | Method   | Endpoint                             | Description                                                   |
 | -------- | ------------------------------------- | -------------------------------------------------------------- |
 | `POST`   | `/api/repo/index`                     | Create a repo record and begin indexing (returns `repo_id`)    |
+| `POST`   | `/api/repo/{repo_id}/refresh`         | Reset an existing repo and re-index the latest source changes  |
 | `GET`    | `/api/repo/{repo_id}/index-progress`  | **SSE stream** — real-time indexing progress events            |
 | `GET`    | `/api/repo/list`                      | List all repositories for the authenticated user               |
 | `GET`    | `/api/repo/{repo_id}`                 | Get status and metadata for a single repository                |
@@ -793,19 +801,19 @@ POST /api/eval/run
 
 ## 🔮 Future Improvements
 
-**Reliability** — global error schema, request correlation IDs, retries with backoff, idempotent indexing/evaluation jobs.
+**Incremental Indexing** — detect changed files via hash/git diff and only re-embed deltas instead of full refresh runs.
 
-**Security** — expanded authz tests, secure integration lane beyond mocks, secret scanning, dependency and supply-chain scanning.
+**Background Job Control Plane** — move indexing/eval to queue workers with retry, cancellation, and job history for long-running tasks.
 
-**Evaluation** — parallel query execution, caching layers, stage-level metrics, richer scenario-based benchmark packs.
+**Evaluation Freshness Signals** — mark results stale when `indexed_at` is newer than latest eval, with one-click rerun and metric diffs.
 
-**Scalability** — queue-based workers, distributed cache, horizontal API scaling, database indexing/partition strategy.
+**Retrieval Observability** — persist per-query retrieval traces (hit positions, rerank lift, misses) and trend them in the evaluation UI.
 
-**Retrieval** — GraphRAG integration, dependency graph reasoning, AST-aware retrieval, cross-repository retrieval.
+**Shared Workspaces + RBAC** — repository sharing, role-based access, and audit trails for exports, evaluations, and destructive actions.
 
-**LLM** — tool-using agents, autonomous debugging workflows, structured reasoning pipelines.
+**Security Intelligence Pipeline** — wire dependency/secret scanners into intelligence cards with severity, owner, and remediation tracking.
 
-**Product Features** — multi-user collaboration on shared repositories, richer analytics on the eval dashboard, CI integration for the test suite.
+**Contract-Driven API Stability** — generate typed clients from versioned OpenAPI and add compatibility checks to prevent frontend/backend drift.
 
 ---
 

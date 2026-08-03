@@ -16,6 +16,7 @@ export interface Repo {
   node_count?: number;    // populated only after 'done' event
   llm_provider?: string;
   created_at: string;
+  indexed_at?: string;
 }
 
 // ── Indexing SSE ───────────────────────────────────────────────────────────

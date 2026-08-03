@@ -113,6 +113,23 @@ class TestUpdateRepoStatus:
         mock.table.assert_called_with("repositories")
 
 
+class TestResetRepoForReindex:
+    def test_sets_repo_back_to_indexing_state(self):
+        mock = MagicMock()
+        chain = MagicMock()
+        mock.table.return_value.update.return_value.eq.return_value = chain
+
+        supabase_service.reset_repo_for_reindex(mock, "repo-1")
+
+        mock.table.assert_called_with("repositories")
+        mock.table.return_value.update.assert_called_once_with({
+            "status": "indexing",
+            "file_count": None,
+            "node_count": None,
+            "indexed_at": None,
+        })
+
+
 class TestDeleteRepo:
     def test_calls_delete(self):
         mock = MagicMock()
