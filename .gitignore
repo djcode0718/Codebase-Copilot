@@ -33,4 +33,5 @@ data/index/
 .ipynb_checkpoints/
 
 # Frontend (Skipping per user request)
+src/ui-ux-pro-max/
 codebase-copilot-frontend/

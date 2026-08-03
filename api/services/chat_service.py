@@ -95,11 +95,21 @@ async def _generate_followup_suggestions(query: str, response_text: str) -> List
         )
         raw = str(response).strip()
         questions = [q.strip() for q in raw.split("\n") if q.strip()]
-        # Filter out invalid questions or preambles
-        questions = [q for q in questions if q.endswith("?")][:4]
-        if not questions:
-            questions = _default_followup_suggestions()
-        return questions
+        
+        # Clean prefixes like "1. ", "-", "*", "Q:"
+        cleaned = []
+        for q in questions:
+            q = q.lstrip("1234567890.-* \t")
+            if q.lower().startswith("question"):
+                q = q.split(":", 1)[-1].strip()
+            if len(q) > 10:
+                if not q.endswith("?"):
+                    q += "?"
+                cleaned.append(q)
+        
+        if cleaned:
+            return cleaned[:3]
+        return _default_followup_suggestions()
     except Exception as e:
         logger.warning(f"Failed to generate follow-up suggestions: {e}")
         return _default_followup_suggestions()

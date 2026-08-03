@@ -46,3 +46,23 @@ RESPONSE STYLE for common question types:
 
 
 
+# ─── FOLLOW-UP SUGGESTIONS ──────────────────────────────────────────────────────
+# Used for: dynamically generating next-turn questions for the user
+# Behaviour: reads the last response and history to suggest highly relevant follow-ups
+FOLLOWUP_SUGGESTIONS_PROMPT = """You are a helpful coding assistant. 
+Based on the conversation history and your most recent response below, 
+generate exactly 3 highly relevant follow-up questions that the user might want to ask next.
+
+Rules:
+- Make the questions concise, specific, and actionable.
+- Do NOT answer the questions, just list them.
+- Output exactly 3 questions, one per line.
+- Do NOT include numbers, bullets, or any other preamble/postamble. Just the 3 question strings.
+
+Conversation History:
+{history_str}
+
+Your Last Response:
+{full_response}
+
+Next Questions:"""

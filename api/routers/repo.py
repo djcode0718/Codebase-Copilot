@@ -157,6 +157,13 @@ async def delete_repository(
         try:
             shutil.rmtree(index_path)
             logger.info(f"Removed index directory: {index_path}")
+            
+            # Clear ChromaDB's internal cache. 
+            # If we delete the directory while the singleton client holds an open SQLite handle,
+            # re-indexing the same repo immediately throws a "readonly database" error.
+            import chromadb
+            chromadb.api.client.SharedSystemClient.clear_system_cache()
+            
         except Exception as e:
             logger.warning(f"Could not remove index dir {index_path}: {e}")
 

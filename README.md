@@ -337,7 +337,6 @@ If Python AI dependencies are missing (for example `llama_index`), the stream em
 | `GET`    | `/api/chat/{chat_id}/messages`         | Fetch full message history for a chat                  |
 | `GET`    | `/api/chat/list?repo_id=...`           | List all chats for a repository                        |
 | `DELETE` | `/api/chat/{chat_id}`                  | Delete a chat session and all its messages              |
-
 **Chat SSE Events**
 
 ```json
@@ -677,7 +676,6 @@ cd frontend
 npm install
 npm run dev
 ```
-
 The app is available at `http://localhost:3000`.
 
 ### 7️⃣ (Optional) Launch the Legacy Streamlit UI
@@ -731,7 +729,11 @@ POST /api/eval/run
 
 **Scalability** — queue-based workers, distributed cache, horizontal API scaling, database indexing/partition strategy.
 
-**Retrieval + Product** — GraphRAG integration, dependency graph reasoning, AST-aware retrieval, cross-repository retrieval, collaboration and analytics enhancements.
+**Retrieval** — GraphRAG integration, dependency graph reasoning, AST-aware retrieval, cross-repository retrieval.
+
+**LLM** — tool-using agents, autonomous debugging workflows, structured reasoning pipelines.
+
+**Product Features** — multi-user collaboration on shared repositories, richer analytics on the eval dashboard, CI integration for the test suite.
 
 ---
 
