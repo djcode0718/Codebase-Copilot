@@ -35,3 +35,5 @@ data/index/
 # Frontend (Skipping per user request)
 src/ui-ux-pro-max/
 codebase-copilot-frontend/
+.env
+frontend_implementation_plan2.md
