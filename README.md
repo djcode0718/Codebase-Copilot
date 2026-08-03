@@ -1,6 +1,6 @@
 # 🚀 Codebase Copilot
 
-> An AI-powered codebase intelligence system that understands repositories using hybrid retrieval, reranking, query routing, conversational memory, and evaluation-driven RAG pipelines — with a production-ready FastAPI backend, a full Next.js frontend, and a 200+ test suite.
+> An **Enterprise Repository Intelligence Platform** — your AI-powered Digital Twin and Knowledge Authority for any software repository. Combines hybrid RAG retrieval, architecture discovery, Mermaid diagram generation, security intelligence, health scoring, live visualization, and 18 intelligence capabilities into a unified workspace.
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white">
@@ -15,40 +15,105 @@
 
 ## 📌 Overview
 
-**Codebase Copilot** is a modular Retrieval-Augmented Generation (RAG) system designed to help developers understand large and unfamiliar repositories through natural language interaction.
+**Codebase Copilot** is a modular, enterprise-grade Repository Intelligence Platform built on Retrieval-Augmented Generation (RAG). It acts as your permanent **Repository Digital Twin** — an AI system that understands, analyzes, visualizes, and continuously learns from software repositories.
 
 The system combines:
 
-* hybrid retrieval
-* semantic search
-* BM25 keyword retrieval
-* reranking
-* query routing
-* conversational memory
-* evaluation pipelines
-* multi-LLM orchestration
+* hybrid retrieval (dense + BM25 + RRF)
+* semantic search & symbol analysis
+* reranking & dual-mode query routing
+* **architecture discovery & Mermaid diagram generation**
+* **repository health scoring (0–100)**
+* **12 intelligence action categories** (security, code quality, tech debt, onboarding, etc.)
+* **structured intelligence response format** (Answer / Architecture View / Engineering View / Business View / Evidence / Risks / Recommendations / Confidence)
+* **Mermaid diagram rendering** in chat responses
+* **export capabilities** (MD, JSON, chat history)
+* conversational memory & multi-turn context
+* evaluation pipelines (Hit Rate, MRR, Faithfulness, Relevancy, Latency)
+* multi-LLM orchestration (Ollama, Groq, Gemini, OpenAI)
 * a REST API backend (FastAPI)
 * persistent storage & auth (Supabase)
 * a production-grade Next.js frontend
 * an extensive automated test suite
 
-to provide both:
+to provide:
 
-✅ low-level code understanding
-✅ higher-order architectural reasoning
-
-Unlike simple repository chatbots, this project focuses heavily on:
-
-* retrieval quality
-* evaluation methodology
-* latency analysis
-* modular AI engineering
-* production-style RAG architecture
-* test coverage & reliability engineering
+✅ low-level code understanding (code lookup mode)
+✅ higher-order architectural reasoning (architectural mode)
+✅ business flow discovery and impact analysis
+✅ security intelligence and vulnerability identification
+✅ developer onboarding guides and mastery plans
+✅ repository digital twin with evolving architecture model
 
 ---
 
 ## ✨ Key Features
+
+### 🏛️ Repository Intelligence Platform
+
+The workspace goes far beyond chat — it's a full **Repository Intelligence Platform** with 12 pre-built intelligence capabilities:
+
+| Intelligence Action | What It Does |
+|---|---|
+| **Architecture Map** | Discovers system design, patterns, service relationships, generates Mermaid diagram |
+| **Security Review** | Analyzes auth, input validation, secrets, API risks with severity ratings |
+| **Business Flows** | Discovers all business capabilities, entry points, data sources, events |
+| **Code Quality** | Quality score (0–100), anti-patterns, tech debt, remediation plan |
+| **Impact Analysis** | Blast-radius analysis for change risk, dependency chain mapping |
+| **Test Intelligence** | Coverage gaps, missing tests, edge cases, suggested test scenarios |
+| **Onboarding Guide** | Role-based 30-minute → 30-day mastery plan |
+| **API Documentation** | Enterprise-grade API docs for all endpoints |
+| **Dependency Graph** | Module coupling, circular deps, critical path — Mermaid diagram |
+| **Engineering Report** | Executive summary for engineering managers, technical + business view |
+| **Tech Debt Scan** | Categorized debt inventory with prioritized remediation roadmap |
+| **Digital Twin** | Living architecture model with full Mermaid diagram |
+
+### 🧱 Why This Is Enterprise-Grade
+
+This platform is intentionally designed as a **defensible enterprise-grade system**, not just another AI coding tool.
+It combines:
+
+- **Repository Chat**
+- **Architecture Intelligence**
+- **Knowledge Graph Thinking** (code relationships and dependency reasoning)
+- **Business Flow Discovery**
+- **Code Validation**
+- **Live Visualization** (Mermaid + inspectable metadata)
+- **Conversation Export**
+- **Digital Twin Modeling**
+
+Together, these capabilities create a durable repository intelligence layer for engineering, architecture, security, and leadership workflows.
+
+### 📊 Repository Health Score
+
+Every repository now gets an automatic **Health Score (0–100, graded A–F)** computed from:
+- Indexing completeness
+- File and chunk coverage
+- LLM provider configuration
+- Codebase richness
+
+### 🏗️ Mermaid Diagram Rendering
+
+AI responses containing `mermaid` code blocks are **automatically rendered as interactive diagrams** directly in the chat interface — supporting architecture diagrams, sequence diagrams, dependency graphs, and more.
+
+### 📐 Structured Intelligence Responses
+
+Intelligence queries return **structured, collapsible response sections**:
+- **Answer** — direct, grounded response
+- **Architecture View** — system design perspective
+- **Engineering View** — implementation perspective
+- **Business View** — business capability context
+- **Evidence** — files, classes, methods cited
+- **Risks** — identified risks and severity
+- **Recommendations** — actionable next steps
+- **Confidence** — evidence-based confidence level
+
+### 📤 Export Capabilities
+
+Every artifact is exportable:
+- Repository Report (`.md`) — executive summary with metrics
+- Repository Data (`.json`) — structured data with full metadata
+- Chat History (`.md`) — complete conversation export with timestamps
 
 ### 🧠 Hybrid Retrieval Pipeline
 
@@ -57,6 +122,7 @@ Combines dense semantic retrieval, sparse keyword retrieval (BM25), and Reciproc
 ### 🔀 Intelligent Query Routing
 
 Queries are automatically classified into:
+
 
 | Mode            | Purpose                            |
 | --------------- | ----------------------------------- |
@@ -80,15 +146,21 @@ A full production-ready REST API layer that exposes all core functionality over 
 
 ### 🖥️ Next.js Frontend
 
-A complete production frontend replacing the earlier Streamlit prototype:
+A complete production frontend — an **Enterprise Repository Intelligence Workspace**:
 
 * Next.js 16 (App Router) + React 19 + TypeScript
 * Supabase Auth (sign up / sign in) with session middleware
 * Dashboard for managing indexed repositories
 * Live indexing progress view (SSE-driven pipeline steps)
-* Streaming chat interface with an "AI Inspector" panel showing retrieved files, query mode, and latency breakdowns
-* Evaluation results view
-* shadcn/ui + Tailwind CSS v4 component library, command palette, and animated UI (Framer Motion)
+* **Repository overview with Health Score (0–100, graded A–F)**
+* **12 Intelligence Action quick-launch cards** (Architecture, Security, Code Quality, Onboarding, etc.)
+* **Mermaid diagram auto-rendering** in chat responses
+* **Structured intelligence response sections** (collapsible: Answer, Architecture, Engineering, Business, Evidence, Risks, Recommendations, Confidence)
+* **Export menu** for MD reports, JSON data, and chat history
+* Streaming chat interface with "AI Inspector" panel showing retrieved files, query mode, and latency breakdowns
+* Evaluation results view with radar chart and metric cards
+* shadcn/ui + Tailwind CSS v4 + Framer Motion animations
+* Command palette for global workspace navigation
 
 ### 💬 Conversational Memory
 

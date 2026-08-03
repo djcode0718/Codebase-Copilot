@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Command, Plus, Search, Sparkles } from 'lucide-react';
+import { Command, Menu, Plus, Search, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Breadcrumbs from '@/components/layout/Breadcrumbs';
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
@@ -9,19 +9,32 @@ import { ThemeToggle } from '@/components/layout/ThemeToggle';
 interface TopbarProps {
   userEmail?: string;
   repoCount?: number;
+  onToggleSidebar?: () => void;
 }
 
 function openCommandPalette() {
   window.dispatchEvent(new Event('codebase:open-command-palette'));
 }
 
-export default function Topbar({ userEmail, repoCount = 0 }: TopbarProps) {
+export default function Topbar({ userEmail, repoCount = 0, onToggleSidebar }: TopbarProps) {
   const router = useRouter();
   const initials = userEmail?.[0]?.toUpperCase() ?? 'G';
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/60 bg-background/75 backdrop-blur-xl">
       <div className="flex items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-2 md:hidden">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            className="border-border/70"
+            onClick={onToggleSidebar}
+            aria-label="Open navigation"
+          >
+            <Menu size={14} />
+          </Button>
+        </div>
+
         <div className="min-w-0 flex-1">
           <Breadcrumbs />
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -69,4 +82,3 @@ export default function Topbar({ userEmail, repoCount = 0 }: TopbarProps) {
     </header>
   );
 }
-

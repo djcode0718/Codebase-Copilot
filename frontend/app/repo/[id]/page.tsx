@@ -1,15 +1,15 @@
 'use client';
 /**
  * app/repo/[id]/page.tsx
- * Repository overview: file count, chunk count, extension breakdown,
- * tech stack detection, quick actions.
+ * Repository overview: health score, intelligence actions, file count,
+ * chunk count, extension breakdown, tech stack detection, quick actions.
  */
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   MessageSquare, BarChart2, Trash2, FileCode2,
-  Layers, GitBranch, ExternalLink, Clock, Cpu, Activity, ArrowRight, ShieldCheck, Sparkles,
+  Layers, GitBranch, ExternalLink, Clock, Cpu, Activity, ArrowRight, ShieldCheck, Sparkles, Brain,
 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,9 @@ import { getRepo, deleteRepo } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
+import HealthScoreWidget from '@/components/repo/HealthScoreWidget';
+import IntelligenceActions from '@/components/repo/IntelligenceActions';
+import ExportMenu from '@/components/repo/ExportMenu';
 
 // Detect tech stack from index_name (simple heuristic for display)
 const TECH_CHIPS: Record<string, { label: string; color: string }> = {
@@ -103,7 +106,8 @@ export default function RepoOverviewPage() {
         ? 'Grounded chat and evaluations are available.'
         : repo.status === 'indexing'
         ? 'The ingestion pipeline is processing files and embeddings.'
-        : 'Review indexing logs or delete and re-run the repository.',
+        : 'Review indexing logs or delete and re-run the repository.'
+      ,
       tone: repo.status === 'ready' ? 'text-brand' : repo.status === 'indexing' ? 'text-amber-400' : 'text-destructive',
     },
     {
@@ -161,6 +165,7 @@ export default function RepoOverviewPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <ExportMenu repo={repo} />
             <Button
               onClick={() => router.push(`/repo/${repoId}/chat`)}
               className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer"
@@ -187,6 +192,7 @@ export default function RepoOverviewPage() {
         </div>
       </motion.section>
 
+      {/* KPI Row */}
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {kpis.map((stat, i) => (
           <motion.div
@@ -205,7 +211,14 @@ export default function RepoOverviewPage() {
         ))}
       </section>
 
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      {/* Health Score + Activity + Fast Actions */}
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[0.75fr_1.25fr_0.85fr]">
+        {/* Health Score */}
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.04 }}>
+          <HealthScoreWidget repo={repo} />
+        </motion.div>
+
+        {/* Activity */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -231,6 +244,7 @@ export default function RepoOverviewPage() {
           </div>
         </motion.div>
 
+        {/* Fast Actions */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -260,9 +274,35 @@ export default function RepoOverviewPage() {
                 <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </div>
             </Link>
+            <button
+              type="button"
+              onClick={() => {
+                const prompt = 'Generate a complete Repository Digital Twin: map all services, modules, APIs, databases, and external integrations. Create a Mermaid architecture diagram. Provide confidence level based on repository evidence.';
+                sessionStorage.setItem(`codebase:preload-prompt:${repoId}`, prompt);
+                router.push(`/repo/${repoId}/chat`);
+              }}
+              disabled={repo.status !== 'ready'}
+              className="group w-full block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-pink-500/30 hover:bg-pink-500/5 text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium flex items-center gap-1.5">
+                    <Brain size={13} className="text-pink-400" />
+                    Digital Twin
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">Generate living architecture model.</p>
+                </div>
+                <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+              </div>
+            </button>
           </div>
         </motion.div>
       </section>
+
+      {/* Intelligence Actions Grid */}
+      <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+        <IntelligenceActions repoId={repoId} disabled={repo.status !== 'ready'} />
+      </motion.section>
     </div>
   );
 }

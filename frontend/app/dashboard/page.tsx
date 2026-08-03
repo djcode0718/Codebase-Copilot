@@ -33,6 +33,9 @@ export default function DashboardPage() {
       const token = await getToken();
       return listRepos(token);
     },
+    staleTime: 20_000,
+    placeholderData: (prev) => prev,
+    initialData: () => queryClient.getQueryData<Repo[]>(['repos']),
   });
 
   const indexMutation = useMutation({
@@ -88,7 +91,7 @@ export default function DashboardPage() {
         transition={{ duration: 0.25 }}
         className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]"
       >
-        <div className="rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm">
+        <div className="widget-elevated rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-3">
               <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/70 px-3 py-1 text-xs text-muted-foreground">
@@ -116,7 +119,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm">
+        <div className="widget-elevated rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm">
           <div className="mb-4 flex items-center gap-2">
             <Layers size={15} className="text-brand" />
             <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Activity timeline</h2>
@@ -159,7 +162,7 @@ export default function DashboardPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.05, duration: 0.25 }}
         onSubmit={handleIndex}
-        className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
+        className="widget-elevated rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
       >
         <div className="mb-4 flex items-center gap-2">
           <GitBranch size={15} className="text-brand" />

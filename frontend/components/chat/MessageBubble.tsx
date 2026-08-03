@@ -2,13 +2,16 @@
 /**
  * components/chat/MessageBubble.tsx
  * Renders a single chat message — user or assistant.
- * Assistant messages show markdown, inline grounding summary, and expandable inspector data.
+ * Assistant messages show markdown, Mermaid diagrams, structured intelligence
+ * response sections, inline grounding summary, and expandable inspector data.
  */
 import { motion } from 'framer-motion';
-import { Copy, Check, Cpu } from 'lucide-react';
-import { useState } from 'react';
+import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2 } from 'lucide-react';
+import { useState, lazy, Suspense } from 'react';
 import { cn } from '@/lib/utils';
 import type { Message, QueryMode } from '@/lib/types';
+
+const MermaidBlock = lazy(() => import('@/components/chat/MermaidBlock'));
 
 const MODE_LABELS: Record<QueryMode, string> = {
   code_lookup: 'CODE LOOKUP',
@@ -19,6 +22,103 @@ const MODE_COLORS: Record<QueryMode, string> = {
   architectural: 'text-amber-400',
 };
 
+// ── Intelligence Section Definitions ─────────────────────────────────────────
+
+interface IntelSection {
+  key: string;
+  label: string;
+  icon: React.ElementType;
+  color: string;
+}
+
+const INTEL_SECTIONS: IntelSection[] = [
+  { key: 'Answer:',               label: 'Answer',                icon: Brain,         color: 'text-brand' },
+  { key: 'Architecture View:',    label: 'Architecture View',     icon: Layers,        color: 'text-blue-400' },
+  { key: 'Engineering View:',     label: 'Engineering View',      icon: Code2,         color: 'text-violet-400' },
+  { key: 'Business View:',        label: 'Business View',         icon: BarChart2,     color: 'text-amber-400' },
+  { key: 'Evidence:',             label: 'Evidence',              icon: Lightbulb,     color: 'text-cyan-400' },
+  { key: 'Risks:',                label: 'Risks',                 icon: AlertTriangle, color: 'text-red-400' },
+  { key: 'Recommendations:',      label: 'Recommendations',       icon: Shield,        color: 'text-green-400' },
+  { key: 'Confidence:',           label: 'Confidence',            icon: BarChart2,     color: 'text-muted-foreground' },
+];
+
+function parseIntelligenceSections(content: string): { plain: string; sections: { def: IntelSection; content: string }[] } | null {
+  // Detect if content has intelligence structured sections
+  const hasIntelSections = INTEL_SECTIONS.some((s) =>
+    content.includes(`**${s.key}`) || content.includes(`\n${s.key}`) || content.includes(`\n**${s.key}`)
+  );
+  if (!hasIntelSections) return null;
+
+  const sections: { def: IntelSection; content: string }[] = [];
+  let remaining = content;
+
+  for (const def of INTEL_SECTIONS) {
+    const patterns = [`**${def.key}**`, `**${def.key}`, `${def.key}`];
+    let found = false;
+    for (const pattern of patterns) {
+      const idx = remaining.indexOf(pattern);
+      if (idx !== -1) {
+        // Find next section start
+        let nextIdx = remaining.length;
+        for (const other of INTEL_SECTIONS) {
+          if (other.key === def.key) continue;
+          for (const op of [`**${other.key}**`, `**${other.key}`, `${other.key}`]) {
+            const ni = remaining.indexOf(op, idx + pattern.length);
+            if (ni !== -1 && ni < nextIdx) nextIdx = ni;
+          }
+        }
+        const sectionContent = remaining.slice(idx + pattern.length, nextIdx).trim();
+        if (sectionContent) {
+          sections.push({ def, content: sectionContent });
+        }
+        found = true;
+        break;
+      }
+    }
+    if (found) {
+      // remove the processed section from remaining to avoid re-matching
+    }
+  }
+
+  if (sections.length === 0) return null;
+  // plain is content before first section
+  const firstSection = INTEL_SECTIONS[0];
+  const plainPatterns = [`**${firstSection.key}**`, `**${firstSection.key}`, `${firstSection.key}`];
+  let plainEnd = content.length;
+  for (const p of plainPatterns) {
+    const idx = content.indexOf(p);
+    if (idx !== -1 && idx < plainEnd) plainEnd = idx;
+  }
+
+  return { plain: content.slice(0, plainEnd).trim(), sections };
+}
+
+// ── Section Accordion ─────────────────────────────────────────────────────────
+
+function IntelSectionBlock({ def, content }: { def: IntelSection; content: string }) {
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <div className="rounded-xl border border-border/60 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 bg-secondary/60 hover:bg-secondary/80 transition-colors cursor-pointer text-left"
+      >
+        <def.icon size={12} className={def.color} />
+        <span className={cn('text-xs font-semibold tracking-wide uppercase', def.color)}>{def.label}</span>
+        <span className="ml-auto text-muted-foreground">
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
+      </button>
+      {expanded && (
+        <div className="px-3 py-2.5 bg-background/50 text-foreground">
+          <SimpleMarkdown content={content} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface MessageBubbleProps {
   message: Message;
   onInspect?: () => void;
@@ -27,13 +127,30 @@ interface MessageBubbleProps {
 }
 
 function SimpleMarkdown({ content }: { content: string }) {
-  // Lightweight markdown render — avoids heavy library dependency
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
 
   while (i < lines.length) {
     const line = lines[i];
+
+    // Mermaid fenced code block
+    if (line.startsWith('```mermaid')) {
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      const mermaidCode = codeLines.join('\n');
+      elements.push(
+        <Suspense key={`mermaid-${i}`} fallback={<div className="h-24 bg-muted/40 rounded-xl animate-pulse flex items-center justify-center text-xs text-muted-foreground">Loading diagram…</div>}>
+          <MermaidBlock code={mermaidCode} />
+        </Suspense>
+      );
+      i++;
+      continue;
+    }
 
     // Fenced code block
     if (line.startsWith('```')) {
@@ -67,17 +184,14 @@ function SimpleMarkdown({ content }: { content: string }) {
       elements.push(<h2 key={i} className="font-heading font-semibold text-base mt-4 mb-1">{line.slice(3)}</h2>);
     } else if (line.startsWith('# ')) {
       elements.push(<h1 key={i} className="font-heading font-bold text-lg mt-4 mb-1">{line.slice(2)}</h1>);
-    // List items
     } else if (line.startsWith('- ') || line.startsWith('* ')) {
       elements.push(
         <li key={i} className="ml-4 text-sm leading-relaxed list-disc">
           {renderInline(line.slice(2))}
         </li>
       );
-    // Blank line
     } else if (line.trim() === '') {
       elements.push(<div key={i} className="h-2" />);
-    // Regular paragraph
     } else {
       elements.push(
         <p key={i} className="text-sm leading-relaxed">
@@ -92,7 +206,6 @@ function SimpleMarkdown({ content }: { content: string }) {
 }
 
 function renderInline(text: string): React.ReactNode {
-  // Bold + inline code
   const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
   return parts.map((part, i) => {
     if (part.startsWith('`') && part.endsWith('`')) {
@@ -108,6 +221,8 @@ function renderInline(text: string): React.ReactNode {
 export default function MessageBubble({ message, onInspect, isInspected, index }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
+
+  const intelParsed = !isUser ? parseIntelligenceSections(message.content) : null;
 
   async function handleCopy() {
     await navigator.clipboard.writeText(message.content);
@@ -138,14 +253,28 @@ export default function MessageBubble({ message, onInspect, isInspected, index }
           </div>
         ) : (
           <div className="space-y-2 rounded-2xl border border-border bg-card/70 p-4 shadow-sm shadow-black/5">
-            {/* Markdown content */}
-            <div className="text-foreground">
-              <SimpleMarkdown content={message.content} />
-            </div>
+            {intelParsed ? (
+              /* Intelligence structured sections */
+              <div className="space-y-2">
+                {intelParsed.plain && (
+                  <div className="text-foreground">
+                    <SimpleMarkdown content={intelParsed.plain} />
+                  </div>
+                )}
+                {intelParsed.sections.map((s) => (
+                  <IntelSectionBlock key={s.def.key} def={s.def} content={s.content} />
+                ))}
+              </div>
+            ) : (
+              /* Regular markdown content */
+              <div className="text-foreground">
+                <SimpleMarkdown content={message.content} />
+              </div>
+            )}
 
             {/* Grounding summary bar */}
             {(message.query_mode || message.retrieved_files?.length || message.latency_ms) && (
-              <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap pt-1 border-t border-border/60">
                 {message.query_mode && (
                   <span className={cn('font-mono font-semibold tracking-wide', MODE_COLORS[message.query_mode])}>
                     {MODE_LABELS[message.query_mode]}

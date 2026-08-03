@@ -13,11 +13,20 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import MessageBubble from '@/components/chat/MessageBubble';
 import AIInspector from '@/components/chat/AIInspector';
+import ExportMenu from '@/components/repo/ExportMenu';
 import { useChatStream, type StreamedResponse } from '@/hooks/useChatStream';
 import { createClient } from '@/lib/supabase/client';
-import { createChatSession, getSuggestions, listChats, getMessages } from '@/lib/api';
+import { createChatSession, getSuggestions, listChats, getMessages, getRepo } from '@/lib/api';
 import { toast } from 'sonner';
-import type { Message } from '@/lib/types';
+import type { Message, Repo } from '@/lib/types';
+
+const ARCHITECTURE_QUERY_RE = /(architect|architecture|diagram|mermaid|service map|component relationships|data flow|executive summary)/i;
+
+function withMermaidGuardrails(query: string): string {
+  if (!ARCHITECTURE_QUERY_RE.test(query)) return query;
+
+  return `${query}\n\nOutput guardrails:\n- Include exactly one Mermaid diagram inside a fenced code block starting with \`\`\`mermaid.\n- Use valid Mermaid syntax only. Prefer \`flowchart TD\` for architecture diagrams.\n- Do NOT mix \`graph/flowchart\` with \`participant\` declarations.\n- Use simple alphanumeric node ids (e.g., FE, API, DB, IDX) and readable labels in brackets.\n- After the diagram, provide a short confidence level with evidence references.`;
+}
 
 export default function ChatPage() {
   const { id: repoId } = useParams<{ id: string }>();
@@ -29,6 +38,7 @@ export default function ChatPage() {
   const [inspectedIndex, setInspectedIndex] = useState<number | null>(null);
   const [inspectorData, setInspectorData] = useState<StreamedResponse | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
+  const [repo, setRepo] = useState<Repo | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -81,6 +91,21 @@ export default function ChatPage() {
         toast.error(err instanceof Error ? err.message : 'Failed to initialize chat');
       }
 
+      // Load repo info for export menu
+      try {
+        const r = await getRepo(t, repoId);
+        setRepo(r);
+      } catch { /* non-critical */ }
+
+      // Check for preloaded intelligence prompt from IntelligenceActions
+      const preloadKey = `codebase:preload-prompt:${repoId}`;
+      const preloadPrompt = sessionStorage.getItem(preloadKey);
+      if (preloadPrompt) {
+        sessionStorage.removeItem(preloadKey);
+        // Delay slightly to allow session to settle
+        setTimeout(() => setInput(preloadPrompt), 300);
+      }
+
       // Fetch default repo suggestions ONLY if there is no chat history and no saved suggestions in localStorage
       if (!hasHistory && !hasSavedSuggestions) {
         try {
@@ -118,18 +143,21 @@ export default function ChatPage() {
   const handleSend = useCallback(async (query: string) => {
     if (!chatId || !token || !query.trim() || streaming) return;
 
+    const userQuery = query.trim();
+    const modelQuery = withMermaidGuardrails(userQuery);
+
     const userMsg: Message = {
       id: `u-${Date.now()}`,
       chat_id: chatId,
       role: 'user',
-      content: query.trim(),
+      content: userQuery,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-    const result = await sendMessage(chatId, query.trim(), token);
+    const result = await sendMessage(chatId, modelQuery, token);
     if (result) {
       const assistantMsg: Message = {
         id: `a-${Date.now()}`,
@@ -185,7 +213,7 @@ export default function ChatPage() {
         animate={{ opacity: 1, y: 0 }}
         className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
       >
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div className="space-y-3">
             <Link
               href={`/repo/${repoId}`}
@@ -212,6 +240,14 @@ export default function ChatPage() {
               </div>
             ))}
           </div>
+          {repo && (
+            <div className="self-start xl:self-auto">
+              <ExportMenu
+                repo={repo}
+                chatMessages={messages.map((m) => ({ role: m.role, content: m.content, created_at: m.created_at }))}
+              />
+            </div>
+          )}
         </div>
       </motion.section>
 

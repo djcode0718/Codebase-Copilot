@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -105,9 +105,9 @@
   --sidebar-border: #d7dee9;
   --sidebar-ring: #16a34a;
 
-  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-body: 'Inter', 'IBM Plex Sans', system-ui, sans-serif;
   --font-code: 'JetBrains Mono', 'Fira Code', monospace;
-  --font-heading: 'JetBrains Mono', monospace;
+  --font-heading: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --background-grad: radial-gradient(circle at top left, rgba(22, 163, 74, 0.12), transparent 28%), radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 22%), linear-gradient(180deg, #f8fbff 0%, #f6f8fc 100%);
 }
 
@@ -157,17 +157,20 @@
     font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
     /* scroll-behavior handled via data-scroll-behavior attribute per Next.js guidance */
   }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-body);
+    letter-spacing: -0.005em;
     background-image: var(--background-grad);
     background-attachment: fixed;
   }
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-heading);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.018em;
+    line-height: 1.22;
   }
   code, pre, kbd, samp {
     font-family: var(--font-code);
@@ -212,6 +215,21 @@
   .surface-glass {
     background: color-mix(in oklab, var(--card) 88%, transparent);
     backdrop-filter: blur(18px);
+  }
+
+  .widget-elevated {
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.05),
+      0 14px 35px rgba(15, 23, 42, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    border-color: color-mix(in oklab, var(--border) 86%, var(--brand));
+  }
+
+  .widget-elevated:hover {
+    box-shadow:
+      0 2px 4px rgba(15, 23, 42, 0.07),
+      0 18px 45px rgba(15, 23, 42, 0.11),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2);
   }
 }
 

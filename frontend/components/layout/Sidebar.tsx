@@ -5,7 +5,7 @@
  */
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import {
   GitBranch,
   LayoutDashboard,
@@ -35,13 +35,20 @@ const STORAGE_KEY = 'codebase-copilot.sidebar.collapsed';
 interface SidebarProps {
   repos?: Repo[];
   userEmail?: string;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 function openCommandPalette() {
   window.dispatchEvent(new Event('codebase:open-command-palette'));
 }
 
-export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
+export default function Sidebar({
+  repos = [],
+  userEmail,
+  mobileOpen = false,
+  onMobileClose,
+}: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -74,6 +81,22 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
     window.dispatchEvent(new Event('codebase-sidebar-collapsed-change'));
   }
 
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = '';
+      };
+    }
+
+    document.body.style.overflow = '';
+    return undefined;
+  }, [mobileOpen]);
+
+  function closeMobileIfOpen() {
+    onMobileClose?.();
+  }
+
   const sortedRepos = useMemo(
     () => [...repos].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')),
     [repos]
@@ -82,18 +105,30 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
 
   async function handleSignOut() {
     await supabase.auth.signOut();
+    closeMobileIfOpen();
     router.push('/auth/sign-in');
     router.refresh();
     toast.success('Signed out');
   }
 
   return (
-    <aside
-      className={cn(
-        'flex h-screen flex-col border-r border-sidebar-border bg-sidebar/95 text-sidebar-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-all duration-200',
-        collapsed ? 'w-20' : 'w-72'
-      )}
-    >
+    <>
+      <div
+        className={cn(
+          'fixed inset-0 z-40 bg-black/35 backdrop-blur-[1px] transition-opacity md:hidden',
+          mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+        )}
+        onClick={closeMobileIfOpen}
+        aria-hidden="true"
+      />
+
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 flex h-screen flex-col border-r border-sidebar-border bg-sidebar/95 text-sidebar-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-all duration-200 md:static md:z-auto md:translate-x-0',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          collapsed ? 'w-[18.5rem] max-w-[88vw] md:w-20' : 'w-[18.5rem] max-w-[88vw] md:w-72'
+        )}
+      >
       {/* Brand + collapse */}
       <div
         className={cn(
@@ -101,7 +136,12 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
           collapsed ? 'flex-col justify-center gap-3 px-2 py-3' : 'justify-between'
         )}
       >
-        <Link href="/dashboard" className={cn('flex items-center gap-2 group', collapsed && 'justify-center')} title="Codebase Copilot">
+        <Link
+          href="/dashboard"
+          onClick={closeMobileIfOpen}
+          className={cn('flex items-center gap-2 group', collapsed && 'justify-center')}
+          title="Codebase Copilot"
+        >
           <div className="w-10 h-10 rounded-2xl bg-brand/15 border border-brand/20 flex items-center justify-center flex-shrink-0 shadow-lg shadow-brand/10">
             <Terminal size={15} className="text-brand" />
           </div>
@@ -138,7 +178,10 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
         <div className={cn('grid gap-2', collapsed && 'place-items-center')}>
           <button
             type="button"
-            onClick={openCommandPalette}
+            onClick={() => {
+              openCommandPalette();
+              closeMobileIfOpen();
+            }}
             className={cn(
               'flex items-center gap-2 rounded-2xl border border-sidebar-border bg-sidebar-accent/50 px-3 py-2.5 text-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors',
               collapsed && 'h-11 w-11 justify-center px-0'
@@ -150,7 +193,10 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
           </button>
           <button
             type="button"
-            onClick={() => router.push('/dashboard')}
+            onClick={() => {
+              closeMobileIfOpen();
+              router.push('/dashboard');
+            }}
             className={cn(
               'flex items-center gap-2 rounded-2xl bg-brand px-3 py-2.5 text-sm font-semibold text-green-950 hover:bg-green-400 transition-colors shadow-sm shadow-brand/10',
               collapsed && 'h-11 w-11 justify-center px-0'
@@ -171,6 +217,7 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
             <Link
               key={item.href}
               href={item.href}
+              onClick={closeMobileIfOpen}
               className={cn(
                 'flex items-center gap-2.5 rounded-2xl px-3 py-2.5 text-sm font-medium transition-all duration-150 group',
                 collapsed && 'justify-center px-0',
@@ -225,6 +272,7 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
                   <Link
                     key={repo.id}
                     href={href}
+                    onClick={closeMobileIfOpen}
                     className={cn(
                       'flex items-center gap-2 rounded-2xl px-3 py-2.5 text-sm transition-all duration-150 group',
                       collapsed && 'justify-center px-0',
@@ -277,5 +325,6 @@ export default function Sidebar({ repos = [], userEmail }: SidebarProps) {
         </div>
       </div>
     </aside>
+    </>
   );
 }

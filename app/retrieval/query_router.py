@@ -45,7 +45,21 @@ _ARCHITECTURAL_KEYWORDS = {
     "architecture", "design", "pattern", "suggest", "recommend",
     "weakness", "problem", "issue", "missing", "add", "future",
     "scale", "performance", "tradeoff", "compare", "overview",
-    "summarize", "summary", "what is this", "what does this project"
+    "summarize", "summary", "what is this", "what does this project",
+    "technical debt", "debt", "roadmap", "business impact", "severity",
+    "prioritized", "prioritised", "categorize", "category",
+    "knowledge graph", "business flow", "digital twin", "repository health"
+}
+
+_STRONG_ARCHITECTURAL_PHRASES = {
+    "technical debt",
+    "business flow",
+    "knowledge graph",
+    "digital twin",
+    "executive summary",
+    "architecture diagram",
+    "architectural diagram",
+    "repository health",
 }
 
 _CLASSIFIER_PROMPT = """You are a query classifier for a codebase Q&A system.
@@ -71,6 +85,11 @@ def classify_query(query: str) -> QueryMode:
     2. LLM classifier — for ambiguous queries
     """
     query_lower = query.lower()
+
+    # Stage 0: strong high-level intent phrases should never fall back to code lookup.
+    if any(phrase in query_lower for phrase in _STRONG_ARCHITECTURAL_PHRASES):
+        logger.info("Query classified as ARCHITECTURAL (strong-phrase fast-path)")
+        return QueryMode.ARCHITECTURAL
 
     # Stage 1: Fast keyword pre-check
     arch_score = sum(1 for kw in _ARCHITECTURAL_KEYWORDS if kw in query_lower)
