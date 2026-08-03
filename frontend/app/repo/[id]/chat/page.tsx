@@ -18,7 +18,7 @@ import { useChatStream, type StreamedResponse } from '@/hooks/useChatStream';
 import { createClient } from '@/lib/supabase/client';
 import { createChatSession, getSuggestions, listChats, getMessages, getRepo } from '@/lib/api';
 import { toast } from 'sonner';
-import type { Message, Repo } from '@/lib/types';
+import type { Message, Repo, QueryMode } from '@/lib/types';
 
 const ARCHITECTURE_QUERY_RE = /(architect|architecture|diagram|mermaid|service map|component relationships|data flow|executive summary)/i;
 
@@ -199,6 +199,10 @@ export default function ChatPage() {
     });
   }
 
+  const isDev = process.env.NODE_ENV !== 'production';
+  const lastAssistantMode = [...messages].reverse().find((m) => m.role === 'assistant' && m.query_mode)?.query_mode ?? null;
+  const routedMode: QueryMode | null = pendingMetadata?.queryMode ?? lastAssistantMode;
+
   const showEmptyState = messages.length === 0 && !streaming;
   const threadStats = [
     { label: 'Messages', value: messages.length },
@@ -215,13 +219,20 @@ export default function ChatPage() {
       >
         <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div className="space-y-3">
-            <Link
-              href={`/repo/${repoId}`}
-              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ArrowLeft size={16} />
-              Repository overview
-            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={`/repo/${repoId}`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ArrowLeft size={16} />
+                Repository overview
+              </Link>
+              {isDev && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-violet-50 px-2 py-1 text-[11px] font-medium text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
+                  mode: {routedMode ?? 'pending'}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border bg-background/70">
                 <MessageSquare size={16} className="text-brand" />
@@ -357,6 +368,20 @@ export default function ChatPage() {
             </div>
 
             <div className="border-t border-border px-5 py-4">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <Link
+                  href={`/repo/${repoId}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ArrowLeft size={12} />
+                  Back to repository
+                </Link>
+                {isDev && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
+                    routed: {routedMode ?? 'pending'}
+                  </span>
+                )}
+              </div>
               <div className="flex items-end gap-2 rounded-[1.25rem] border border-border bg-background/70 p-3 shadow-sm shadow-black/5">
                 <Textarea
                   ref={textareaRef}

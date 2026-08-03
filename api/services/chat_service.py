@@ -27,7 +27,17 @@ from llama_index.core.memory import ChatMemoryBuffer
 
 from app.llm.llm_client import get_llm, get_embed_model
 from app.retrieval.query_router import QueryMode
-from app.config import USE_COLBERT, TOP_K_CHUNKS, TOP_K_RERANK
+from app.config import (
+    USE_COLBERT,
+    TOP_K_CHUNKS,
+    TOP_K_RERANK,
+    LLM_PROVIDER,
+    GROQ_API_KEY,
+    GEMINI_API_KEY,
+    OPENAI_API_KEY,
+    OLLAMA_BASE_URL,
+    OLLAMA_LLM_MODEL,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,6 +63,60 @@ def _ensure_llamaindex():
         Settings.llm = get_llm()
     if Settings.embed_model is None:
         Settings.embed_model = get_embed_model()
+
+
+def _is_rate_limit_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    return (
+        "rate limit" in msg
+        or "rate_limit_exceeded" in msg
+        or "too many requests" in msg
+        or "error code: 429" in msg
+        or "quota" in msg
+    )
+
+
+def _build_fallback_llms() -> List[Tuple[str, object]]:
+    """Build fallback LLM candidates in priority order, excluding the active provider."""
+    active = (LLM_PROVIDER or "").lower()
+
+    if active == "groq":
+        providers_order = ["ollama", "openai", "gemini"]
+    elif active == "openai":
+        providers_order = ["ollama", "groq", "gemini"]
+    elif active == "gemini":
+        providers_order = ["ollama", "groq", "openai"]
+    else:
+        providers_order = ["groq", "openai", "gemini"]
+
+    candidates: List[Tuple[str, object]] = []
+    for provider in providers_order:
+        try:
+            if provider == "ollama":
+                from llama_index.llms.ollama import Ollama
+                candidates.append(
+                    (
+                        "ollama",
+                        Ollama(
+                            model=OLLAMA_LLM_MODEL,
+                            base_url=OLLAMA_BASE_URL,
+                            request_timeout=120.0,
+                        ),
+                    )
+                )
+            elif provider == "groq" and GROQ_API_KEY:
+                from llama_index.llms.groq import Groq
+                candidates.append(("groq", Groq(model="llama-3.1-8b-instant", api_key=GROQ_API_KEY)))
+            elif provider == "openai" and OPENAI_API_KEY:
+                from llama_index.llms.openai import OpenAI
+                candidates.append(("openai", OpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY)))
+            elif provider == "gemini" and GEMINI_API_KEY:
+                from llama_index.llms.gemini import Gemini
+                candidates.append(("gemini", Gemini(model="models/gemini-1.5-flash", api_key=GEMINI_API_KEY)))
+        except Exception as build_err:
+            logger.warning(f"Skipping fallback provider '{provider}': {build_err}")
+
+    return candidates
 
 
 _FOLLOWUP_SUGGESTION_PROMPT = """You are helping a developer understand a codebase.
@@ -90,12 +154,25 @@ async def _generate_followup_suggestions(query: str, response_text: str) -> List
     prompt = _FOLLOWUP_SUGGESTION_PROMPT.format(query=query, response=response_text[:3000])
 
     try:
-        response = await asyncio.get_event_loop().run_in_executor(
-            None, Settings.llm.complete, prompt
-        )
-        raw = str(response).strip()
+        llm_candidates: List[Tuple[str, object]] = [("primary", Settings.llm)] + _build_fallback_llms()
+        raw = ""
+
+        for idx, (provider_name, llm_obj) in enumerate(llm_candidates):
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None, llm_obj.complete, prompt
+                )
+                raw = str(response).strip()
+                if idx > 0:
+                    logger.warning(f"Follow-up suggestions switched to fallback provider '{provider_name}'.")
+                break
+            except Exception as llm_err:
+                if idx < len(llm_candidates) - 1 and _is_rate_limit_error(llm_err):
+                    continue
+                raise
+
         questions = [q.strip() for q in raw.split("\n") if q.strip()]
-        
+
         # Clean prefixes like "1. ", "-", "*", "Q:"
         cleaned = []
         for q in questions:
@@ -106,7 +183,7 @@ async def _generate_followup_suggestions(query: str, response_text: str) -> List
                 if not q.endswith("?"):
                     q += "?"
                 cleaned.append(q)
-        
+
         if cleaned:
             return cleaned[:3]
         return _default_followup_suggestions()
@@ -244,18 +321,42 @@ async def stream_chat_response(
 
         # stream_complete is available on all LlamaIndex LLM wrappers
         # (Ollama, Groq, Gemini, OpenAI all support it)
-        stream_response = await asyncio.get_event_loop().run_in_executor(
-            None, Settings.llm.stream_complete, full_prompt
-        )
+        llm_candidates: List[Tuple[str, object]] = [("primary", Settings.llm)] + _build_fallback_llms()
+        stream_succeeded = False
+        last_llm_error: Optional[Exception] = None
 
-        # stream_response is a generator of CompletionResponseStreamChunk
-        for chunk in stream_response:
-            delta = chunk.delta or ""
-            if delta:
-                full_response += delta
-                yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
-                # Small yield to let the event loop breathe
-                await asyncio.sleep(0)
+        for idx, (provider_name, llm_obj) in enumerate(llm_candidates):
+            try:
+                stream_response = await asyncio.get_event_loop().run_in_executor(
+                    None, llm_obj.stream_complete, full_prompt
+                )
+
+                # stream_response is a generator of CompletionResponseStreamChunk
+                for chunk in stream_response:
+                    delta = chunk.delta or ""
+                    if delta:
+                        full_response += delta
+                        yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
+                        # Small yield to let the event loop breathe
+                        await asyncio.sleep(0)
+
+                stream_succeeded = True
+                if idx > 0:
+                    logger.warning(f"Primary LLM failed; fallback provider '{provider_name}' succeeded.")
+                break
+            except Exception as llm_err:
+                last_llm_error = llm_err
+                if idx < len(llm_candidates) - 1 and _is_rate_limit_error(llm_err):
+                    next_provider = llm_candidates[idx + 1][0]
+                    logger.warning(
+                        f"LLM provider '{provider_name}' hit rate limits/quota. "
+                        f"Retrying with fallback '{next_provider}'."
+                    )
+                    continue
+                break
+
+        if not stream_succeeded:
+            raise last_llm_error or RuntimeError("LLM streaming failed with no fallback available")
 
         t_llm_ms = int((time.time() - t_llm_start) * 1000)
 

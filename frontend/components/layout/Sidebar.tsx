@@ -52,7 +52,12 @@ export default function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
-  const collapsed = useSyncExternalStore(
+  const isHydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+  const collapsedStored = useSyncExternalStore(
     (onStoreChange) => {
       window.addEventListener('storage', onStoreChange);
       window.addEventListener('codebase-sidebar-collapsed-change', onStoreChange);
@@ -70,6 +75,7 @@ export default function Sidebar({
     },
     () => false
   );
+  const collapsed = isHydrated ? collapsedStored : false;
 
   function setCollapsed(nextValue: boolean) {
     try {
@@ -126,7 +132,7 @@ export default function Sidebar({
         className={cn(
           'fixed inset-y-0 left-0 z-50 flex h-screen flex-col border-r border-sidebar-border bg-sidebar/95 text-sidebar-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-all duration-200 md:static md:z-auto md:translate-x-0',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
-          collapsed ? 'w-[18.5rem] max-w-[88vw] md:w-20' : 'w-[18.5rem] max-w-[88vw] md:w-72'
+          collapsed ? 'w-20 max-w-20 md:w-20' : 'w-[18.5rem] max-w-[88vw] md:w-72'
         )}
       >
       {/* Brand + collapse */}
