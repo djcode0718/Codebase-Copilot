@@ -83,6 +83,34 @@ def get_repos_for_user(supabase: Client, user_id: str) -> List[Dict[str, Any]]:
         return []
 
 
+def get_inflight_repo_for_source(
+    supabase: Client,
+    user_id: str,
+    source_url: str,
+) -> Optional[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("repositories")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("source_url", source_url)
+            .eq("status", "indexing")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        data = getattr(result, "data", None)
+        if not isinstance(data, list) or not data:
+            return None
+        first = data[0]
+        return first if isinstance(first, dict) else None
+    except Exception as e:
+        logger.warning(
+            f"get_inflight_repo_for_source failed for user_id='{user_id}', source='{source_url}': {e}"
+        )
+        return None
+
+
 def delete_repo(supabase: Client, repo_id: str) -> None:
     supabase.table("repositories").delete().eq("id", repo_id).execute()
 

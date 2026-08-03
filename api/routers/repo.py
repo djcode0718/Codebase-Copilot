@@ -46,6 +46,20 @@ async def index_repository(
     """
     # Derive a name from the source URL / path
     source = body.source
+
+    existing_inflight = supabase_service.get_inflight_repo_for_source(
+        supabase,
+        user_id=user_id,
+        source_url=source,
+    )
+    if existing_inflight:
+        return IndexRepoResponse(
+            repo_id=existing_inflight["id"],
+            index_name=existing_inflight.get("index_name", existing_inflight.get("name", "repo")),
+            status="indexing",
+            message="Repository is already being indexed. Reusing the active indexing session.",
+        )
+
     if source.startswith("http"):
         name = source.rstrip("/").split("/")[-1]
         if name.endswith(".git"):

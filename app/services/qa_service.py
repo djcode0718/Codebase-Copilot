@@ -124,6 +124,10 @@ def _get_indexes(index_name: str):
     Load vector index from ChromaDB and rebuild BM25 retriever.
     Results cached for the session to avoid reloading on every query.
     """
+    index_name = (index_name or "").strip()
+    if not index_name:
+        raise ValueError("index_name cannot be empty when loading indexes")
+
     if index_name in _index_cache:
         return _index_cache[index_name]
 

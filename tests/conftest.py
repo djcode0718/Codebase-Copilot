@@ -12,7 +12,7 @@ All fixtures use mocking so tests run without:
 import sys
 import os
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 # ── Ensure project root is importable ─────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +30,23 @@ os.environ.setdefault("USE_FAST_LLM", "false")
 os.environ.setdefault("USE_COLBERT", "false")
 os.environ.setdefault("INDEX_DIR", "/tmp/test_indices")
 os.environ.setdefault("REPOS_DIR", "/tmp/test_repos")
+
+
+def pytest_collection_modifyitems(config, items):
+    integration_files = {
+        "test_health.py",
+    }
+
+    for item in items:
+        filename = os.path.basename(str(item.fspath))
+
+        if filename in integration_files or filename.startswith("test_router_"):
+            item.add_marker(pytest.mark.integration)
+            continue
+
+        # Default all remaining tests to unit unless explicitly marked otherwise.
+        if "slow" not in item.keywords and "integration" not in item.keywords:
+            item.add_marker(pytest.mark.unit)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

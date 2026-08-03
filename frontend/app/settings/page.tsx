@@ -2,13 +2,14 @@
 /**
  * app/settings/page.tsx
  */
-import { useState, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import { motion } from 'framer-motion';
 import { Settings, User, Cpu, AlertTriangle, SunMedium, MoonStar, Monitor } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { getApiBaseUrl } from '@/lib/api';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -19,11 +20,9 @@ const subscribe = () => () => {};
 export default function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme, resolvedTheme } = useTheme();
-  const [apiBase, setApiBase] = useState(
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
-  );
   const mounted = useSyncExternalStore(subscribe, () => true, () => false);
   const selectedTheme = mounted ? (theme === 'system' ? (resolvedTheme ?? 'system') : theme) : undefined;
+  const apiBase = mounted ? getApiBaseUrl() : '';
 
   async function handleSignOut() {
     await createClient().auth.signOut();

@@ -9,6 +9,47 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
 
+function Get-DevLanIpAddress {
+    $allConfigurations = @(Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object {
+        $_.NetAdapter.Status -eq "Up" -and $_.IPv4Address
+    })
+
+    $configurations = @($allConfigurations | Where-Object {
+        $_.IPv4DefaultGateway -and $_.IPv4DefaultGateway.NextHop
+    })
+    if (-not $configurations) {
+        $configurations = $allConfigurations
+    }
+
+    $candidates = foreach ($config in $configurations) {
+        foreach ($address in $config.IPv4Address) {
+            if (-not $address -or [string]::IsNullOrWhiteSpace($address.IPAddress)) { continue }
+            if ($address.IPAddress -eq "127.0.0.1" -or $address.IPAddress -like "169.254.*") { continue }
+
+            [pscustomobject]@{
+                IPAddress = $address.IPAddress
+                IsPrivate = $address.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)'
+                InterfaceMetric = if ($null -ne $config.InterfaceMetric) { $config.InterfaceMetric } else { 9999 }
+                InterfaceAlias = [string]$config.InterfaceAlias
+            }
+        }
+    }
+
+    $preferred = $candidates |
+        Sort-Object @{ Expression = { if ($_.InterfaceAlias -match '(?i)(vEthernet|Hyper-V|WSL|Docker|VMware|Virtual|VPN|Tailscale|ZeroTier)') { 1 } else { 0 } }; Ascending = $true }, @{ Expression = 'IsPrivate'; Descending = $true }, @{ Expression = 'InterfaceMetric'; Ascending = $true } |
+        Select-Object -First 1
+
+    if ($preferred -and $preferred.IPAddress) {
+        return $preferred.IPAddress
+    }
+
+    $fallback = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+        $_.IPAddress -and $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -notlike '0.0.0.0'
+    } | Select-Object -First 1
+
+    return $fallback.IPAddress
+}
+
 $backendPythonCandidates = @(
     (Join-Path $root ".venv\Scripts\python.exe")
 )
@@ -33,6 +74,19 @@ function Stop-ProcessTree {
 
 function Get-PortPids {
     param([int]$Port)
+
+    # Prefer OS TCP table for stable listening checks; fall back to netstat if unavailable.
+    try {
+        $tcp = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+            Select-Object -ExpandProperty OwningProcess -Unique
+        if ($tcp) {
+            return @($tcp | Where-Object { $_ -gt 0 -and $_ -ne $currentPid })
+        }
+    }
+    catch {
+        # Fall back to netstat parsing below.
+    }
+
     $pids = @()
     foreach ($line in (netstat -ano -p tcp | Select-String ":$Port\s")) {
         $pidToken = ($line -split "\s+")[-1]
@@ -77,6 +131,25 @@ Get-WmiObject Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
 Cleanup-Ports
 Start-Sleep -Milliseconds 400
 
+$devLanIp = Get-DevLanIpAddress
+$backendOrigin = "http://localhost:8000"
+$frontendOrigin = "http://localhost:3000"
+if ($devLanIp) {
+    $backendOrigin = "http://${devLanIp}:8000"
+    $frontendOrigin = "http://${devLanIp}:3000"
+    $env:DEV_ORIGIN_HOST = $devLanIp
+    $env:NEXT_PUBLIC_DEV_ORIGIN_HOST = $devLanIp
+}
+$devAllowedOrigins = @(
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    $devLanIp
+) | Where-Object { $_ } | Select-Object -Unique
+$env:DEV_ALLOWED_ORIGINS = $devAllowedOrigins -join ','
+$env:FRONTEND_URL = $frontendOrigin
+$env:NEXT_PUBLIC_API_BASE_URL = $backendOrigin
+
 # Capture Ctrl+C for immediate shutdown
 $cancelEvent = Register-ObjectEvent -InputObject ([Console]) -EventName CancelKeyPress -Action {
     $eventArgs.Cancel = $true
@@ -87,7 +160,7 @@ Write-Host "Starting backend (uvicorn) ..." -ForegroundColor Cyan
 $backend = Start-Job -Name "backend" -ScriptBlock {
     param($r, $pythonExe)
     Set-Location $r
-    & $pythonExe -m uvicorn api.main:app --reload --port 8000 --reload-dir api --reload-dir app --reload-exclude "data/repos/*" --reload-exclude "data/index/*" 2>&1
+    & $pythonExe -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000 --reload-dir api --reload-dir app --reload-exclude=data/repos/* --reload-exclude=data/index/* 2>&1
 } -ArgumentList $root, $backendPython
 
 Write-Host "Starting frontend (npm run dev) ..." -ForegroundColor Cyan
@@ -134,9 +207,13 @@ function Write-JobOutput {
 }
 
 function Wait-ForPortsReady {
-    param([int[]]$Ports, [int]$TimeoutSeconds = 30)
+    param([int[]]$Ports, [int]$TimeoutSeconds = 120)
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $backendDownChecks = 0
+    $frontendDownChecks = 0
+    $maxStartupDownChecks = 20  # ~5 seconds with 250ms loop
+
     while ((Get-Date) -lt $deadline) {
         # Stream startup logs while waiting so failures are visible immediately.
         Write-JobOutput -Job $backend -Prefix "backend" -Color "DarkCyan"
@@ -148,9 +225,34 @@ function Wait-ForPortsReady {
 
         if ($allReady) { return $true }
 
-        # Fail fast only if a startup job exited and its port is still down.
-        if (($backend.State -in @("Failed","Stopped","Completed") -and -not $backendPortUp) -or
-            ($frontend.State -in @("Failed","Stopped","Completed") -and -not $frontendPortUp)) {
+        if ($backend.State -eq "Failed" -or $frontend.State -eq "Failed") {
+            return $false
+        }
+
+        # If either startup command already finished and the target port is still down,
+        # fail quickly instead of waiting for the full timeout window.
+        if ($backend.State -in @("Completed", "Stopped") -and -not $backendPortUp) {
+            return $false
+        }
+        if ($frontend.State -in @("Completed", "Stopped") -and -not $frontendPortUp) {
+            return $false
+        }
+
+        # Fail quickly if the wrapper job is no longer alive and its port never came up.
+        if ($backendPortUp -or $backend.State -in @("Running", "NotStarted")) {
+            $backendDownChecks = 0
+        } else {
+            $backendDownChecks++
+        }
+
+        if ($frontendPortUp -or $frontend.State -in @("Running", "NotStarted")) {
+            $frontendDownChecks = 0
+        } else {
+            $frontendDownChecks++
+        }
+
+        if ($backendDownChecks -ge $maxStartupDownChecks -or
+            $frontendDownChecks -ge $maxStartupDownChecks) {
             return $false
         }
 
@@ -160,11 +262,18 @@ function Wait-ForPortsReady {
     return $false
 }
 
-$ready = Wait-ForPortsReady -Ports $managedPorts -TimeoutSeconds 30
+$startupTimeoutSeconds = 60
+if ($env:STARTUP_TIMEOUT_SECONDS) {
+    [int]$parsedStartupTimeout = 0
+    if ([int]::TryParse($env:STARTUP_TIMEOUT_SECONDS, [ref]$parsedStartupTimeout)) {
+        $startupTimeoutSeconds = $parsedStartupTimeout
+    }
+}
+$ready = Wait-ForPortsReady -Ports $managedPorts -TimeoutSeconds $startupTimeoutSeconds
 if ($ready) {
     Write-Host "Both servers are running. Press Ctrl+C to stop." -ForegroundColor Green
-    Write-Host "  Backend:  http://localhost:8000" -ForegroundColor Yellow
-    Write-Host "  Frontend: http://localhost:3000" -ForegroundColor Yellow
+    Write-Host "  Backend:  $backendOrigin" -ForegroundColor Yellow
+    Write-Host "  Frontend: $frontendOrigin" -ForegroundColor Yellow
     Write-Host ""
 } else {
     Write-Host "One or more servers exited before becoming ready." -ForegroundColor Red
@@ -173,9 +282,9 @@ if ($ready) {
     $global:shutdownRequested = $true
 }
 
-$backendPortMisses = 0
-$frontendPortMisses = 0
-$maxPortMissesBeforeShutdown = 10  # ~2 seconds with 200ms loop
+$backendDownChecks = 0
+$frontendDownChecks = 0
+$maxDownChecksBeforeShutdown = 150  # ~30 seconds with 200ms loop
 
 
 try {
@@ -192,28 +301,33 @@ try {
             }
         }
 
-        # Only immediate-fail on explicit job failure.
-        if ($backend.State -eq "Failed" -or
-            $frontend.State -eq "Failed") {
+        # Immediate-fail on explicit job failure.
+        if ($backend.State -eq "Failed" -or $frontend.State -eq "Failed") {
             $global:shutdownRequested = $true
         }
 
-        if (Get-PortPids -Port 8000) {
-            $backendPortMisses = 0
+        $backendPortUp = [bool](Get-PortPids -Port 8000)
+        $frontendPortUp = [bool](Get-PortPids -Port 3000)
+
+        # Detect real exits: port is gone and wrapper job is no longer alive.
+        if ($backendPortUp -or $backend.State -in @("Running", "NotStarted")) {
+            $backendDownChecks = 0
         } else {
-            $backendPortMisses++
+            $backendDownChecks++
         }
 
-        if (Get-PortPids -Port 3000) {
-            $frontendPortMisses = 0
+        if ($frontendPortUp -or $frontend.State -in @("Running", "NotStarted")) {
+            $frontendDownChecks = 0
         } else {
-            $frontendPortMisses++
+            $frontendDownChecks++
         }
 
-        if ($backendPortMisses -ge $maxPortMissesBeforeShutdown) {
+        if ($backendDownChecks -ge $maxDownChecksBeforeShutdown) {
+            Write-Host "Backend appears down for an extended period; initiating shutdown." -ForegroundColor Red
             $global:shutdownRequested = $true
         }
-        if ($frontendPortMisses -ge $maxPortMissesBeforeShutdown) {
+        if ($frontendDownChecks -ge $maxDownChecksBeforeShutdown) {
+            Write-Host "Frontend appears down for an extended period; initiating shutdown." -ForegroundColor Red
             $global:shutdownRequested = $true
         }
         Start-Sleep -Milliseconds 200

@@ -154,7 +154,13 @@ class TestCleanDirectory:
         target = tmp_path / "target.txt"
         target.write_text("real file")
         link = tmp_path / "link.txt"
-        link.symlink_to(target)
+        try:
+            link.symlink_to(target)
+        except OSError as exc:
+            # Windows may require elevated privileges or Developer Mode for symlinks.
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Symlink creation requires additional Windows privileges")
+            raise
 
         clean_directory(str(tmp_path))
 

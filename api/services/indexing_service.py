@@ -226,6 +226,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _indexing_in_flight: set = set()
+_indexing_sources_in_flight: set = set()
 
 
 def _check_ollama_running() -> bool:
@@ -405,6 +406,7 @@ async def indexing_event_generator(
     supabase,
 ) -> AsyncGenerator[str, None]:
     from api.services import supabase_service
+    source_key = source.strip().lower()
 
     # ── Check if already indexed or in-flight ──────────────────────────────────
     repo = supabase_service.get_repo(supabase, repo_id)
@@ -437,8 +439,19 @@ async def indexing_event_generator(
         yield f"data: {json.dumps(in_flight_event)}\n\n"
         return
 
+    if source_key in _indexing_sources_in_flight:
+        logger.warning(f"Indexing already in progress for source {source}. Rejecting concurrent attempt.")
+        in_flight_source_event = {
+            'step': 'error',
+            'message': 'Indexing already in progress for this source. Please wait for it to complete.',
+            'progress': 0,
+        }
+        yield f"data: {json.dumps(in_flight_source_event)}\n\n"
+        return
+
     # Mark this repo as in-flight
     _indexing_in_flight.add(repo_id)
+    _indexing_sources_in_flight.add(source_key)
 
     progress_queue: asyncio.Queue = asyncio.Queue()
 
@@ -495,3 +508,4 @@ async def indexing_event_generator(
             indexing_task.cancel()
         # Always remove from in-flight set when done
         _indexing_in_flight.discard(repo_id)
+        _indexing_sources_in_flight.discard(source_key)

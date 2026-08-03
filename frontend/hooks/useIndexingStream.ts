@@ -6,6 +6,7 @@
  * and maintains ordered PipelineStep state.
  */
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { getApiBaseUrl } from '@/lib/api';
 import type { IndexingEvent, IndexingStepName, PipelineStep, StepStatus } from '@/lib/types';
 
 // Maps SSE step → human-readable label + description
@@ -60,7 +61,7 @@ export function useIndexingStream(
   const startTimeRef = useRef<number>(0);
   const stepStartRef = useRef<Partial<Record<IndexingStepName, number>>>({});
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+  const apiBase = getApiBaseUrl();
 
   const updateStep = useCallback((
     stepId: IndexingStepName,

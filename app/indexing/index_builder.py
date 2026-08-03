@@ -46,6 +46,10 @@ print("EMBED MODEL TYPE:", type(Settings.embed_model))
 
 def _get_chroma_collection(index_name: str):
     """Return (chroma_client, collection) for a given index name."""
+    index_name = (index_name or "").strip()
+    if not index_name:
+        raise ValueError("index_name cannot be empty")
+
     chroma_path = os.path.join(INDEX_DIR, index_name, "chroma")
     os.makedirs(chroma_path, exist_ok=True)
     client = chromadb.PersistentClient(path=chroma_path)
@@ -137,6 +141,10 @@ def build_bm25_retriever(nodes: List[BaseNode], top_k: int = TOP_K_CHUNKS) -> BM
 
 def load_vector_index(index_name: str) -> VectorStoreIndex:
     """Load an existing VectorStoreIndex from ChromaDB (no re-embedding)."""
+    index_name = (index_name or "").strip()
+    if not index_name:
+        raise ValueError("index_name cannot be empty")
+
     _, collection = _get_chroma_collection(index_name)
     vector_store = ChromaVectorStore(chroma_collection=collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)

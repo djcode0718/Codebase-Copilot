@@ -12,6 +12,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from '@/components/ui/command';
+import { listRepos } from '@/lib/api';
 import { createClient } from '@/lib/supabase/client';
 import type { Repo } from '@/lib/types';
 import { FolderGit2, LayoutDashboard, LogOut, Plus, Search, Settings } from 'lucide-react';
@@ -57,13 +58,8 @@ export function CommandPalette() {
           data: { session },
         } = await supabase.auth.getSession();
         if (session?.access_token) {
-          const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/repo/list`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            setRepos(Array.isArray(data) ? data : []);
-          }
+          const data = await listRepos(session.access_token);
+          setRepos(Array.isArray(data) ? data : []);
         }
       } catch (error) {
         console.error('Failed to fetch repos for command palette', error);

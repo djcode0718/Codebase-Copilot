@@ -145,3 +145,24 @@ class TestRunEvaluation:
     def test_empty_body_returns_422(self, client):
         resp = client.post("/api/eval/run", json={})
         assert resp.status_code == 422
+
+    def test_empty_index_name_returns_400(self, client, mock_supabase, fake_repo_id, fake_user_id):
+        repo_blank_index = {
+            "id": fake_repo_id,
+            "user_id": fake_user_id,
+            "status": "ready",
+            "name": "test",
+            "source_url": "https://github.com/x/y",
+            "index_name": "",
+        }
+        chain = MagicMock()
+        chain.execute.return_value = MagicMock(data=[repo_blank_index])
+        mock_supabase.table.return_value.select.return_value.eq.return_value = chain
+
+        resp = client.post(
+            "/api/eval/run",
+            json={"repo_id": fake_repo_id, "index_name": "   "},
+        )
+        assert resp.status_code == 400
+        assert "index_name" in resp.json().get("detail", "")
+

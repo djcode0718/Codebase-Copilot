@@ -354,6 +354,10 @@ def evaluate_single(
 def run_evaluation(index_name: str) -> EvalSummary:
     from app.config import USE_COLBERT
 
+    index_name = (index_name or "").strip()
+    if not index_name:
+        raise ValueError("index_name cannot be empty. Re-index the repository and retry evaluation.")
+
     print("\n" + "━" * 60)
     print("  CODEBASE COPILOT — EVALUATION SUITE")
     print("━" * 60)

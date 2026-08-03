@@ -6,6 +6,7 @@
  * Verified against chat_service.py SSE event shapes.
  */
 import { useState, useRef, useCallback } from 'react';
+import { getApiBaseUrl } from '@/lib/api';
 import type { ChatEvent, RetrievedFile, QueryMode } from '@/lib/types';
 
 export interface StreamedResponse {
@@ -33,7 +34,7 @@ export function useChatStream(): UseChatStreamResult {
   const [pendingMetadata, setPendingMetadata] = useState<Omit<StreamedResponse, 'content'> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+  const apiBase = getApiBaseUrl();
 
   const cancelStream = useCallback(() => {
     abortRef.current?.abort();

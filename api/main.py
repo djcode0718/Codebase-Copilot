@@ -121,13 +121,32 @@ app = FastAPI(
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
+frontend_url = os.getenv("FRONTEND_URL")
+dev_allowed_origins = os.getenv("DEV_ALLOWED_ORIGINS", "")
+allow_origins = {
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://[::1]:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://[::1]:3001",
+}
+if frontend_url and frontend_url.strip():
+    allow_origins.add(frontend_url.strip())
+for origin in dev_allowed_origins.split(","):
+    origin = origin.strip()
+    if not origin:
+        continue
+    if origin.startswith("http://") or origin.startswith("https://"):
+        allow_origins.add(origin)
+    else:
+        allow_origins.add(f"http://{origin}:3000")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        os.getenv("FRONTEND_URL", "http://localhost:3000"),
-    ],
+    allow_origins=sorted(allow_origins),
+    # Accept localhost and RFC1918 hosts for local/mobile dev frontends.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

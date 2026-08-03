@@ -52,7 +52,14 @@ async def run_evaluation(
     if repo["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    index_name = body.index_name
+    request_index_name = (body.index_name or "").strip()
+    repo_index_name = (repo.get("index_name") or "").strip()
+    index_name = request_index_name or repo_index_name
+    if not index_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Repository has no valid index_name. Re-index the repository before running evaluation.",
+        )
 
     async def eval_generator():
         try:
