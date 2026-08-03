@@ -225,6 +225,8 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_indexing_in_flight: set = set()
+
 
 def _check_ollama_running() -> bool:
     """Returns True if Ollama is reachable on localhost:11434."""
@@ -404,6 +406,40 @@ async def indexing_event_generator(
 ) -> AsyncGenerator[str, None]:
     from api.services import supabase_service
 
+    # ── Check if already indexed or in-flight ──────────────────────────────────
+    repo = supabase_service.get_repo(supabase, repo_id)
+    if not repo:
+        yield f"data: {json.dumps({'step': 'error', 'message': 'Repository not found.', 'progress': 0})}\n\n"
+        return
+
+    # If already successfully indexed, return the existing index metadata
+    if repo["status"] == "ready":
+        logger.info(f"Repository {repo_id} is already indexed. Returning existing metadata.")
+        ready_event = {
+            'step': 'done',
+            'message': f'Repository already indexed: {repo.get("file_count", 0)} files, {repo.get("node_count", 0)} chunks.',
+            'progress': 100,
+            'file_count': repo.get("file_count", 0),
+            'node_count': repo.get("node_count", 0),
+            'index_name': repo.get("index_name", ""),
+        }
+        yield f"data: {json.dumps(ready_event)}\n\n"
+        return
+
+    # If currently being indexed by another request, reject with 409-like error
+    if repo_id in _indexing_in_flight:
+        logger.warning(f"Indexing already in progress for repo {repo_id}. Rejecting concurrent attempt.")
+        in_flight_event = {
+            'step': 'error',
+            'message': 'Indexing already in progress for this repository. Please wait for it to complete.',
+            'progress': 0,
+        }
+        yield f"data: {json.dumps(in_flight_event)}\n\n"
+        return
+
+    # Mark this repo as in-flight
+    _indexing_in_flight.add(repo_id)
+
     progress_queue: asyncio.Queue = asyncio.Queue()
 
     indexing_task = asyncio.ensure_future(
@@ -413,11 +449,12 @@ async def indexing_event_generator(
     try:
         while True:
             try:
-                event = await asyncio.wait_for(progress_queue.get(), timeout=180.0)
+                # Timeout increased to 5 minutes (300.0 seconds)
+                event = await asyncio.wait_for(progress_queue.get(), timeout=300.0)
             except asyncio.TimeoutError:
                 timeout_event = {
                     "step": "error",
-                    "message": "Indexing timed out after 3 minutes.",
+                    "message": "Indexing timed out after 5 minutes.",
                     "progress": 100,
                 }
                 yield f"data: {json.dumps(timeout_event)}\n\n"
@@ -456,3 +493,5 @@ async def indexing_event_generator(
     finally:
         if not indexing_task.done():
             indexing_task.cancel()
+        # Always remove from in-flight set when done
+        _indexing_in_flight.discard(repo_id)
