@@ -10,7 +10,14 @@ import type {
   Message,
   CreateSessionResponse,
   EvalSummary,
+  HealthCategoryDetailResponse,
+  HealthHistoryResponse,
+  HealthLatestResponse,
+  HealthRun,
   SuggestionsResponse,
+  ChatSearchResponse,
+  ConversationSummary,
+  MemoryExportResponse,
 } from './types';
 
 const DEFAULT_API_BASE = 'http://localhost:8000';
@@ -159,16 +166,43 @@ export function indexProgressUrl(repoId: string): string {
 /** POST /api/chat/session — create a new chat session */
 export async function createChatSession(
   token: string,
-  repoId: string
+  repoId: string,
+  sessionType: 'main' | 'quick_ask' = 'quick_ask'
 ): Promise<CreateSessionResponse> {
   const res = await fetch(apiUrl('/api/chat/session'), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ repo_id: repoId, session_type: sessionType }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to create chat session');
+  }
+  return res.json();
+}
+
+export async function createQuickAskSession(token: string, repoId: string): Promise<CreateSessionResponse> {
+  const res = await fetch(apiUrl('/api/chat/session/quick-ask'), {
     method: 'POST',
     headers: authHeaders(token),
     body: JSON.stringify({ repo_id: repoId }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? 'Failed to create chat session');
+    throw new Error(err.detail ?? 'Failed to create quick ask session');
+  }
+  return res.json();
+}
+
+export async function createMainSession(token: string, repoId: string): Promise<CreateSessionResponse> {
+  const res = await fetch(apiUrl('/api/chat/session/main'), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ repo_id: repoId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to load main session');
   }
   return res.json();
 }
@@ -180,6 +214,99 @@ export async function listChats(token: string, repoId: string): Promise<Chat[]> 
     cache: 'no-store',
   });
   if (!res.ok) throw new Error('Failed to list chats');
+  return res.json();
+}
+
+export async function listChatSessions(
+  token: string,
+  repoId: string,
+  opts?: { includeArchived?: boolean; includeDeleted?: boolean; limit?: number; offset?: number; search?: string }
+): Promise<Chat[]> {
+  const params = new URLSearchParams({ repo_id: repoId });
+  if (opts?.includeArchived !== undefined) params.set('include_archived', String(opts.includeArchived));
+  if (opts?.includeDeleted !== undefined) params.set('include_deleted', String(opts.includeDeleted));
+  if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+  if (opts?.offset !== undefined) params.set('offset', String(opts.offset));
+  if (opts?.search) params.set('search', opts.search);
+
+  const res = await fetch(apiUrl(`/api/chat/sessions?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to list sessions');
+  return res.json();
+}
+
+export async function updateChatSession(
+  token: string,
+  chatId: string,
+  payload: Partial<Pick<Chat, 'title' | 'is_pinned' | 'is_favorite' | 'is_archived'>>
+): Promise<Chat> {
+  const res = await fetch(apiUrl(`/api/chat/${chatId}`), {
+    method: 'PATCH',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to update chat session');
+  return res.json();
+}
+
+export async function restoreChat(token: string, chatId: string): Promise<void> {
+  const res = await fetch(apiUrl(`/api/chat/${chatId}/restore`), {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Failed to restore chat');
+}
+
+export async function deleteAllChats(token: string, repoId: string): Promise<void> {
+  const res = await fetch(apiUrl(`/api/chat/repo/${repoId}/all`), {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Failed to delete all chats');
+}
+
+export async function searchChats(token: string, repoId: string, query: string): Promise<ChatSearchResponse> {
+  const params = new URLSearchParams({ repo_id: repoId, q: query });
+  const res = await fetch(apiUrl(`/api/chat/search?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to search chats');
+  return res.json();
+}
+
+export async function getConversationSummary(token: string, chatId: string): Promise<ConversationSummary> {
+  const res = await fetch(apiUrl(`/api/chat/${chatId}/summary`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load conversation summary');
+  return res.json();
+}
+
+export async function regenerateConversationSummary(token: string, chatId: string): Promise<ConversationSummary> {
+  const res = await fetch(apiUrl(`/api/chat/${chatId}/summary/regenerate`), {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Failed to regenerate summary');
+  return res.json();
+}
+
+export async function exportRepositoryMemory(
+  token: string,
+  repoId: string,
+  format: 'md' | 'txt' | 'json' | 'pdf' | 'docx',
+  chatIds?: string[]
+): Promise<MemoryExportResponse> {
+  const params = new URLSearchParams({ repo_id: repoId, format });
+  if (chatIds && chatIds.length > 0) params.set('chat_ids', chatIds.join(','));
+  const res = await fetch(apiUrl(`/api/chat/export?${params.toString()}`), {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Failed to export repository memory');
   return res.json();
 }
 
@@ -219,6 +346,72 @@ export async function getSuggestions(
     cache: 'no-store',
   });
   if (!res.ok) throw new Error('Failed to get suggestions');
+  return res.json();
+}
+
+// -- Repository Health Intelligence ------------------------------------------
+
+/** POST /api/repo/{repo_id}/health/run */
+export async function runRepositoryHealthAnalysis(
+  token: string,
+  repoId: string
+): Promise<HealthRun> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/health/run`), {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to run repository health analysis');
+  }
+  return res.json();
+}
+
+/** GET /api/repo/{repo_id}/health/latest */
+export async function getLatestRepositoryHealth(
+  token: string,
+  repoId: string
+): Promise<HealthLatestResponse> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/health/latest`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load repository health intelligence');
+  return res.json();
+}
+
+/** GET /api/repo/{repo_id}/health/history */
+export async function getRepositoryHealthHistory(
+  token: string,
+  repoId: string,
+  days = 30,
+  limit = 30
+): Promise<HealthHistoryResponse> {
+  const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/health/history?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load repository health history');
+  return res.json();
+}
+
+/** GET /api/repo/{repo_id}/health/categories/{category} */
+export async function getRepositoryHealthCategoryDetails(
+  token: string,
+  repoId: string,
+  category: string,
+  runId?: string
+): Promise<HealthCategoryDetailResponse> {
+  const params = new URLSearchParams();
+  if (runId) params.set('run_id', runId);
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/health/categories/${encodeURIComponent(category)}${suffix}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load category details');
   return res.json();
 }
 

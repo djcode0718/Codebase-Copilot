@@ -19,7 +19,7 @@ import { getRepo, deleteRepo, refreshRepo } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
-import HealthScoreWidget from '@/components/repo/HealthScoreWidget';
+import RepositoryHealthDashboard from '@/components/repo/RepositoryHealthDashboard';
 import IntelligenceActions from '@/components/repo/IntelligenceActions';
 import ExportMenu from '@/components/repo/ExportMenu';
 
@@ -44,6 +44,7 @@ function detectTechChips(name: string): typeof TECH_CHIPS[string][] {
     .slice(0, 4);
 }
 
+
 export default function RepoOverviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
   const router = useRouter();
@@ -57,12 +58,14 @@ export default function RepoOverviewPage() {
       const t = data.session?.access_token ?? '';
       setToken(t);
       if (!t) return;
+
       try {
         const r = await getRepo(t, repoId);
         setRepo(r);
       } catch {
         toast.error('Repository not found');
         router.push('/dashboard');
+        return;
       }
     }
     load();
@@ -196,7 +199,7 @@ export default function RepoOverviewPage() {
               className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer"
             >
               <MessageSquare size={14} className="mr-2" />
-              Chat
+              Repository Chat
             </Button>
             <Button
               variant="outline"
@@ -236,12 +239,8 @@ export default function RepoOverviewPage() {
         ))}
       </section>
 
-      {/* Health Score + Activity + Fast Actions */}
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[0.75fr_1.25fr_0.85fr]">
-        {/* Health Score */}
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.04 }}>
-          <HealthScoreWidget repo={repo} />
-        </motion.div>
+      {/* Repository Intelligence Summary */}
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.25fr_0.85fr]">
 
         {/* Activity */}
         <motion.div
@@ -284,8 +283,8 @@ export default function RepoOverviewPage() {
             <Link href={`/repo/${repoId}/chat`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-brand/30 hover:bg-brand/5">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-medium">Start chatting</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Ask architectural or code-level questions.</p>
+                  <p className="font-medium">Repository Chat</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Start or continue the repository knowledge thread.</p>
                 </div>
                 <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </div>
@@ -323,6 +322,15 @@ export default function RepoOverviewPage() {
           </div>
         </motion.div>
       </section>
+
+      {/* Repository Health Intelligence Dashboard */}
+      <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }}>
+        <RepositoryHealthDashboard
+          repoId={repoId}
+          token={token}
+          disabled={repo.status !== 'ready'}
+        />
+      </motion.section>
 
       {/* Intelligence Actions Grid */}
       <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>

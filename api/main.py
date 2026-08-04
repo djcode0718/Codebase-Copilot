@@ -104,6 +104,7 @@ Make sure you're running from the project root (codebase-copilot/):
 
 import sys
 import os
+import asyncio
 
 # Ensure project root is on the path so 'app' module is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -111,7 +112,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import repo, chat, eval, suggestions
+from api.routers import repo, chat, eval, suggestions, health
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -157,6 +158,7 @@ app.include_router(repo.router,        prefix="/api/repo",  tags=["Repository"])
 app.include_router(chat.router,        prefix="/api/chat",  tags=["Chat"])
 app.include_router(eval.router,        prefix="/api/eval",  tags=["Evaluation"])
 app.include_router(suggestions.router, prefix="/api/repo",  tags=["Suggestions"])
+app.include_router(health.router,      prefix="/api/repo",  tags=["Repository Health"])
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
@@ -166,8 +168,23 @@ async def startup_event():
     Force-configure LlamaIndex to use Groq + Ollama embeddings when available.
     """
     try:
-        from app.llm.llm_client import configure_llamaindex_settings
-        configure_llamaindex_settings()
+        from app.config import LLAMAINDEX_PREWARM_ON_STARTUP, LLAMAINDEX_PREWARM_DELAY_SECONDS
+        if not LLAMAINDEX_PREWARM_ON_STARTUP:
+            return
+
+        async def _prewarm_llamaindex() -> None:
+            if LLAMAINDEX_PREWARM_DELAY_SECONDS > 0:
+                await asyncio.sleep(LLAMAINDEX_PREWARM_DELAY_SECONDS)
+            try:
+                from app.llm.llm_client import configure_llamaindex_settings
+                configure_llamaindex_settings()
+            except ModuleNotFoundError:
+                pass
+            except Exception as prewarm_err:
+                print(f"[startup] LlamaIndex prewarm warning: {prewarm_err}")
+
+        # Non-blocking prewarm keeps API startup quick while still allowing optional warmup.
+        asyncio.create_task(_prewarm_llamaindex())
     except ModuleNotFoundError:
         # Optional dependency is not installed in minimal backend setups.
         # Startup should stay clean and allow non-AI endpoints to run.

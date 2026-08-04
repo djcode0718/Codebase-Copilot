@@ -79,3 +79,9 @@ LLM_FALLBACK_CHAIN_STR = os.getenv(
     "gemini:models/gemini-flash-latest,"
     "groq:llama-3.3-70b-versatile"
 )
+
+# -- Startup prewarm controls -------------------------------------------------
+# Disable by default to keep API startup fast in local dev.
+LLAMAINDEX_PREWARM_ON_STARTUP = os.getenv("LLAMAINDEX_PREWARM_ON_STARTUP", "false").lower() == "true"
+# Optional delay before background prewarm task starts.
+LLAMAINDEX_PREWARM_DELAY_SECONDS = float(os.getenv("LLAMAINDEX_PREWARM_DELAY_SECONDS", "0"))

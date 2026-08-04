@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck } from 'lucide-react';
+import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -16,7 +16,14 @@ import AIInspector from '@/components/chat/AIInspector';
 import ExportMenu from '@/components/repo/ExportMenu';
 import { useChatStream, type StreamedResponse } from '@/hooks/useChatStream';
 import { createClient } from '@/lib/supabase/client';
-import { createChatSession, getSuggestions, listChats, getMessages, getRepo } from '@/lib/api';
+import {
+  createQuickAskSession,
+  createMainSession,
+  getSuggestions,
+  listChatSessions,
+  getMessages,
+  getRepo,
+} from '@/lib/api';
 import { toast } from 'sonner';
 import type { Message, Repo, QueryMode } from '@/lib/types';
 
@@ -39,6 +46,8 @@ export default function ChatPage() {
   const [inspectorData, setInspectorData] = useState<StreamedResponse | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [repo, setRepo] = useState<Repo | null>(null);
+  const pendingAutoPromptRef = useRef<string | null>(null);
+  const [autoPromptTick, setAutoPromptTick] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -46,7 +55,34 @@ export default function ChatPage() {
   const { streaming, streamedText, pendingMetadata, error, sendMessage, cancelStream } =
     useChatStream();
 
-  // Bootstrap: get token → create session → load suggestions
+  const loadSession = useCallback(async (t: string, targetChatId: string) => {
+    const history = await getMessages(t, targetChatId);
+    setChatId(targetChatId);
+    setMessages(history);
+    setInspectedIndex(null);
+    setInspectorData(null);
+    setSessionReady(true);
+    return history.length;
+  }, []);
+
+  const refreshSessions = useCallback(async (t: string) => {
+    await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 100 });
+  }, [repoId]);
+
+  const handleCreateQuickAsk = useCallback(async () => {
+    if (!token) return;
+    try {
+      const session = await createQuickAskSession(token, repoId);
+      await refreshSessions(token);
+      await loadSession(token, session.chat_id);
+      setSuggestions([]);
+      pendingAutoPromptRef.current = null;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create repository chat');
+    }
+  }, [token, repoId, refreshSessions, loadSession]);
+
+  // Bootstrap: get token -> create/retrieve sessions -> resume latest repository chat
   useEffect(() => {
     async function init() {
       const { data } = await createClient().auth.getSession();
@@ -59,34 +95,37 @@ export default function ChatPage() {
       let hasSavedSuggestions = false;
 
       try {
-        // Try to load existing chat
-        const chats = await listChats(t, repoId);
-        if (chats.length > 0) {
-          const activeChat = chats[0];
-          activeChatId = activeChat.id;
-          setChatId(activeChatId);
-          const history = await getMessages(t, activeChatId);
-          setMessages(history);
-          hasHistory = history.length > 0;
-          setSessionReady(true);
+        const mainSession = await createMainSession(t, repoId);
+        void mainSession;
 
-          // Try to restore suggestions from localStorage
-          const saved = localStorage.getItem(`chat_suggestions_${activeChatId}`);
-          if (saved) {
-            try {
-              setSuggestions(JSON.parse(saved));
-              hasSavedSuggestions = true;
-            } catch {
-              // fallback
-            }
-          }
+        const existingSessions = await listChatSessions(t, repoId, {
+          includeArchived: true,
+          includeDeleted: false,
+          limit: 100,
+        });
+
+        // Prefer latest non-main session for conversational continuity.
+        const preferred = existingSessions.find((s) => (s.session_type || 'quick_ask') !== 'main') ?? existingSessions[0];
+        if (preferred?.id) {
+          activeChatId = preferred.id;
         } else {
-          // No chats exist, create new
-          const session = await createChatSession(t, repoId);
-          activeChatId = session.chat_id;
-          setChatId(activeChatId);
-          setSessionReady(true);
+          const quickAsk = await createQuickAskSession(t, repoId);
+          activeChatId = quickAsk.chat_id;
         }
+
+        await refreshSessions(t);
+        const historyCount = await loadSession(t, activeChatId);
+
+        const saved = localStorage.getItem(`chat_suggestions_${activeChatId}`);
+        if (saved) {
+          try {
+            setSuggestions(JSON.parse(saved));
+            hasSavedSuggestions = true;
+          } catch {
+            // ignore invalid local cache
+          }
+        }
+        hasHistory = historyCount > 0;
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to initialize chat');
       }
@@ -102,8 +141,9 @@ export default function ChatPage() {
       const preloadPrompt = sessionStorage.getItem(preloadKey);
       if (preloadPrompt) {
         sessionStorage.removeItem(preloadKey);
-        // Delay slightly to allow session to settle
-        setTimeout(() => setInput(preloadPrompt), 300);
+        setInput(preloadPrompt);
+        pendingAutoPromptRef.current = preloadPrompt;
+        setAutoPromptTick((v) => v + 1);
       }
 
       // Fetch default repo suggestions ONLY if there is no chat history and no saved suggestions in localStorage
@@ -115,7 +155,7 @@ export default function ChatPage() {
       }
     }
     init();
-  }, [repoId]);
+  }, [repoId, refreshSessions, loadSession]);
 
   // Sync suggestions to localStorage whenever they change
   useEffect(() => {
@@ -180,6 +220,15 @@ export default function ChatPage() {
     }
   }, [chatId, token, streaming, sendMessage, messages.length]);
 
+  useEffect(() => {
+    if (!sessionReady || !chatId || streaming) return;
+    const prompt = (pendingAutoPromptRef.current || '').trim();
+    if (!prompt) return;
+    pendingAutoPromptRef.current = null;
+    // Fire once when the preloaded Intelligence Action prompt arrives.
+    void handleSend(prompt);
+  }, [autoPromptTick, chatId, handleSend, sessionReady, streaming]);
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -238,9 +287,21 @@ export default function ChatPage() {
                 <MessageSquare size={16} className="text-brand" />
               </div>
               <div>
-                <h1 className="font-heading text-2xl font-bold tracking-tight">Chat</h1>
+                <h1 className="font-heading text-2xl font-bold tracking-tight">Repository Chat</h1>
                 <p className="text-sm text-muted-foreground">Grounded answers with inspectable retrieval metadata.</p>
               </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-border cursor-pointer"
+                onClick={handleCreateQuickAsk}
+                disabled={!token || streaming}
+              >
+                <Plus size={13} className="mr-1.5" />
+                New chat
+              </Button>
             </div>
           </div>
           <div className="grid grid-cols-3 gap-3 sm:min-w-[22rem]">
@@ -256,19 +317,15 @@ export default function ChatPage() {
               <ExportMenu
                 repo={repo}
                 token={token}
-                chatMessages={messages.map((m) => ({
-                  role: m.role,
-                  content: m.content,
-                  created_at: m.created_at,
-                  chat_id: m.chat_id,
-                }))}
+                scope="chat"
+                chatIds={chatId ? [chatId] : []}
               />
             </div>
           )}
         </div>
       </motion.section>
 
-      <div className="grid min-h-[calc(100vh-18rem)] grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid min-h-[62vh] grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
             <div className="flex items-center gap-2 text-sm font-medium">
@@ -291,7 +348,7 @@ export default function ChatPage() {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="flex flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-border bg-background/70 px-6 py-16 text-center"
+                    className="flex flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-border bg-background/70 px-6 py-10 text-center"
                   >
                     <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-brand/20 bg-brand/10 text-brand">
                       <Sparkles size={22} />

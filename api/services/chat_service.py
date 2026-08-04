@@ -177,6 +177,7 @@ async def stream_chat_response(
     index_name: str,
     repo_id: str,
     chat_id: str,
+    memory_context: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     SSE generator for /chat/{chat_id}/message/stream.
@@ -291,6 +292,7 @@ async def stream_chat_response(
 
         full_prompt = (
             f"{system_prompt}\n\n"
+            f"{'REPOSITORY MEMORY:' + chr(10) + memory_context + chr(10) if memory_context else ''}"
             f"{'CONVERSATION HISTORY:' + chr(10) + history_str if history_str else ''}"
             f"Context:\n{context_str}\n\n"
             f"Question: {resolved_query}\n\nAnswer:"

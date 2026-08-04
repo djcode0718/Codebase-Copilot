@@ -1,0 +1,265 @@
+"""
+api/routers/health.py
+---------------------
+Repository health intelligence API endpoints.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from supabase import Client
+
+from api.dependencies import get_current_user, get_supabase
+from api.models.health import (
+    HealthCategoryDetailResponse,
+    HealthHistoryPoint,
+    HealthHistoryResponse,
+    HealthLatestResponse,
+    HealthRunResponse,
+)
+from api.services import supabase_service
+from api.services.repository_health_engine import RepositoryHealthEngine
+from app.utils.logger import get_logger
+
+router = APIRouter()
+engine = RepositoryHealthEngine()
+logger = get_logger(__name__)
+
+
+@router.post("/{repo_id}/health/run", response_model=HealthRunResponse)
+async def run_repository_health_analysis(
+    repo_id: str,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = supabase_service.get_repo(supabase, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if repo.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    previous_run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
+    previous_scores = None
+    previous_findings = None
+    if previous_run:
+        previous_scores = supabase_service.get_health_category_score_map(
+            supabase,
+            run_id=previous_run["id"],
+            user_id=user_id,
+        )
+        previous_findings = supabase_service.get_health_problem_titles(
+            supabase,
+            run_id=previous_run["id"],
+            user_id=user_id,
+        )
+
+    run_payload = engine.run(repo=repo, previous_scores=previous_scores, previous_findings=previous_findings)
+
+    if not supabase_service.is_repository_health_schema_available(supabase):
+        return _build_transient_health_run_response(repo_id=repo_id, run_payload=run_payload)
+
+    try:
+        run_record = supabase_service.insert_health_run(
+            supabase,
+            repo_id=repo_id,
+            user_id=user_id,
+            top_level=run_payload["top_level"],
+            executive_summary=run_payload["executive_summary"],
+            strengths=run_payload["strengths"],
+            weaknesses=run_payload["weaknesses"],
+            critical_risks=run_payload["critical_risks"],
+            architecture_risks=run_payload["architecture_risks"],
+            security_risks=run_payload["security_risks"],
+            performance_risks=run_payload["performance_risks"],
+            recommended_sprint=run_payload["recommended_sprint"],
+            improved_categories=run_payload["improved_categories"],
+            declining_categories=run_payload["declining_categories"],
+            new_risks=run_payload["new_risks"],
+            resolved_risks=run_payload["resolved_risks"],
+            benchmark=run_payload["benchmark"],
+        )
+
+        supabase_service.insert_health_category_scores(
+            supabase,
+            run_id=run_record["id"],
+            repo_id=repo_id,
+            user_id=user_id,
+            categories=run_payload["categories"],
+        )
+        supabase_service.insert_health_findings(
+            supabase,
+            run_id=run_record["id"],
+            repo_id=repo_id,
+            user_id=user_id,
+            findings=run_payload["findings"],
+        )
+        supabase_service.insert_health_recommendations(
+            supabase,
+            run_id=run_record["id"],
+            repo_id=repo_id,
+            user_id=user_id,
+            recommendations=run_payload["recommendations"],
+        )
+
+        return _hydrate_health_run_response(supabase, run_record["id"], repo_id, user_id)
+    except Exception as e:
+        logger.warning(f"Health run persistence unavailable, returning transient result: {e}")
+        return _build_transient_health_run_response(repo_id=repo_id, run_payload=run_payload)
+
+
+@router.get("/{repo_id}/health/latest", response_model=HealthLatestResponse)
+async def get_latest_repository_health(
+    repo_id: str,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = supabase_service.get_repo(supabase, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if repo.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
+    if not run:
+        return HealthLatestResponse(repo_id=repo_id, latest=None)
+    return HealthLatestResponse(repo_id=repo_id, latest=_hydrate_health_run_response(supabase, run["id"], repo_id, user_id))
+
+
+@router.get("/{repo_id}/health/history", response_model=HealthHistoryResponse)
+async def get_repository_health_history(
+    repo_id: str,
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=30, ge=1, le=100),
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = supabase_service.get_repo(supabase, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if repo.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    runs = supabase_service.get_health_history(supabase, repo_id=repo_id, user_id=user_id, days=days, limit=limit)
+    points = []
+    for run in runs:
+        category_map = supabase_service.get_health_category_score_map(supabase, run_id=run["id"], user_id=user_id)
+        points.append(HealthHistoryPoint(
+            run_id=run["id"],
+            created_at=run["created_at"],
+            repository_health=run["repository_health"],
+            grade=run["grade"],
+            category_scores=category_map,
+        ))
+
+    latest = runs[0] if runs else None
+    return HealthHistoryResponse(
+        repo_id=repo_id,
+        points=points,
+        improved_categories=(latest or {}).get("improved_categories") or [],
+        declining_categories=(latest or {}).get("declining_categories") or [],
+        new_risks=(latest or {}).get("new_risks") or [],
+        resolved_risks=(latest or {}).get("resolved_risks") or [],
+    )
+
+
+@router.get("/{repo_id}/health/categories/{category}", response_model=HealthCategoryDetailResponse)
+async def get_repository_health_category_details(
+    repo_id: str,
+    category: str,
+    run_id: str | None = None,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = supabase_service.get_repo(supabase, repo_id)
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if repo.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    selected_run_id = run_id
+    if not selected_run_id:
+        latest = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
+        if not latest:
+            raise HTTPException(status_code=404, detail="No health run found")
+        selected_run_id = latest["id"]
+
+    score = supabase_service.get_health_category_score(supabase, run_id=selected_run_id, user_id=user_id, category=category)
+    if not score:
+        raise HTTPException(status_code=404, detail="Category not found in selected run")
+
+    findings = supabase_service.get_health_findings(
+        supabase,
+        run_id=selected_run_id,
+        user_id=user_id,
+        category=category,
+    )
+
+    return HealthCategoryDetailResponse(
+        repo_id=repo_id,
+        run_id=selected_run_id,
+        category=category,
+        score=score,
+        findings=findings,
+    )
+
+
+def _hydrate_health_run_response(supabase: Client, run_id: str, repo_id: str, user_id: str) -> HealthRunResponse:
+    run = supabase_service.get_health_run_by_id(supabase, run_id=run_id, user_id=user_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Health run not found")
+
+    categories = supabase_service.get_health_category_scores(supabase, run_id=run_id, user_id=user_id)
+    findings = supabase_service.get_health_findings(supabase, run_id=run_id, user_id=user_id)
+    recommendations = supabase_service.get_health_recommendations(supabase, run_id=run_id, user_id=user_id)
+
+    return HealthRunResponse(
+        run_id=run_id,
+        repo_id=repo_id,
+        generated_at=run["created_at"],
+        top_level={
+            "repository_health": run["repository_health"],
+            "grade": run["grade"],
+            "status": run["status"],
+            "trend": run.get("trend") or 0,
+            "last_analysis": run["created_at"],
+            "repository_size": run.get("repository_size") or "Small",
+            "language_detection": run.get("language_detection") or [],
+            "framework_detection": run.get("framework_detection") or [],
+        },
+        categories=categories,
+        findings=findings,
+        recommendations=recommendations,
+        executive_summary=run.get("executive_summary") or "",
+        strengths=run.get("strengths") or [],
+        weaknesses=run.get("weaknesses") or [],
+        critical_risks=run.get("critical_risks") or [],
+        architecture_risks=run.get("architecture_risks") or [],
+        security_risks=run.get("security_risks") or [],
+        performance_risks=run.get("performance_risks") or [],
+        recommended_sprint=run.get("recommended_sprint") or [],
+    )
+
+
+def _build_transient_health_run_response(repo_id: str, run_payload: dict) -> HealthRunResponse:
+    return HealthRunResponse(
+        run_id=f"transient-{uuid.uuid4()}",
+        repo_id=repo_id,
+        generated_at=datetime.now(timezone.utc),
+        top_level=run_payload["top_level"],
+        categories=run_payload["categories"],
+        findings=run_payload["findings"],
+        recommendations=run_payload["recommendations"],
+        executive_summary=run_payload.get("executive_summary") or "",
+        strengths=run_payload.get("strengths") or [],
+        weaknesses=run_payload.get("weaknesses") or [],
+        critical_risks=run_payload.get("critical_risks") or [],
+        architecture_risks=run_payload.get("architecture_risks") or [],
+        security_risks=run_payload.get("security_risks") or [],
+        performance_risks=run_payload.get("performance_risks") or [],
+        recommended_sprint=run_payload.get("recommended_sprint") or [],
+    )
+
+

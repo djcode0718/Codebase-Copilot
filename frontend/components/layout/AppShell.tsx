@@ -100,7 +100,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             repoCount={isHydrated ? repos.length : 0}
             onToggleSidebar={() => setMobileSidebarOpen((prev) => !prev)}
           />
-          <main className="min-h-0 flex-1 overflow-auto px-4 py-5 sm:px-6 lg:px-8">
+          <main className="min-h-0 flex-1 px-4 py-5 sm:px-6 lg:px-8">
             <div className="mx-auto flex w-full max-w-[1600px] min-w-0 flex-col gap-6">
               {children}
             </div>

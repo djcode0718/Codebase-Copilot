@@ -10,12 +10,72 @@ Tables used (see schema in blueprint):
 
 import uuid
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from supabase import Client
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_HEALTH_SCHEMA_AVAILABLE: Optional[bool] = None
+_HEALTH_SCHEMA_LAST_CHECKED_AT: Optional[datetime] = None
+_HEALTH_SCHEMA_CHECK_TTL_SECONDS = 60
+_HEALTH_SCHEMA_WARNED = False
+
+
+def _is_missing_column_error(err: Exception, columns: List[str]) -> bool:
+    """Detect PostgREST/Supabase missing-column errors for legacy schemas."""
+    msg = str(err)
+    lowered = msg.lower()
+    if "column" not in lowered:
+        return False
+    return any(col.lower() in lowered for col in columns)
+
+
+def _is_missing_health_table_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    if "pgrst205" in msg and "repository_health_" in msg:
+        return True
+    return "could not find the table 'public.repository_health_" in msg
+
+
+def is_repository_health_schema_available(
+    supabase: Client,
+    *,
+    force_refresh: bool = False,
+) -> bool:
+    global _HEALTH_SCHEMA_AVAILABLE, _HEALTH_SCHEMA_LAST_CHECKED_AT, _HEALTH_SCHEMA_WARNED
+
+    now = datetime.now(timezone.utc)
+    if (
+        not force_refresh
+        and _HEALTH_SCHEMA_LAST_CHECKED_AT is not None
+        and (now - _HEALTH_SCHEMA_LAST_CHECKED_AT).total_seconds() < _HEALTH_SCHEMA_CHECK_TTL_SECONDS
+        and _HEALTH_SCHEMA_AVAILABLE is not None
+    ):
+        return bool(_HEALTH_SCHEMA_AVAILABLE)
+
+    try:
+        (
+            supabase.table("repository_health_runs")
+            .select("id")
+            .limit(1)
+            .execute()
+        )
+        _HEALTH_SCHEMA_AVAILABLE = True
+        _HEALTH_SCHEMA_LAST_CHECKED_AT = now
+        return True
+    except Exception as e:
+        _HEALTH_SCHEMA_AVAILABLE = False
+        _HEALTH_SCHEMA_LAST_CHECKED_AT = now
+        if _is_missing_health_table_error(e):
+            if not _HEALTH_SCHEMA_WARNED:
+                logger.warning(
+                    "Repository health schema is missing. Apply migration before enabling persisted health runs."
+                )
+                _HEALTH_SCHEMA_WARNED = True
+            return False
+        logger.warning(f"Health schema availability check failed: {e}")
+        return False
 
 
 # ── Repositories ──────────────────────────────────────────────────────────────
@@ -132,28 +192,90 @@ def create_chat(
     user_id: str,
     repo_id: str,
     title: Optional[str] = None,
+    session_type: str = "quick_ask",
 ) -> Dict[str, Any]:
     record = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
         "repo_id": repo_id,
         "title": title,
+        "session_type": session_type,
+        "is_pinned": False,
+        "is_favorite": False,
+        "is_archived": False,
+        "deleted_at": None,
     }
-    result = supabase.table("chats").insert(record).execute()
-    return result.data[0] if result.data else record
-
-
-def get_chats_for_repo(supabase: Client, repo_id: str) -> List[Dict[str, Any]]:
     try:
-        result = (
+        result = supabase.table("chats").insert(record).execute()
+        return result.data[0] if result.data else record
+    except Exception as e:
+        if not _is_missing_column_error(
+            e,
+            ["session_type", "is_pinned", "is_favorite", "is_archived", "deleted_at", "archived_at"],
+        ):
+            raise
+        # Legacy chats schema fallback: keep only stable columns.
+        legacy_record = {
+            "id": record["id"],
+            "user_id": user_id,
+            "repo_id": repo_id,
+            "title": title,
+        }
+        legacy_result = supabase.table("chats").insert(legacy_record).execute()
+        return legacy_result.data[0] if legacy_result.data else legacy_record
+
+
+def get_chats_for_repo(
+    supabase: Client,
+    repo_id: str,
+    *,
+    include_archived: bool = True,
+    include_deleted: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    try:
+        query = (
+            supabase.table("chats")
+            .select("*")
+            .eq("repo_id", repo_id)
+        )
+        if not include_archived:
+            query = query.eq("is_archived", False)
+        if not include_deleted:
+            query = query.is_("deleted_at", "null")
+        result = query.order("is_pinned", desc=True).order("updated_at", desc=True).range(offset, offset + max(1, limit) - 1).execute()
+        data = getattr(result, "data", None)
+        if isinstance(data, list):
+            return data
+
+        # Backward-compatible fallback for minimal/mocked adapters without .is_/.range.
+        fallback = (
             supabase.table("chats")
             .select("*")
             .eq("repo_id", repo_id)
             .order("updated_at", desc=True)
             .execute()
         )
-        return result.data or []
+        fallback_data = getattr(fallback, "data", None)
+        return fallback_data if isinstance(fallback_data, list) else []
     except Exception as e:
+        if _is_missing_column_error(e, ["deleted_at", "is_pinned", "is_archived"]):
+            try:
+                fallback = (
+                    supabase.table("chats")
+                    .select("*")
+                    .eq("repo_id", repo_id)
+                    .order("updated_at", desc=True)
+                    .execute()
+                )
+                data = getattr(fallback, "data", None)
+                return data if isinstance(data, list) else []
+            except Exception as fallback_err:
+                logger.warning(
+                    f"get_chats_for_repo legacy fallback failed for repo_id='{repo_id}': {fallback_err}"
+                )
+                return []
         logger.warning(f"get_chats_for_repo failed for repo_id='{repo_id}': {e}")
         return []
 
@@ -163,6 +285,23 @@ def update_chat_title(supabase: Client, chat_id: str, title: str) -> None:
         "title": title,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", chat_id).execute()
+
+
+def update_chat_fields(supabase: Client, chat_id: str, fields: Dict[str, Any]) -> None:
+    payload = dict(fields)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table("chats").update(payload).eq("id", chat_id).execute()
+    except Exception as e:
+        if not _is_missing_column_error(
+            e,
+            ["session_type", "is_pinned", "is_favorite", "is_archived", "deleted_at", "archived_at"],
+        ):
+            raise
+        allowed = {k: v for k, v in payload.items() if k in {"title", "updated_at"}}
+        if not allowed:
+            return
+        supabase.table("chats").update(allowed).eq("id", chat_id).execute()
 
 
 def delete_chat(supabase: Client, chat_id: str) -> None:
@@ -176,6 +315,55 @@ def get_chat(supabase: Client, chat_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"get_chat failed for id='{chat_id}': {e}")
         return None
+
+
+def get_main_chat_for_repo(supabase: Client, user_id: str, repo_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("chats")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("repo_id", repo_id)
+            .eq("session_type", "main")
+            .is_("deleted_at", "null")
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        if _is_missing_column_error(e, ["session_type", "deleted_at"]):
+            # Legacy schema fallback: infer main session by canonical title.
+            try:
+                fallback = (
+                    supabase.table("chats")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .eq("repo_id", repo_id)
+                    .eq("title", "Main Workspace Session")
+                    .limit(1)
+                    .execute()
+                )
+                return fallback.data[0] if fallback.data else None
+            except Exception as fallback_err:
+                logger.warning(
+                    f"get_main_chat_for_repo fallback failed for repo_id='{repo_id}': {fallback_err}"
+                )
+                return None
+        logger.warning(f"get_main_chat_for_repo failed for repo_id='{repo_id}': {e}")
+        return None
+
+
+def delete_all_chats_for_repo(supabase: Client, repo_id: str, user_id: str) -> None:
+    payload = {
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        supabase.table("chats").update(payload).eq("repo_id", repo_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        if not _is_missing_column_error(e, ["deleted_at"]):
+            raise
+        supabase.table("chats").delete().eq("repo_id", repo_id).eq("user_id", user_id).execute()
 
 
 # ── Messages ──────────────────────────────────────────────────────────────────
@@ -215,6 +403,307 @@ def get_messages_for_chat(supabase: Client, chat_id: str) -> List[Dict[str, Any]
         .execute()
     )
     return result.data or []
+
+
+def get_recent_messages_for_repo(
+    supabase: Client,
+    repo_id: str,
+    *,
+    exclude_chat_id: Optional[str] = None,
+    limit: int = 30,
+) -> List[Dict[str, Any]]:
+    try:
+        chats = get_chats_for_repo(
+            supabase,
+            repo_id,
+            include_archived=True,
+            include_deleted=False,
+            limit=max(limit, 10),
+            offset=0,
+        )
+        chat_ids = [c["id"] for c in chats if c.get("id") and c.get("id") != exclude_chat_id]
+        if not chat_ids:
+            return []
+
+        result = (
+            supabase.table("messages")
+            .select("*")
+            .in_("chat_id", chat_ids)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        data = result.data or []
+        return list(reversed(data))
+    except Exception as e:
+        logger.warning(f"get_recent_messages_for_repo failed for repo_id='{repo_id}': {e}")
+        return []
+
+
+def search_chats(
+    supabase: Client,
+    *,
+    user_id: str,
+    repo_id: str,
+    query: str,
+    limit: int,
+    offset: int,
+) -> List[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("chats")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("repo_id", repo_id)
+            .is_("deleted_at", "null")
+            .or_(f"title.ilike.%{query}%,summary.ilike.%{query}%")
+            .order("is_pinned", desc=True)
+            .order("updated_at", desc=True)
+            .range(offset, offset + max(1, limit) - 1)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.warning(f"search_chats fallback scan for repo_id='{repo_id}': {e}")
+        # Fallback when ilike/or is unavailable in mocked tests or local adapters.
+        all_chats = get_chats_for_repo(supabase, repo_id, include_archived=True, include_deleted=False, limit=300, offset=0)
+        q = query.lower()
+        matches = [
+            c for c in all_chats
+            if q in (c.get("title") or "").lower() or q in (c.get("summary") or "").lower()
+        ]
+        return matches[offset: offset + max(1, limit)]
+
+
+def search_messages_in_chat(
+    supabase: Client,
+    *,
+    chat_id: str,
+    query: str,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("messages")
+            .select("*")
+            .eq("chat_id", chat_id)
+            .ilike("content", f"%{query}%")
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception:
+        messages = get_messages_for_chat(supabase, chat_id)
+        q = query.lower()
+        return [m for m in messages if q in (m.get("content") or "").lower()][:limit]
+
+
+def upsert_conversation_summary(
+    supabase: Client,
+    *,
+    chat_id: str,
+    repo_id: str,
+    user_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    existing = get_conversation_summary(supabase, chat_id)
+    record = {
+        "chat_id": chat_id,
+        "repo_id": repo_id,
+        "user_id": user_id,
+        **payload,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if existing and existing.get("id"):
+        result = supabase.table("conversation_summaries").update(record).eq("id", existing["id"]).execute()
+    else:
+        record["id"] = str(uuid.uuid4())
+        result = supabase.table("conversation_summaries").insert(record).execute()
+    return result.data[0] if result.data else record
+
+
+def get_conversation_summary(supabase: Client, chat_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("conversation_summaries")
+            .select("*")
+            .eq("chat_id", chat_id)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception:
+        return None
+
+
+def get_conversation_summaries_for_repo(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("conversation_summaries")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.warning(f"get_conversation_summaries_for_repo failed for repo_id='{repo_id}': {e}")
+        return []
+
+
+def replace_conversation_tags(supabase: Client, *, chat_id: str, tags: List[str]) -> None:
+    try:
+        supabase.table("conversation_tags").delete().eq("chat_id", chat_id).execute()
+        rows = [
+            {
+                "id": str(uuid.uuid4()),
+                "chat_id": chat_id,
+                "tag": tag,
+            }
+            for tag in tags
+            if tag.strip()
+        ]
+        if rows:
+            supabase.table("conversation_tags").insert(rows).execute()
+    except Exception as e:
+        logger.warning(f"replace_conversation_tags failed for chat_id='{chat_id}': {e}")
+
+
+def get_tags_for_chat(supabase: Client, chat_id: str) -> List[str]:
+    try:
+        result = supabase.table("conversation_tags").select("tag").eq("chat_id", chat_id).execute()
+        return [row.get("tag") for row in (result.data or []) if row.get("tag")]
+    except Exception:
+        return []
+
+
+# ── Attachments ───────────────────────────────────────────────────────────────
+
+def create_attachment(
+    supabase: Client,
+    *,
+    chat_id: str,
+    user_id: str,
+    filename: str,
+    storage_path: str,
+    mime_type: Optional[str] = None,
+    file_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    record: Dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "filename": filename,
+        "storage_path": storage_path,
+    }
+    if mime_type is not None:
+        record["mime_type"] = mime_type
+    if file_size is not None:
+        record["file_size"] = file_size
+
+    result = supabase.table("attachments").insert(record).execute()
+    return result.data[0] if result.data else record
+
+
+def get_attachments_for_chat(
+    supabase: Client,
+    *,
+    chat_id: str,
+    include_deleted: bool = False,
+) -> List[Dict[str, Any]]:
+    query = supabase.table("attachments").select("*").eq("chat_id", chat_id)
+    if not include_deleted:
+        query = query.is_("deleted_at", "null")
+    result = query.order("created_at", desc=False).execute()
+    data = getattr(result, "data", None)
+    return data if isinstance(data, list) else []
+
+
+def get_attachment(supabase: Client, attachment_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        result = supabase.table("attachments").select("*").eq("id", attachment_id).execute()
+        return result.data[0] if result.data else None
+    except Exception:
+        return None
+
+
+def update_attachment(supabase: Client, attachment_id: str, fields: Dict[str, Any]) -> None:
+    supabase.table("attachments").update(fields).eq("id", attachment_id).execute()
+
+
+def soft_delete_attachment(supabase: Client, attachment_id: str) -> None:
+    supabase.table("attachments").update({
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", attachment_id).execute()
+
+
+# ── Saved Reports ─────────────────────────────────────────────────────────────
+
+def create_saved_report(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    report_type: str,
+    title: Optional[str],
+    content: Dict[str, Any],
+) -> Dict[str, Any]:
+    record: Dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "repo_id": repo_id,
+        "user_id": user_id,
+        "report_type": report_type,
+        "title": title,
+        "content": content,
+    }
+    result = supabase.table("saved_reports").insert(record).execute()
+    return result.data[0] if result.data else record
+
+
+def get_saved_reports_for_repo(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    include_deleted: bool = False,
+) -> List[Dict[str, Any]]:
+    query = supabase.table("saved_reports").select("*").eq("repo_id", repo_id).eq("user_id", user_id)
+    if not include_deleted:
+        query = query.is_("deleted_at", "null")
+    result = query.order("updated_at", desc=True).execute()
+    data = getattr(result, "data", None)
+    return data if isinstance(data, list) else []
+
+
+def get_saved_report(supabase: Client, report_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        result = supabase.table("saved_reports").select("*").eq("id", report_id).execute()
+        return result.data[0] if result.data else None
+    except Exception:
+        return None
+
+
+def update_saved_report(supabase: Client, report_id: str, fields: Dict[str, Any]) -> None:
+    payload = dict(fields)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    supabase.table("saved_reports").update(payload).eq("id", report_id).execute()
+
+
+def soft_delete_saved_report(supabase: Client, report_id: str) -> None:
+    supabase.table("saved_reports").update({
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", report_id).execute()
 
 
 # ── Evaluations ───────────────────────────────────────────────────────────────
@@ -261,3 +750,338 @@ def get_latest_evaluation(
     except Exception as e:
         logger.warning(f"get_latest_evaluation failed for repo_id='{repo_id}': {e}")
         return None
+
+
+# -- Repository Health Intelligence -------------------------------------------
+
+def insert_health_run(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    top_level: Dict[str, Any],
+    executive_summary: str,
+    strengths: List[str],
+    weaknesses: List[str],
+    critical_risks: List[str],
+    architecture_risks: List[str],
+    security_risks: List[str],
+    performance_risks: List[str],
+    recommended_sprint: List[str],
+    improved_categories: List[str],
+    declining_categories: List[str],
+    new_risks: List[str],
+    resolved_risks: List[str],
+    benchmark: Dict[str, Any],
+) -> Dict[str, Any]:
+    record = {
+        "id": str(uuid.uuid4()),
+        "repo_id": repo_id,
+        "user_id": user_id,
+        "repository_health": int(top_level.get("repository_health", 0)),
+        "grade": top_level.get("grade", "F"),
+        "status": top_level.get("status", "At Risk"),
+        "trend": int(top_level.get("trend", 0)),
+        "repository_size": top_level.get("repository_size", "Small"),
+        "language_detection": top_level.get("language_detection", []),
+        "framework_detection": top_level.get("framework_detection", []),
+        "executive_summary": executive_summary,
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+        "critical_risks": critical_risks,
+        "architecture_risks": architecture_risks,
+        "security_risks": security_risks,
+        "performance_risks": performance_risks,
+        "recommended_sprint": recommended_sprint,
+        "improved_categories": improved_categories,
+        "declining_categories": declining_categories,
+        "new_risks": new_risks,
+        "resolved_risks": resolved_risks,
+        "benchmark": benchmark,
+    }
+    result = supabase.table("repository_health_runs").insert(record).execute()
+    return result.data[0] if result.data else record
+
+
+def insert_health_category_scores(
+    supabase: Client,
+    *,
+    run_id: str,
+    repo_id: str,
+    user_id: str,
+    categories: List[Dict[str, Any]],
+) -> None:
+    rows = []
+    for c in categories:
+        rows.append({
+            "id": str(uuid.uuid4()),
+            "run_id": run_id,
+            "repo_id": repo_id,
+            "user_id": user_id,
+            "category": c.get("category"),
+            "score": int(c.get("score", 0)),
+            "grade": c.get("grade", "F"),
+            "trend": int(c.get("trend", 0)),
+            "explanation": c.get("explanation", ""),
+            "detected_problems": c.get("detected_problems", []),
+            "positive_findings": c.get("positive_findings", []),
+            "recommendations": c.get("recommendations", []),
+            "affected_files": c.get("affected_files", []),
+            "affected_modules": c.get("affected_modules", []),
+        })
+    if rows:
+        supabase.table("repository_health_category_scores").insert(rows).execute()
+
+
+def insert_health_findings(
+    supabase: Client,
+    *,
+    run_id: str,
+    repo_id: str,
+    user_id: str,
+    findings: List[Dict[str, Any]],
+) -> None:
+    rows = []
+    for f in findings:
+        rows.append({
+            "id": f.get("id") or str(uuid.uuid4()),
+            "run_id": run_id,
+            "repo_id": repo_id,
+            "user_id": user_id,
+            "category": f.get("category"),
+            "finding_type": f.get("finding_type"),
+            "severity": f.get("severity", "low"),
+            "title": f.get("title", ""),
+            "details": f.get("details", ""),
+            "evidence": f.get("evidence", {}),
+            "recommendation": f.get("recommendation"),
+            "affected_files": f.get("affected_files", []),
+            "affected_modules": f.get("affected_modules", []),
+            "expected_score_gain": int(f.get("expected_score_gain", 0)),
+        })
+    if rows:
+        supabase.table("repository_health_findings").insert(rows).execute()
+
+
+def insert_health_recommendations(
+    supabase: Client,
+    *,
+    run_id: str,
+    repo_id: str,
+    user_id: str,
+    recommendations: List[Dict[str, Any]],
+) -> None:
+    rows = []
+    for r in recommendations:
+        rows.append({
+            "id": str(uuid.uuid4()),
+            "run_id": run_id,
+            "repo_id": repo_id,
+            "user_id": user_id,
+            "priority_rank": int(r.get("rank", 0)),
+            "category": r.get("category"),
+            "title": r.get("title", ""),
+            "description": r.get("description", ""),
+            "estimated_effort": r.get("estimated_effort", ""),
+            "expected_score_gain": int(r.get("expected_score_gain", 0)),
+            "impact_score": float(r.get("impact_score", 0.0)),
+            "action_items": r.get("action_items", []),
+            "affected_files": r.get("affected_files", []),
+        })
+    if rows:
+        supabase.table("repository_health_recommendations").insert(rows).execute()
+
+
+def get_latest_health_run(supabase: Client, *, repo_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    if not is_repository_health_schema_available(supabase):
+        return None
+    try:
+        result = (
+            supabase.table("repository_health_runs")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return None
+        logger.warning(f"get_latest_health_run failed for repo_id='{repo_id}': {e}")
+        return None
+
+
+def get_health_run_by_id(supabase: Client, *, run_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    if not is_repository_health_schema_available(supabase):
+        return None
+    try:
+        result = (
+            supabase.table("repository_health_runs")
+            .select("*")
+            .eq("id", run_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return None
+        logger.warning(f"get_health_run_by_id failed for run_id='{run_id}': {e}")
+        return None
+
+
+def get_health_category_scores(supabase: Client, *, run_id: str, user_id: str) -> List[Dict[str, Any]]:
+    if not is_repository_health_schema_available(supabase):
+        return []
+    try:
+        result = (
+            supabase.table("repository_health_category_scores")
+            .select("*")
+            .eq("run_id", run_id)
+            .eq("user_id", user_id)
+            .order("score", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return []
+        logger.warning(f"get_health_category_scores failed for run_id='{run_id}': {e}")
+        return []
+
+
+def get_health_category_score_map(supabase: Client, *, run_id: str, user_id: str) -> Dict[str, int]:
+    rows = get_health_category_scores(supabase, run_id=run_id, user_id=user_id)
+    return {str(r.get("category")): int(r.get("score", 0)) for r in rows if r.get("category")}
+
+
+def get_health_category_score(
+    supabase: Client,
+    *,
+    run_id: str,
+    user_id: str,
+    category: str,
+) -> Optional[Dict[str, Any]]:
+    if not is_repository_health_schema_available(supabase):
+        return None
+    try:
+        result = (
+            supabase.table("repository_health_category_scores")
+            .select("*")
+            .eq("run_id", run_id)
+            .eq("user_id", user_id)
+            .eq("category", category)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return None
+        logger.warning(f"get_health_category_score failed for run_id='{run_id}', category='{category}': {e}")
+        return None
+
+
+def get_health_findings(
+    supabase: Client,
+    *,
+    run_id: str,
+    user_id: str,
+    category: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    if not is_repository_health_schema_available(supabase):
+        return []
+    try:
+        query = (
+            supabase.table("repository_health_findings")
+            .select("*")
+            .eq("run_id", run_id)
+            .eq("user_id", user_id)
+        )
+        if category:
+            query = query.eq("category", category)
+        result = query.order("created_at", desc=False).execute()
+        return result.data or []
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return []
+        logger.warning(f"get_health_findings failed for run_id='{run_id}': {e}")
+        return []
+
+
+def get_health_problem_titles(supabase: Client, *, run_id: str, user_id: str) -> List[str]:
+    findings = get_health_findings(supabase, run_id=run_id, user_id=user_id)
+    return [
+        str(f.get("title"))
+        for f in findings
+        if f.get("finding_type") == "problem" and f.get("title")
+    ]
+
+
+def get_health_recommendations(supabase: Client, *, run_id: str, user_id: str) -> List[Dict[str, Any]]:
+    if not is_repository_health_schema_available(supabase):
+        return []
+    try:
+        result = (
+            supabase.table("repository_health_recommendations")
+            .select("*")
+            .eq("run_id", run_id)
+            .eq("user_id", user_id)
+            .order("priority_rank", desc=False)
+            .execute()
+        )
+        rows = result.data or []
+        normalized = []
+        for row in rows:
+            normalized.append({
+                "rank": row.get("priority_rank", 0),
+                "title": row.get("title", ""),
+                "description": row.get("description", ""),
+                "category": row.get("category"),
+                "estimated_effort": row.get("estimated_effort", ""),
+                "expected_score_gain": row.get("expected_score_gain", 0),
+                "impact_score": row.get("impact_score", 0.0),
+                "action_items": row.get("action_items", []),
+                "affected_files": row.get("affected_files", []),
+            })
+        return normalized
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return []
+        logger.warning(f"get_health_recommendations failed for run_id='{run_id}': {e}")
+        return []
+
+
+def get_health_history(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    days: int = 30,
+    limit: int = 30,
+) -> List[Dict[str, Any]]:
+    if not is_repository_health_schema_available(supabase):
+        return []
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        result = (
+            supabase.table("repository_health_runs")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .eq("user_id", user_id)
+            .gte("created_at", since.isoformat())
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return []
+        logger.warning(f"get_health_history failed for repo_id='{repo_id}': {e}")
+        return []
+
+

@@ -114,6 +114,7 @@ Every artifact is exportable:
 - Repository Report (`.md`) — executive summary with metrics
 - Repository Data (`.json`) — structured data with full metadata
 - Chat History (`.md`) — complete conversation export with timestamps
+- Session Export (`.md`, `.txt`, `.pdf`, `.docx`, `.json`) — conversation, references, findings, diagrams, generated reports, evidence, and timestamps
 
 ### 🔄 Repository Refresh
 
@@ -171,7 +172,37 @@ A complete production frontend — an **Enterprise Repository Intelligence Works
 
 ### 💬 Conversational Memory
 
-Multi-turn conversation support, persistent chat context (per session and across restarts via Supabase), memory-aware prompting, and a ChatGPT-style interface.
+Multi-turn conversation support with repository-scoped session memory, Supabase-backed persistence, memory-aware prompting, and reusable engineering context.
+
+### 🧠 Repository Conversation Memory Agent
+
+Conversation memory is treated as long-term repository intelligence, not disposable chat state.
+
+**Session types**
+- **Main Repository Session** — persistent, repository-wide, long-term engineering workspace memory, never auto-deleted.
+- **Repository Chat Session** — independent repository-scoped session with full retained history, searchable, renameable, and exportable.
+- Up to **100 active Repository Chat sessions per repository**.
+
+**Knowledge preservation and enrichment**
+- Persist user questions, AI responses, architecture/security reviews, impact analyses, business flows, test recommendations, evaluation outputs, diagrams, and Digital Twin findings.
+- For each session, maintain title, topic classification, key findings, tags, referenced files, modules, and services.
+- Reuse prior findings from current session, previous repository sessions, main session memory, and repository knowledge model before generating new responses.
+
+**Search, summaries, and exports**
+- Cross-session repository search supports questions, answers, files, APIs, services, architectures, and security/report findings.
+- One-click generation targets: Session Summary, Repository Summary, Weekly Repository Digest, and Engineering Knowledge Digest.
+- Session export includes conversation history + references/evidence in `.md`, `.txt`, `.pdf`, `.docx`, and `.json`.
+
+**Intelligence Action auto-run and chat UX**
+- Triggering an Intelligence Action now preloads and automatically sends its prompt in Repository Chat (no extra Enter/click required).
+- Repository Chat resumes the latest repository session by default to preserve long-term engineering memory.
+- Assistant markdown rendering supports clearer headings, ordered/unordered lists, inline emphasis, and improved contrast in light/dark themes.
+- Repository status signal card surfaces score, grade, status, and top improvement priorities in a compact KPI format.
+
+**Digital Twin integration and ownership**
+- Important conversation findings continuously enrich the Repository Digital Twin and knowledge graph.
+- User-controlled deletion only: delete message, delete one session, delete multiple sessions, delete all repository conversations, or full repository memory reset.
+- No automatic conversation deletion.
 
 ### 📊 Evaluation Framework
 
@@ -556,7 +587,7 @@ Prompts include retrieved chunks, repository summaries, metadata, routing instru
 
 ### 8️⃣ Conversational Memory
 
-Stores previous interactions, enables follow-up questions, preserves context across turns, and persists messages to Supabase via the API layer.
+Before response generation, memory retrieval checks current session context plus historical repository conversations and applies relevant findings to reduce repeated user input.
 
 ### 9️⃣ LLM Generation
 

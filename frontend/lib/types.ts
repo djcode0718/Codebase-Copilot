@@ -90,7 +90,53 @@ export interface Chat {
   repo_id: string;
   user_id: string;
   title?: string;
+  session_type?: 'main' | 'quick_ask';
+  is_pinned?: boolean;
+  is_favorite?: boolean;
+  is_archived?: boolean;
+  deleted_at?: string | null;
   created_at: string;
+  updated_at?: string;
+}
+
+export interface ConversationSummary {
+  chat_id: string;
+  repo_id: string;
+  user_id: string;
+  title?: string;
+  executive_summary?: string;
+  technical_summary?: string;
+  key_decisions: string[];
+  action_items: string[];
+  risks_identified: string[];
+  files_discussed: string[];
+  services_discussed: string[];
+  modules_discussed: string[];
+  classes_discussed: string[];
+  apis_discussed: string[];
+  tags: string[];
+  keywords: string[];
+  updated_at?: string;
+}
+
+export interface ChatSearchResultItem {
+  chat: Chat;
+  matched_messages: Message[];
+  snippets: string[];
+}
+
+export interface ChatSearchResponse {
+  query: string;
+  total: number;
+  items: ChatSearchResultItem[];
+}
+
+export interface MemoryExportResponse {
+  filename: string;
+  format: 'md' | 'txt' | 'json' | 'pdf' | 'docx';
+  content_type: string;
+  content: string;
+  meta: Record<string, unknown>;
 }
 
 // ── Evaluation ─────────────────────────────────────────────────────────────
@@ -142,6 +188,120 @@ export interface IndexRepoResponse {
 export interface CreateSessionResponse {
   chat_id: string;
   repo_id: string;
+}
+
+// -- Repository Health Intelligence ------------------------------------------
+
+export type HealthCategoryName =
+  | 'Architecture'
+  | 'Security'
+  | 'Testing'
+  | 'Documentation'
+  | 'Performance'
+  | 'Maintainability'
+  | 'Technical Debt'
+  | 'Dependencies'
+  | 'Code Quality'
+  | 'Scalability'
+  | 'Observability'
+  | 'Developer Experience';
+
+export interface HealthTopLevel {
+  repository_health: number;
+  grade: string;
+  status: string;
+  trend: number;
+  last_analysis: string;
+  repository_size: 'Small' | 'Medium' | 'Large';
+  language_detection: string[];
+  framework_detection: string[];
+}
+
+export interface HealthCategoryScore {
+  category: HealthCategoryName;
+  score: number;
+  grade: string;
+  trend: number;
+  explanation: string;
+  detected_problems: string[];
+  positive_findings: string[];
+  recommendations: string[];
+  affected_files: string[];
+  affected_modules: string[];
+}
+
+export interface HealthFinding {
+  id: string;
+  category: HealthCategoryName;
+  finding_type: 'problem' | 'positive';
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  title: string;
+  details: string;
+  evidence: Record<string, unknown>;
+  recommendation?: string;
+  affected_files: string[];
+  affected_modules: string[];
+  expected_score_gain: number;
+}
+
+export interface HealthRecommendation {
+  rank: number;
+  title: string;
+  description: string;
+  category: HealthCategoryName;
+  estimated_effort: string;
+  expected_score_gain: number;
+  impact_score: number;
+  action_items: string[];
+  affected_files: string[];
+}
+
+export interface HealthRun {
+  run_id: string;
+  repo_id: string;
+  generated_at: string;
+  top_level: HealthTopLevel;
+  categories: HealthCategoryScore[];
+  findings: HealthFinding[];
+  recommendations: HealthRecommendation[];
+  executive_summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  critical_risks: string[];
+  architecture_risks: string[];
+  security_risks: string[];
+  performance_risks: string[];
+  recommended_sprint: string[];
+}
+
+export interface HealthLatestResponse {
+  repo_id: string;
+  latest: HealthRun | null;
+}
+
+export interface HealthHistoryPoint {
+  run_id: string;
+  created_at: string;
+  repository_health: number;
+  grade: string;
+  category_scores: Record<string, number>;
+}
+
+export interface HealthHistoryResponse {
+  repo_id: string;
+  points: HealthHistoryPoint[];
+  improved_categories: string[];
+  declining_categories: string[];
+  new_risks: string[];
+  resolved_risks: string[];
+}
+
+export interface HealthCategoryDetailResponse {
+  repo_id: string;
+  run_id: string;
+  category: HealthCategoryName;
+  score: HealthCategoryScore;
+  findings: HealthFinding[];
 }
 
 // ── UI state helpers ─────────────────────────────────────────────────────────

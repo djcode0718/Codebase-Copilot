@@ -1,3 +1,8 @@
+param(
+    [ValidateSet("fast", "default", "full")]
+    [string]$Profile = "default"
+)
+
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $currentPid = $PID
@@ -8,6 +13,44 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::InputEncoding = $utf8NoBom
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
+
+function Set-EnvIfMissing {
+    param(
+        [string]$Name,
+        [string]$Value
+    )
+    if (-not (Test-Path ("env:{0}" -f $Name))) {
+        Set-Item -Path ("env:{0}" -f $Name) -Value $Value
+    }
+}
+
+function Apply-StartupProfile {
+    param([string]$SelectedProfile)
+
+    switch ($SelectedProfile.ToLower()) {
+        "fast" {
+            # Fastest startup: no backend reload, no HTTP readiness gate, no model prewarm.
+            Set-EnvIfMissing -Name "BACKEND_RELOAD" -Value "false"
+            Set-EnvIfMissing -Name "STARTUP_REQUIRE_HTTP_READY" -Value "false"
+            Set-EnvIfMissing -Name "LLAMAINDEX_PREWARM_ON_STARTUP" -Value "false"
+            Set-EnvIfMissing -Name "STARTUP_TIMEOUT_SECONDS" -Value "35"
+        }
+        "full" {
+            # Full diagnostics/UX checks: reload + HTTP readiness + startup prewarm.
+            Set-EnvIfMissing -Name "BACKEND_RELOAD" -Value "true"
+            Set-EnvIfMissing -Name "STARTUP_REQUIRE_HTTP_READY" -Value "true"
+            Set-EnvIfMissing -Name "LLAMAINDEX_PREWARM_ON_STARTUP" -Value "true"
+            Set-EnvIfMissing -Name "STARTUP_TIMEOUT_SECONDS" -Value "90"
+        }
+        default {
+            # Balanced default: reload + HTTP readiness, prewarm disabled for faster boot.
+            Set-EnvIfMissing -Name "BACKEND_RELOAD" -Value "true"
+            Set-EnvIfMissing -Name "STARTUP_REQUIRE_HTTP_READY" -Value "true"
+            Set-EnvIfMissing -Name "LLAMAINDEX_PREWARM_ON_STARTUP" -Value "false"
+            Set-EnvIfMissing -Name "STARTUP_TIMEOUT_SECONDS" -Value "60"
+        }
+    }
+}
 
 function Get-DevLanIpAddress {
     $allConfigurations = @(Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object {
@@ -150,6 +193,9 @@ $env:DEV_ALLOWED_ORIGINS = $devAllowedOrigins -join ','
 $env:FRONTEND_URL = $frontendOrigin
 $env:NEXT_PUBLIC_API_BASE_URL = $backendOrigin
 
+Apply-StartupProfile -SelectedProfile $Profile
+Write-Host ("Startup profile: {0}" -f $Profile) -ForegroundColor DarkGray
+
 # Capture Ctrl+C for immediate shutdown
 $cancelEvent = Register-ObjectEvent -InputObject ([Console]) -EventName CancelKeyPress -Action {
     $eventArgs.Cancel = $true
@@ -157,11 +203,32 @@ $cancelEvent = Register-ObjectEvent -InputObject ([Console]) -EventName CancelKe
 }
 
 Write-Host "Starting backend (uvicorn) ..." -ForegroundColor Cyan
+$backendReloadEnabled = $true
+if ($env:BACKEND_RELOAD -and $env:BACKEND_RELOAD.ToLower() -in @("0", "false", "no")) {
+    $backendReloadEnabled = $false
+}
+
 $backend = Start-Job -Name "backend" -ScriptBlock {
-    param($r, $pythonExe)
+    param($r, $pythonExe, $reloadEnabled)
     Set-Location $r
-    & $pythonExe -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000 --reload-dir api --reload-dir app --reload-exclude=data/repos/* --reload-exclude=data/index/* 2>&1
-} -ArgumentList $root, $backendPython
+    $uvicornArgs = @("-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000")
+    if ($reloadEnabled) {
+        $uvicornArgs += @(
+            "--reload",
+            "--reload-dir", "api",
+            "--reload-dir", "app",
+            "--reload-exclude=data/repos/*",
+            "--reload-exclude=data/index/*",
+            "--reload-exclude=frontend/.next/*",
+            "--reload-exclude=venv_copilot/*",
+            "--reload-exclude=.venv/*",
+            "--reload-exclude=*.log",
+            "--reload-exclude=*.pyc",
+            "--reload-exclude=__pycache__/*"
+        )
+    }
+    & $pythonExe @uvicornArgs 2>&1
+} -ArgumentList $root, $backendPython, $backendReloadEnabled
 
 Write-Host "Starting frontend (npm run dev) ..." -ForegroundColor Cyan
 $frontend = Start-Job -Name "frontend" -ScriptBlock {
@@ -212,7 +279,22 @@ function Wait-ForPortsReady {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $backendDownChecks = 0
     $frontendDownChecks = 0
-    $maxStartupDownChecks = 20  # ~5 seconds with 250ms loop
+    $maxStartupDownChecks = 80  # ~20 seconds with 250ms loop for slower dev laptops
+
+    function Test-HttpReady {
+        param([string]$Url)
+        try {
+            $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            return ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500)
+        } catch {
+            return $false
+        }
+    }
+
+    $requireHttpReady = $true
+    if ($env:STARTUP_REQUIRE_HTTP_READY -and $env:STARTUP_REQUIRE_HTTP_READY.ToLower() -in @("0", "false", "no")) {
+        $requireHttpReady = $false
+    }
 
     while ((Get-Date) -lt $deadline) {
         # Stream startup logs while waiting so failures are visible immediately.
@@ -223,20 +305,20 @@ function Wait-ForPortsReady {
         $frontendPortUp = [bool](Get-PortPids -Port 3000)
         $allReady = $backendPortUp -and $frontendPortUp
 
+        if ($allReady -and $requireHttpReady) {
+            $backendHttpReady = Test-HttpReady -Url "http://127.0.0.1:8000/api/health"
+            $frontendHttpReady = Test-HttpReady -Url "http://127.0.0.1:3000/"
+            $allReady = $backendHttpReady -and $frontendHttpReady
+        }
+
         if ($allReady) { return $true }
 
         if ($backend.State -eq "Failed" -or $frontend.State -eq "Failed") {
             return $false
         }
 
-        # If either startup command already finished and the target port is still down,
-        # fail quickly instead of waiting for the full timeout window.
-        if ($backend.State -in @("Completed", "Stopped") -and -not $backendPortUp) {
-            return $false
-        }
-        if ($frontend.State -in @("Completed", "Stopped") -and -not $frontendPortUp) {
-            return $false
-        }
+        # Do not fail immediately on wrapper-job completion; in some shells
+        # child processes may outlive the wrapper briefly while ports settle.
 
         # Fail quickly if the wrapper job is no longer alive and its port never came up.
         if ($backendPortUp -or $backend.State -in @("Running", "NotStarted")) {

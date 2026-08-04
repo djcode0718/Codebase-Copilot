@@ -219,7 +219,7 @@ export default function IndexingPage() {
                 className="rounded-[1.5rem] border border-brand/20 bg-brand/5 p-5 text-center shadow-lg shadow-black/5"
               >
                 <CheckCircle2 size={32} className="text-brand mx-auto mb-3" />
-                <p className="font-heading font-semibold mb-1">Ready to chat</p>
+                <p className="font-heading font-semibold mb-1">Ready for Repository Chat</p>
                 <p className="text-sm text-muted-foreground mb-4">
                   {fileCount} files · {nodeCount} chunks indexed
                 </p>
@@ -228,7 +228,7 @@ export default function IndexingPage() {
                   className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer"
                 >
                   <MessageSquare size={15} className="mr-2" />
-                  Start chatting
+                  Start Repository Chat
                 </Button>
               </motion.div>
             )}

@@ -50,7 +50,7 @@ function parseIntelligenceSections(content: string): { plain: string; sections: 
   if (!hasIntelSections) return null;
 
   const sections: { def: IntelSection; content: string }[] = [];
-  let remaining = content;
+  const remaining = content;
 
   for (const def of INTEL_SECTIONS) {
     const patterns = [`**${def.key}**`, `**${def.key}`, `${def.key}`];
@@ -131,6 +131,17 @@ function SimpleMarkdown({ content }: { content: string }) {
   const elements: React.ReactNode[] = [];
   let i = 0;
 
+  function parseTableRow(row: string): string[] {
+    const normalized = row.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return normalized.split('|').map((c) => c.trim());
+  }
+
+  function isTableDivider(row: string): boolean {
+    const normalized = row.trim().replace(/^\|/, '').replace(/\|$/, '');
+    const cells = normalized.split('|').map((c) => c.trim());
+    return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c));
+  }
+
   while (i < lines.length) {
     const line = lines[i];
 
@@ -177,19 +188,83 @@ function SimpleMarkdown({ content }: { content: string }) {
       continue;
     }
 
-    // Headings
-    if (line.startsWith('### ')) {
-      elements.push(<h3 key={i} className="font-heading font-semibold text-sm mt-4 mb-1">{line.slice(4)}</h3>);
-    } else if (line.startsWith('## ')) {
-      elements.push(<h2 key={i} className="font-heading font-semibold text-base mt-4 mb-1">{line.slice(3)}</h2>);
-    } else if (line.startsWith('# ')) {
-      elements.push(<h1 key={i} className="font-heading font-bold text-lg mt-4 mb-1">{line.slice(2)}</h1>);
-    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : '';
+    const isTableHeader = line.includes('|') && isTableDivider(nextLine);
+
+    if (isTableHeader) {
+      const headers = parseTableRow(line);
+      i += 2; // Skip header + divider
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        rows.push(parseTableRow(lines[i]));
+        i++;
+      }
+
       elements.push(
-        <li key={i} className="ml-4 text-sm leading-relaxed list-disc">
-          {renderInline(line.slice(2))}
-        </li>
+        <div key={`tbl-${i}`} className="my-3 overflow-x-auto rounded-xl border border-border/70 bg-background/50">
+          <table className="min-w-full border-collapse text-sm">
+            <thead>
+              <tr className="bg-secondary/50 text-left">
+                {headers.map((h, idx) => (
+                  <th key={idx} className="border-b border-border/70 px-3 py-2 font-semibold text-foreground whitespace-nowrap">
+                    {renderInline(h)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ridx) => (
+                <tr key={ridx} className="odd:bg-background even:bg-background/70">
+                  {headers.map((_, cidx) => (
+                    <td key={cidx} className="border-b border-border/50 px-3 py-2 align-top">
+                      {renderInline(row[cidx] || '')}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       );
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const text = headingMatch[2].trim();
+      const cls = level <= 2 ? 'font-heading font-semibold text-base mt-4 mb-1.5' : 'font-heading font-semibold text-sm mt-4 mb-1';
+      elements.push(<p key={i} className={cls}>{renderInline(text)}</p>);
+    } else if (/^\s*---+\s*$/.test(line) || /^\s*\*\*\*+\s*$/.test(line)) {
+      elements.push(<hr key={i} className="my-3 border-border/70" />);
+    } else if (/^\s*([-*])\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*([-*])\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*([-*])\s+/, '').trim());
+        i++;
+      }
+      elements.push(
+        <ul key={`ul-${i}`} className="ml-5 list-disc space-y-1 text-sm leading-relaxed">
+          {items.map((item, idx) => (
+            <li key={idx}>{renderInline(item)}</li>
+          ))}
+        </ul>
+      );
+      continue;
+    } else if (/^\s*\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+\.\s+/, '').trim());
+        i++;
+      }
+      elements.push(
+        <ol key={`ol-${i}`} className="ml-5 list-decimal space-y-1 text-sm leading-relaxed">
+          {items.map((item, idx) => (
+            <li key={idx}>{renderInline(item)}</li>
+          ))}
+        </ol>
+      );
+      continue;
     } else if (line.trim() === '') {
       elements.push(<div key={i} className="h-2" />);
     } else {
@@ -206,13 +281,16 @@ function SimpleMarkdown({ content }: { content: string }) {
 }
 
 function renderInline(text: string): React.ReactNode {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
   return parts.map((part, i) => {
     if (part.startsWith('`') && part.endsWith('`')) {
       return <code key={i} className="font-code text-brand text-xs bg-background border border-border px-1.5 py-0.5 rounded">{part.slice(1, -1)}</code>;
     }
     if (part.startsWith('**') && part.endsWith('**')) {
       return <strong key={i} className="font-semibold text-foreground">{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
+      return <em key={i} className="italic text-foreground">{part.slice(1, -1)}</em>;
     }
     return part;
   });
@@ -225,9 +303,28 @@ export default function MessageBubble({ message, onInspect, isInspected, index }
   const intelParsed = !isUser ? parseIntelligenceSections(message.content) : null;
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(message.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(message.content);
+      } else if (typeof document !== 'undefined') {
+        const textarea = document.createElement('textarea');
+        textarea.value = message.content;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      } else {
+        throw new Error('Clipboard not available');
+      }
+
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
   }
 
   return (

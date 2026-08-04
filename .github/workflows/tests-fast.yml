@@ -1,0 +1,55 @@
+name: tests-fast
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  unit-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-api.txt pytest pytest-asyncio httpx
+      - name: Run unit lane (<60s budget)
+        run: |
+          START=$(date +%s)
+          python -m pytest tests/unit -m unit -q
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+          echo "Unit elapsed: ${ELAPSED}s"
+          test "$ELAPSED" -le 60
+
+  integration-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-api.txt pytest pytest-asyncio httpx
+      - name: Run integration lane (<60s budget)
+        env:
+          LLM_PROVIDER: groq
+          GROQ_API_KEY: test-groq-key
+          SUPABASE_URL: https://fake.supabase.co
+          SUPABASE_SERVICE_KEY: fake-service-key
+        run: |
+          START=$(date +%s)
+          python -m pytest tests/integration -m "integration and not slow" -q
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+          echo "Integration elapsed: ${ELAPSED}s"
+          test "$ELAPSED" -le 60
+

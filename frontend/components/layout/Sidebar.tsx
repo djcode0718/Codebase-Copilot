@@ -23,7 +23,6 @@ import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
-import { ThemeToggle } from '@/components/layout/ThemeToggle';
 
 const NAV = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -130,7 +129,7 @@ export default function Sidebar({
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex h-screen flex-col border-r border-sidebar-border bg-sidebar/95 text-sidebar-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-all duration-200 md:static md:z-auto md:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex h-screen flex-col border-r border-sidebar-border bg-sidebar/95 text-sidebar-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-all duration-200 md:sticky md:top-0 md:z-auto md:self-start md:translate-x-0',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
           collapsed ? 'w-20 max-w-20 md:w-20' : 'w-[18.5rem] max-w-[88vw] md:w-72'
         )}
@@ -160,7 +159,6 @@ export default function Sidebar({
         </Link>
 
         <div className={cn('flex items-center gap-2', collapsed && 'flex-col')}>
-          {!collapsed && <ThemeToggle className="hidden lg:inline-flex" />}
           <button
             type="button"
             onClick={() => setCollapsed(!collapsed)}

@@ -12,7 +12,7 @@ All fixtures use mocking so tests run without:
 import sys
 import os
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # ── Ensure project root is importable ─────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,15 +33,15 @@ os.environ.setdefault("REPOS_DIR", "/tmp/test_repos")
 
 
 def pytest_collection_modifyitems(config, items):
-    integration_files = {
-        "test_health.py",
-    }
-
     for item in items:
-        filename = os.path.basename(str(item.fspath))
+        path_str = str(item.fspath).replace("\\", "/")
 
-        if filename in integration_files or filename.startswith("test_router_"):
+        if "/tests/integration/" in path_str:
             item.add_marker(pytest.mark.integration)
+            continue
+
+        if "/tests/unit/" in path_str:
+            item.add_marker(pytest.mark.unit)
             continue
 
         # Default all remaining tests to unit unless explicitly marked otherwise.
@@ -128,18 +128,16 @@ def client(fake_user_id, mock_supabase):
     FastAPI TestClient with:
       - get_supabase() -> mock_supabase
       - get_current_user() -> fake_user_id
-      - configure_llamaindex_settings() -> no-op
+      - startup hook gracefully tolerates missing optional AI deps
     """
-    # Patch LlamaIndex startup to prevent Groq/Ollama connection
-    with patch("app.llm.llm_client.configure_llamaindex_settings"):
-        from fastapi.testclient import TestClient
-        from api.main import app
-        from api.dependencies import get_supabase, get_current_user
+    from fastapi.testclient import TestClient
+    from api.main import app
+    from api.dependencies import get_supabase, get_current_user
 
-        app.dependency_overrides[get_supabase] = lambda: mock_supabase
-        app.dependency_overrides[get_current_user] = lambda: fake_user_id
+    app.dependency_overrides[get_supabase] = lambda: mock_supabase
+    app.dependency_overrides[get_current_user] = lambda: fake_user_id
 
-        with TestClient(app, raise_server_exceptions=True) as c:
-            yield c
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
 
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
