@@ -52,6 +52,7 @@ function PasswordVisibilityButton({
   );
 }
 
+
 function useAuthActions(
   supabase: ReturnType<typeof createClient>,
   router: ReturnType<typeof useRouter>,
@@ -109,6 +110,18 @@ function SignInForm() {
     password,
     setLoading,
     setGuestLoading,
+  );
+
+  const guestButton = (
+    <Button
+      variant="outline"
+      className="w-full border-border hover:border-brand/50 hover:bg-accent transition-all duration-200 cursor-pointer"
+      onClick={handleGuestAccess}
+      disabled={guestLoading}
+    >
+      {guestLoading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
+      Continue as Guest
+    </Button>
   );
 
   return (
@@ -192,17 +205,7 @@ function SignInForm() {
             <div className="h-px flex-1 bg-border" />
           </div>
 
-          <Button
-            variant="outline"
-            className="w-full border-border hover:border-brand/50 hover:bg-accent transition-all duration-200 cursor-pointer"
-            onClick={handleGuestAccess}
-            disabled={guestLoading}
-          >
-            {guestLoading ? (
-              <Loader2 size={16} className="animate-spin mr-2" />
-            ) : null}
-            Continue as Guest
-          </Button>
+          {guestButton}
         </div>
 
         <p className="text-center text-sm text-muted-foreground mt-5">

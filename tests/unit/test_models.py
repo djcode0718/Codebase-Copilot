@@ -30,8 +30,29 @@ from api.models.chat import (
     AttachmentResponse,
     SavedReportCreateRequest,
     SavedReportResponse,
+    format_repository_anchor,
+    build_repository_memory_context,
 )
 from api.models.eval import RunEvalRequest, EvalSummaryResponse
+
+
+def _build_eval_summary(**overrides):
+    payload = {
+        "repo_id": "r1",
+        "hit_rate": 0.9,
+        "mrr": 0.85,
+        "avg_faithfulness": 0.8,
+        "avg_relevancy": 0.75,
+        "mode_accuracy": 0.95,
+        "avg_latency_total": 1200.0,
+        "avg_latency_retrieval": 300.0,
+        "avg_latency_rerank": 100.0,
+        "avg_latency_llm": 800.0,
+        "colbert_enabled": False,
+        "total_queries": 10,
+    }
+    payload.update(overrides)
+    return EvalSummaryResponse(**payload)
 
 
 # â”€â”€ Repo Models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -243,6 +264,21 @@ class TestConversationSummaryResponse:
         assert summary.chat_id == "c1"
         assert "security" in summary.tags
 
+    def test_memory_anchor_context_helpers(self):
+        item = {
+            "title": "Auth review",
+            "executive_summary": "Token verification path",
+            "files_discussed": ["api/dependencies.py"],
+            "services_discussed": ["AuthService"],
+            "apis_discussed": ["/api/chat/session"],
+        }
+        line = format_repository_anchor(item)
+        assert line.startswith("- Auth review: Token verification path")
+
+        context = build_repository_memory_context([item], current_context="USER: hi")
+        assert "CURRENT CONVERSATION CONTEXT:" in context
+        assert "REPOSITORY KNOWLEDGE ANCHORS:" in context
+
 
 class TestExportResponse:
     def test_export_payload_model(self):
@@ -313,27 +349,13 @@ class TestRunEvalRequest:
 
 class TestEvalSummaryResponse:
     def test_valid(self):
-        r = EvalSummaryResponse(
-            repo_id="r1",
-            hit_rate=0.9,
-            mrr=0.85,
-            avg_faithfulness=0.8,
-            avg_relevancy=0.75,
-            mode_accuracy=0.95,
-            avg_latency_total=1200.0,
-            avg_latency_retrieval=300.0,
-            avg_latency_rerank=100.0,
-            avg_latency_llm=800.0,
-            colbert_enabled=False,
-            total_queries=10,
-        )
+        r = _build_eval_summary()
         assert r.hit_rate == 0.9
         assert r.colbert_enabled is False
         assert r.total_queries == 10
 
     def test_optional_id_and_created_at(self):
-        r = EvalSummaryResponse(
-            repo_id="r1",
+        r = _build_eval_summary(
             hit_rate=0.0,
             mrr=0.0,
             avg_faithfulness=0.0,
@@ -343,7 +365,6 @@ class TestEvalSummaryResponse:
             avg_latency_retrieval=0.0,
             avg_latency_rerank=0.0,
             avg_latency_llm=0.0,
-            colbert_enabled=False,
             total_queries=0,
         )
         assert r.id is None

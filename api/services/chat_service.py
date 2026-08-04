@@ -262,6 +262,72 @@ def _build_metadata_event(
     }
 
 
+async def _resolve_query_mode(query: str, memory, classify_query):
+    from app.services.qa_service import resolve_ambiguous_query
+
+    resolved_query = await asyncio.get_event_loop().run_in_executor(
+        None, resolve_ambiguous_query, query, memory
+    )
+    if resolved_query != query:
+        logger.info(f"Resolved context-aware streaming query: '{resolved_query}'")
+
+    query_mode = await asyncio.get_event_loop().run_in_executor(
+        None, classify_query, resolved_query
+    )
+    return resolved_query, query_mode
+
+
+def _build_no_match_events(
+    *,
+    t_start: float,
+    retrieved_files: List[dict],
+    t_retrieval_ms: int,
+) -> List[str]:
+    full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
+    query_mode_value = QueryMode.CODE_LOOKUP.value
+    events: List[str] = [to_sse_data({"type": "token", "content": full_response})]
+
+    t_total_ms = int((time.time() - t_start) * 1000)
+    metadata = _build_metadata_event(
+        query_mode_value,
+        retrieved_files,
+        t_retrieval_ms,
+        0,
+        t_total_ms,
+    )
+    events.append(to_sse_data(metadata))
+    events.append(to_sse_data({"type": "suggestions", "questions": _repo_focused_rephrase_suggestions()}))
+    return events
+
+
+async def _stream_llm_response(full_prompt: str) -> AsyncGenerator[str, None]:
+    from app.services.llm_fallback import stream_with_fallback
+
+    stream_response = stream_with_fallback(full_prompt)
+    async for chunk in stream_response:
+        delta = chunk.delta or ""
+        if not delta:
+            continue
+        yield delta
+        await asyncio.sleep(0)
+
+
+def _persist_memory_turn(repo_id: str, chat_id: str, memory, query: str, full_response: str, query_mode):
+    from llama_index.core.base.llms.types import ChatMessage
+
+    memory.put(ChatMessage(role="user", content=query))
+    memory.put(ChatMessage(role="assistant", content=full_response))
+    _save_session(repo_id, chat_id, None, memory, query_mode)
+
+
+async def _emit_followup_events(full_response: str, resolved_query: str):
+    if _is_no_match_code_lookup_response(full_response):
+        followup_questions = _repo_focused_rephrase_suggestions()
+    else:
+        followup_questions = await _generate_followup_suggestions(resolved_query, full_response)
+    yield to_sse_data({"type": "suggestions", "questions": followup_questions})
+
+
 def _default_followup_suggestions() -> List[str]:
     return [
         "Can you show me where this is implemented?",
@@ -342,18 +408,8 @@ async def stream_chat_response(
         if memory is None:
             memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
 
-        # ── Query Resolution (Context-Aware Query Rewriting) ───────────────
-        from app.services.qa_service import resolve_ambiguous_query
-        resolved_query = await asyncio.get_event_loop().run_in_executor(
-            None, resolve_ambiguous_query, query, memory
-        )
-        if resolved_query != query:
-            logger.info(f"Resolved context-aware streaming query: '{resolved_query}'")
-
-        # ── Route query ────────────────────────────────────────────────────
-        query_mode = await asyncio.get_event_loop().run_in_executor(
-            None, classify_query, resolved_query
-        )
+        # ── Query Resolution + route ───────────────────────────────────────
+        resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
         query_mode_value = query_mode.value
 
         # ── Retrieve nodes (for metadata + ColBERT path) ───────────────────
@@ -372,19 +428,12 @@ async def stream_chat_response(
         top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
         if _should_force_no_match(query, top_score):
             full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
-            query_mode_value = QueryMode.CODE_LOOKUP.value
-            yield to_sse_data({'type': 'token', 'content': full_response})
-
-            t_total_ms = int((time.time() - t_start) * 1000)
-            metadata = _build_metadata_event(
-                query_mode_value,
-                retrieved_files,
-                t_retrieval_ms,
-                0,
-                t_total_ms,
-            )
-            yield to_sse_data(metadata)
-            yield to_sse_data({'type': 'suggestions', 'questions': _repo_focused_rephrase_suggestions()})
+            for evt in _build_no_match_events(
+                t_start=t_start,
+                retrieved_files=retrieved_files,
+                t_retrieval_ms=t_retrieval_ms,
+            ):
+                yield evt
             return
 
         # ── Build context string ───────────────────────────────────────────
@@ -403,18 +452,10 @@ async def stream_chat_response(
         # ── Stream LLM response ────────────────────────────────────────────
         t_llm_start = time.time()
 
-        # Use resilient fallback streaming pipeline
-        from app.services.llm_fallback import stream_with_fallback
-
         try:
-            stream_response = stream_with_fallback(full_prompt)
-            async for chunk in stream_response:
-                delta = chunk.delta or ""
-                if delta:
-                    full_response += delta
-                    yield to_sse_data({'type': 'token', 'content': delta})
-                    # Small yield to let the event loop breathe
-                    await asyncio.sleep(0)
+            async for delta in _stream_llm_response(full_prompt):
+                full_response += delta
+                yield to_sse_data({'type': 'token', 'content': delta})
         except Exception as llm_err:
             logger.error(f"LLM streaming failed: {llm_err}")
             raise llm_err
@@ -423,10 +464,7 @@ async def stream_chat_response(
 
         # ── Update memory ──────────────────────────────────────────────────
         try:
-            from llama_index.core.base.llms.types import ChatMessage
-            memory.put(ChatMessage(role="user", content=query))
-            memory.put(ChatMessage(role="assistant", content=full_response))
-            _save_session(repo_id, chat_id, None, memory, query_mode)
+            _persist_memory_turn(repo_id, chat_id, memory, query, full_response, query_mode)
         except Exception as mem_err:
             logger.warning(f"Memory update failed: {mem_err}")
 
@@ -442,12 +480,8 @@ async def stream_chat_response(
         )
         yield to_sse_data(metadata)
 
-        # Keep follow-up chips repository-focused when the model indicates no grounded match.
-        if _is_no_match_code_lookup_response(full_response):
-            followup_questions = _repo_focused_rephrase_suggestions()
-        else:
-            followup_questions = await _generate_followup_suggestions(resolved_query, full_response)
-        yield to_sse_data({'type': 'suggestions', 'questions': followup_questions})
+        async for suggestions_event in _emit_followup_events(full_response, resolved_query):
+            yield suggestions_event
 
     except Exception as e:
         logger.error(f"Streaming chat error: {e}", exc_info=True)

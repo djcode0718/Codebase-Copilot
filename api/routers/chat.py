@@ -34,6 +34,7 @@ from api.models.chat import (
     SavedReportCreateRequest,
     SavedReportUpdateRequest,
     SavedReportResponse,
+    build_repository_memory_context,
 )
 from api.services import supabase_service
 from api.services.chat_session_service import (
@@ -105,27 +106,7 @@ def _build_current_conversation_context(supabase: Client, chat_id: str, max_mess
 
 
 def _build_memory_context(memory_hits: List[dict], current_context: str = "") -> str:
-    anchor_blocks = []
-    for item in memory_hits:
-        summary = item.get("executive_summary") or item.get("technical_summary") or ""
-        refs = []
-        if item.get("files_discussed"):
-            refs.append("files=" + ", ".join(item.get("files_discussed")[:3]))
-        if item.get("services_discussed"):
-            refs.append("services=" + ", ".join(item.get("services_discussed")[:3]))
-        if item.get("apis_discussed"):
-            refs.append("apis=" + ", ".join(item.get("apis_discussed")[:3]))
-        refs_suffix = f" ({'; '.join(refs)})" if refs else ""
-        anchor_blocks.append(
-            f"- {item.get('title') or 'Previous conversation'}: {summary}{refs_suffix}"
-        )
-
-    sections = []
-    if current_context:
-        sections.append("CURRENT CONVERSATION CONTEXT:\n" + current_context)
-    if anchor_blocks:
-        sections.append("REPOSITORY KNOWLEDGE ANCHORS:\n" + "\n".join(anchor_blocks))
-    return "\n\n".join(sections)
+    return build_repository_memory_context(memory_hits, current_context)
 
 
 def _persist_user_message(supabase: Client, chat_id: str, query: str):

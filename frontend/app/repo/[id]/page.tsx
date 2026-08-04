@@ -44,6 +44,157 @@ function detectTechChips(name: string): typeof TECH_CHIPS[string][] {
     .slice(0, 4);
 }
 
+function formatIndexedDate(repo: Repo): string {
+  const indexedAtValue = repo.indexed_at ?? repo.created_at;
+  return new Date(indexedAtValue).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function buildKpis(repo: Repo) {
+  return [
+    { label: 'Files indexed', value: repo.file_count?.toLocaleString() ?? '—', icon: FileCode2 },
+    { label: 'Chunks created', value: repo.node_count?.toLocaleString() ?? '—', icon: Layers },
+    { label: 'LLM provider', value: repo.llm_provider ?? 'ollama', icon: Cpu },
+    { label: 'Indexed at', value: formatIndexedDate(repo), icon: Clock },
+  ];
+}
+
+function buildActivity(repo: Repo, chips: { label: string }[]) {
+  return [
+    {
+      title: repo.status === 'ready' ? 'Repository is ready' : repo.status === 'indexing' ? 'Pipeline is running' : 'Repository needs attention',
+      description: repo.status === 'ready'
+        ? 'Grounded chat and evaluations are available.'
+        : repo.status === 'indexing'
+        ? 'The ingestion pipeline is processing files and embeddings.'
+        : 'Review indexing logs or delete and re-run the repository.',
+      tone: repo.status === 'ready' ? 'text-brand' : repo.status === 'indexing' ? 'text-amber-400' : 'text-destructive',
+    },
+    {
+      title: 'Next best action',
+      description: 'Open chat to ask about architecture or run the evaluation suite to benchmark grounding quality.',
+      tone: 'text-blue-400',
+    },
+    {
+      title: 'Tech signal',
+      description: chips.length > 0 ? chips.map((chip) => chip.label).join(' · ') : 'No stack signal detected yet.',
+      tone: 'text-muted-foreground',
+    },
+  ];
+}
+
+function RepoHeaderSection({
+  repo,
+  token,
+  chips,
+  refreshing,
+  onRefresh,
+  onDelete,
+  onOpenChat,
+  onOpenEval,
+}: {
+  repo: Repo;
+  token: string;
+  chips: { label: string; color: string }[];
+  refreshing: boolean;
+  onRefresh: () => Promise<void>;
+  onDelete: () => Promise<void>;
+  onOpenChat: () => void;
+  onOpenEval: () => void;
+}) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm"
+    >
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-4">
+          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/70 px-3 py-1 text-xs text-muted-foreground">
+            <Sparkles size={12} className="text-brand" />
+            Repository workspace
+          </div>
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-background/70">
+              <GitBranch size={20} className="text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="font-heading text-3xl font-bold tracking-tight">{repo.name}</h1>
+              <a
+                href={repo.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-brand"
+              >
+                {repo.source_url}
+                <ExternalLink size={11} />
+              </a>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline" className={`${repo.status === 'ready' ? 'bg-brand/10 text-brand border-brand/20' : repo.status === 'indexing' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-destructive/10 text-destructive border-destructive/20'} text-xs`}>
+              {repo.status}
+            </Badge>
+            {chips.map((chip, i) => (
+              <Badge key={i} variant="outline" className={`${chip.color} border text-xs`}>
+                {chip.label}
+              </Badge>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportMenu repo={repo} token={token} />
+          <Button
+            variant="outline"
+            className="border-border cursor-pointer"
+            onClick={onRefresh}
+            disabled={!token || refreshing || repo.status === 'indexing'}
+          >
+            <RotateCcw size={14} className={`mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+            {repo.status === 'indexing' ? 'Indexing…' : refreshing ? 'Refreshing…' : 'Refresh index'}
+          </Button>
+          <Button onClick={onOpenChat} className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer">
+            <MessageSquare size={14} className="mr-2" />
+            Repository Chat
+          </Button>
+          <Button variant="outline" className="border-border cursor-pointer" onClick={onOpenEval}>
+            <BarChart2 size={14} className="mr-2" />
+            Evaluate
+          </Button>
+          <Button variant="outline" className="border-destructive/30 text-destructive hover:bg-destructive/10 cursor-pointer" onClick={onDelete}>
+            <Trash2 size={14} />
+          </Button>
+        </div>
+      </div>
+    </motion.section>
+  );
+}
+
+function RepoKpiRow({ repo }: { repo: Repo }) {
+  const kpis = buildKpis(repo);
+  return (
+    <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {kpis.map((stat, i) => (
+        <motion.div
+          key={stat.label}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: i * 0.04 }}
+          className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5"
+        >
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <stat.icon size={13} className="text-brand" />
+            {stat.label}
+          </div>
+          <p className="mt-3 text-sm font-semibold tracking-tight">{stat.value}</p>
+        </motion.div>
+      ))}
+    </section>
+  );
+}
+
 
 export default function RepoOverviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
@@ -108,136 +259,22 @@ export default function RepoOverviewPage() {
   }
 
   const chips = detectTechChips(repo.name);
-  const indexedAtValue = repo.indexed_at ?? repo.created_at;
-  const formattedDate = new Date(indexedAtValue).toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
-  const kpis = [
-    { label: 'Files indexed', value: repo.file_count?.toLocaleString() ?? '—', icon: FileCode2 },
-    { label: 'Chunks created', value: repo.node_count?.toLocaleString() ?? '—', icon: Layers },
-    { label: 'LLM provider', value: repo.llm_provider ?? 'ollama', icon: Cpu },
-    { label: 'Indexed at', value: formattedDate, icon: Clock },
-  ];
-  const activity = [
-    {
-      title: repo.status === 'ready' ? 'Repository is ready' : repo.status === 'indexing' ? 'Pipeline is running' : 'Repository needs attention',
-      description: repo.status === 'ready'
-        ? 'Grounded chat and evaluations are available.'
-        : repo.status === 'indexing'
-        ? 'The ingestion pipeline is processing files and embeddings.'
-        : 'Review indexing logs or delete and re-run the repository.'
-      ,
-      tone: repo.status === 'ready' ? 'text-brand' : repo.status === 'indexing' ? 'text-amber-400' : 'text-destructive',
-    },
-    {
-      title: 'Next best action',
-      description: 'Open chat to ask about architecture or run the evaluation suite to benchmark grounding quality.',
-      tone: 'text-blue-400',
-    },
-    {
-      title: 'Tech signal',
-      description: chips.length > 0 ? chips.map((chip) => chip.label).join(' · ') : 'No stack signal detected yet.',
-      tone: 'text-muted-foreground',
-    },
-  ];
+  const activity = buildActivity(repo, chips);
 
   return (
     <div className="space-y-6">
-      <motion.section
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="rounded-[1.5rem] border border-border bg-card/80 p-6 shadow-lg shadow-black/5 backdrop-blur-sm"
-      >
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/70 px-3 py-1 text-xs text-muted-foreground">
-              <Sparkles size={12} className="text-brand" />
-              Repository workspace
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-background/70">
-                <GitBranch size={20} className="text-muted-foreground" />
-              </div>
-              <div className="min-w-0">
-                <h1 className="font-heading text-3xl font-bold tracking-tight">{repo.name}</h1>
-                <a
-                  href={repo.source_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-brand"
-                >
-                  {repo.source_url}
-                  <ExternalLink size={11} />
-                </a>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline" className={`${repo.status === 'ready' ? 'bg-brand/10 text-brand border-brand/20' : repo.status === 'indexing' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-destructive/10 text-destructive border-destructive/20'} text-xs`}>
-                {repo.status}
-              </Badge>
-              {chips.map((chip, i) => (
-                <Badge key={i} variant="outline" className={`${chip.color} border text-xs`}>
-                  {chip.label}
-                </Badge>
-              ))}
-            </div>
-          </div>
+      <RepoHeaderSection
+        repo={repo}
+        token={token}
+        chips={chips}
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
+        onDelete={handleDelete}
+        onOpenChat={() => router.push(`/repo/${repoId}/chat`)}
+        onOpenEval={() => router.push(`/repo/${repoId}/eval`)}
+      />
 
-          <div className="flex flex-wrap items-center gap-2">
-            <ExportMenu repo={repo} token={token} />
-            <Button
-              variant="outline"
-              className="border-border cursor-pointer"
-              onClick={handleRefresh}
-              disabled={!token || refreshing || repo.status === 'indexing'}
-            >
-              <RotateCcw size={14} className={`mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-              {repo.status === 'indexing' ? 'Indexing…' : refreshing ? 'Refreshing…' : 'Refresh index'}
-            </Button>
-            <Button
-              onClick={() => router.push(`/repo/${repoId}/chat`)}
-              className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer"
-            >
-              <MessageSquare size={14} className="mr-2" />
-              Repository Chat
-            </Button>
-            <Button
-              variant="outline"
-              className="border-border cursor-pointer"
-              onClick={() => router.push(`/repo/${repoId}/eval`)}
-            >
-              <BarChart2 size={14} className="mr-2" />
-              Evaluate
-            </Button>
-            <Button
-              variant="outline"
-              className="border-destructive/30 text-destructive hover:bg-destructive/10 cursor-pointer"
-              onClick={handleDelete}
-            >
-              <Trash2 size={14} />
-            </Button>
-          </div>
-        </div>
-      </motion.section>
-
-      {/* KPI Row */}
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {kpis.map((stat, i) => (
-          <motion.div
-            key={stat.label}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.04 }}
-            className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5"
-          >
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <stat.icon size={13} className="text-brand" />
-              {stat.label}
-            </div>
-            <p className="mt-3 text-sm font-semibold tracking-tight">{stat.value}</p>
-          </motion.div>
-        ))}
-      </section>
+      <RepoKpiRow repo={repo} />
 
       {/* Repository Intelligence Summary */}
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.25fr_0.85fr]">

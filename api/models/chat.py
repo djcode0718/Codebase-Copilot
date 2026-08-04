@@ -175,3 +175,29 @@ class DoneEvent(BaseModel):
 class ErrorEvent(BaseModel):
     type: str = "error"
     message: str
+
+
+def format_repository_anchor(item: Dict[str, Any]) -> str:
+    summary = item.get("executive_summary") or item.get("technical_summary") or ""
+    refs = []
+    if item.get("files_discussed"):
+        refs.append("files=" + ", ".join(item.get("files_discussed")[:3]))
+    if item.get("services_discussed"):
+        refs.append("services=" + ", ".join(item.get("services_discussed")[:3]))
+    if item.get("apis_discussed"):
+        refs.append("apis=" + ", ".join(item.get("apis_discussed")[:3]))
+    refs_suffix = f" ({'; '.join(refs)})" if refs else ""
+    return f"- {item.get('title') or 'Previous conversation'}: {summary}{refs_suffix}"
+
+
+def build_repository_memory_context(memory_hits: List[Dict[str, Any]], current_context: str = "") -> str:
+    sections: List[str] = []
+    if current_context:
+        sections.append("CURRENT CONVERSATION CONTEXT:\n" + current_context)
+    if memory_hits:
+        sections.append(
+            "REPOSITORY KNOWLEDGE ANCHORS:\n"
+            + "\n".join(format_repository_anchor(item) for item in memory_hits)
+        )
+    return "\n\n".join(sections)
+

@@ -113,6 +113,87 @@ function RepoSection({
   );
 }
 
+function QuickIndexForm({
+  url,
+  isPending,
+  onChange,
+  onSubmit,
+}: {
+  url: string;
+  isPending: boolean;
+  onChange: (value: string) => void;
+  onSubmit: (e: React.FormEvent) => void;
+}) {
+  return (
+    <motion.form
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.05, duration: 0.25 }}
+      onSubmit={onSubmit}
+      className="widget-elevated rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
+    >
+      <div className="mb-4 flex items-center gap-2">
+        <GitBranch size={15} className="text-brand" />
+        <div>
+          <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Quick index</h2>
+          <p className="text-xs text-muted-foreground">Paste a GitHub repository URL to launch the ingestion pipeline.</p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-3 md:flex-row">
+        <div className="relative flex-1">
+          <GitBranch
+            size={15}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+          />
+          <Input
+            type="url"
+            placeholder="https://github.com/owner/repository"
+            value={url}
+            onChange={(e) => onChange(e.target.value)}
+            className="pl-9 bg-background/70 border-border/80 focus-visible:ring-brand"
+            disabled={isPending}
+          />
+        </div>
+        <Button
+          type="submit"
+          className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer transition-colors duration-200 md:min-w-48"
+          disabled={isPending || !url.trim()}
+        >
+          {isPending ? (
+            <Loader2 size={15} className="animate-spin mr-2" />
+          ) : (
+            <Plus size={15} className="mr-2" />
+          )}
+          {isPending ? 'Starting…' : 'Index repository'}
+        </Button>
+      </div>
+    </motion.form>
+  );
+}
+
+function EmptyStateCard() {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 0.2 }}
+      className="rounded-[1.5rem] border border-dashed border-border bg-card/60 px-6 py-16 text-center"
+    >
+      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-background/70">
+        <GitBranch size={24} className="text-muted-foreground" />
+      </div>
+      <h3 className="font-heading text-lg font-semibold">No repositories yet</h3>
+      <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+        Paste a GitHub URL above to index your first repository and unlock grounded chat, evaluation, and activity telemetry.
+      </p>
+      <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs text-brand">
+        <span>Try: github.com/openai/whisper</span>
+        <ArrowRight size={12} />
+      </div>
+    </motion.div>
+  );
+}
+
 async function getToken(): Promise<string> {
   const supabase = createClient();
   const { data } = await supabase.auth.getSession();
@@ -218,49 +299,12 @@ export default function DashboardPage() {
         </div>
       </motion.section>
 
-      <motion.form
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.05, duration: 0.25 }}
+      <QuickIndexForm
+        url={url}
+        isPending={indexMutation.isPending}
+        onChange={setUrl}
         onSubmit={handleIndex}
-        className="widget-elevated rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
-      >
-        <div className="mb-4 flex items-center gap-2">
-          <GitBranch size={15} className="text-brand" />
-          <div>
-            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Quick index</h2>
-            <p className="text-xs text-muted-foreground">Paste a GitHub repository URL to launch the ingestion pipeline.</p>
-          </div>
-        </div>
-        <div className="flex flex-col gap-3 md:flex-row">
-          <div className="relative flex-1">
-            <GitBranch
-              size={15}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
-            />
-            <Input
-              type="url"
-              placeholder="https://github.com/owner/repository"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="pl-9 bg-background/70 border-border/80 focus-visible:ring-brand"
-              disabled={indexMutation.isPending}
-            />
-          </div>
-          <Button
-            type="submit"
-            className="bg-brand hover:bg-green-400 text-green-950 font-semibold cursor-pointer transition-colors duration-200 md:min-w-48"
-            disabled={indexMutation.isPending || !url.trim()}
-          >
-            {indexMutation.isPending ? (
-              <Loader2 size={15} className="animate-spin mr-2" />
-            ) : (
-              <Plus size={15} className="mr-2" />
-            )}
-            {indexMutation.isPending ? 'Starting…' : 'Index repository'}
-          </Button>
-        </div>
-      </motion.form>
+      />
 
       {indexingRepos.length > 0 && (
         <RepoSection title="Currently indexing" subtitle={`${indexingRepos.length} active`} repos={indexingRepos} />
@@ -281,24 +325,7 @@ export default function DashboardPage() {
         />
       ) : (
         !indexingRepos.length && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="rounded-[1.5rem] border border-dashed border-border bg-card/60 px-6 py-16 text-center"
-          >
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-background/70">
-              <GitBranch size={24} className="text-muted-foreground" />
-            </div>
-            <h3 className="font-heading text-lg font-semibold">No repositories yet</h3>
-            <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-              Paste a GitHub URL above to index your first repository and unlock grounded chat, evaluation, and activity telemetry.
-            </p>
-            <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs text-brand">
-              <span>Try: github.com/openai/whisper</span>
-              <ArrowRight size={12} />
-            </div>
-          </motion.div>
+          <EmptyStateCard />
         )
       )}
 
