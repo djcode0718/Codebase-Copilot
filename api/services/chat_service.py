@@ -328,6 +328,71 @@ async def _emit_followup_events(full_response: str, resolved_query: str):
     yield to_sse_data({"type": "suggestions", "questions": followup_questions})
 
 
+async def _load_indexes(index_name: str):
+    from app.services.qa_service import _get_indexes
+
+    return await asyncio.get_event_loop().run_in_executor(None, _get_indexes, index_name)
+
+
+def _get_or_create_memory(repo_id: str, chat_id: str):
+    _chat_engine, memory, _last_mode = _get_or_init_session(repo_id, chat_id)
+    if memory is None:
+        memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
+    return memory
+
+
+async def _retrieve_ranked_nodes(query_mode, vector_index, bm25_retriever, resolved_query: str):
+    t_ret_start = time.time()
+    retriever = _build_retriever(query_mode, vector_index, bm25_retriever)
+    raw_nodes = await _retrieve_nodes(retriever, resolved_query)
+    reranked_nodes = await _rerank_nodes(resolved_query, raw_nodes)
+    t_retrieval_ms = int((time.time() - t_ret_start) * 1000)
+    return reranked_nodes, t_retrieval_ms
+
+
+def _select_system_prompt(query_mode, code_lookup_prompt: str, architectural_prompt: str) -> str:
+    return code_lookup_prompt if query_mode == QueryMode.CODE_LOOKUP else architectural_prompt
+
+
+async def _prepare_stream_prompt(
+    *,
+    query: str,
+    index_name: str,
+    repo_id: str,
+    chat_id: str,
+    memory_context: Optional[str],
+):
+    from app.retrieval.query_router import classify_query
+    from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
+
+    vector_index, bm25_retriever = await _load_indexes(index_name)
+    memory = _get_or_create_memory(repo_id, chat_id)
+
+    resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
+    reranked_nodes, t_retrieval_ms = await _retrieve_ranked_nodes(
+        query_mode,
+        vector_index,
+        bm25_retriever,
+        resolved_query,
+    )
+    retrieved_files = _build_retrieved_files(reranked_nodes)
+    context_str = _build_context_str(reranked_nodes)
+    history_str = _build_history_str(memory)
+
+    system_prompt = _select_system_prompt(query_mode, CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT)
+    full_prompt = _build_full_prompt(system_prompt, memory_context, history_str, context_str, resolved_query)
+
+    return {
+        "memory": memory,
+        "resolved_query": resolved_query,
+        "query_mode": query_mode,
+        "reranked_nodes": reranked_nodes,
+        "retrieved_files": retrieved_files,
+        "t_retrieval_ms": t_retrieval_ms,
+        "full_prompt": full_prompt,
+    }
+
+
 def _default_followup_suggestions() -> List[str]:
     return [
         "Can you show me where this is implemented?",
@@ -394,36 +459,21 @@ async def stream_chat_response(
     t_llm_ms = 0
 
     try:
-        # ── Load indexes ───────────────────────────────────────────────────
-        from app.services.qa_service import _get_indexes
-        from app.retrieval.query_router import classify_query
-        from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
-
-        vector_index, bm25_retriever = await asyncio.get_event_loop().run_in_executor(
-            None, _get_indexes, index_name
+        prep = await _prepare_stream_prompt(
+            query=query,
+            index_name=index_name,
+            repo_id=repo_id,
+            chat_id=chat_id,
+            memory_context=memory_context,
         )
-
-        # ── Get/create memory ──────────────────────────────────────────────
-        chat_engine, memory, last_mode = _get_or_init_session(repo_id, chat_id)
-        if memory is None:
-            memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
-
-        # ── Query Resolution + route ───────────────────────────────────────
-        resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
+        memory = prep["memory"]
+        resolved_query = prep["resolved_query"]
+        query_mode = prep["query_mode"]
+        reranked_nodes = prep["reranked_nodes"]
+        retrieved_files = prep["retrieved_files"]
+        t_retrieval_ms = prep["t_retrieval_ms"]
+        full_prompt = prep["full_prompt"]
         query_mode_value = query_mode.value
-
-        # ── Retrieve nodes (for metadata + ColBERT path) ───────────────────
-        t_ret_start = time.time()
-
-        retriever = _build_retriever(query_mode, vector_index, bm25_retriever)
-        raw_nodes = await _retrieve_nodes(retriever, resolved_query)
-        t_retrieval_ms = int((time.time() - t_ret_start) * 1000)
-
-        # ── ColBERT reranking ──────────────────────────────────────────────
-        reranked_nodes = await _rerank_nodes(resolved_query, raw_nodes)
-
-        # Build retrieved files list for metadata event
-        retrieved_files = _build_retrieved_files(reranked_nodes)
 
         top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
         if _should_force_no_match(query, top_score):
@@ -436,18 +486,6 @@ async def stream_chat_response(
                 yield evt
             return
 
-        # ── Build context string ───────────────────────────────────────────
-        context_str = _build_context_str(reranked_nodes)
-
-        system_prompt = (
-            CODE_LOOKUP_PROMPT
-            if query_mode == QueryMode.CODE_LOOKUP
-            else ARCHITECTURAL_PROMPT
-        )
-
-        # ── Memory: get history ────────────────────────────────────────────
-        history_str = _build_history_str(memory)
-        full_prompt = _build_full_prompt(system_prompt, memory_context, history_str, context_str, resolved_query)
 
         # ── Stream LLM response ────────────────────────────────────────────
         t_llm_start = time.time()

@@ -195,6 +195,96 @@ function RepoKpiRow({ repo }: { repo: Repo }) {
   );
 }
 
+function RepositoryActivityPanel({ activity }: { activity: { title: string; description: string; tone: string }[] }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.05 }}
+      className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
+    >
+      <div className="mb-4 flex items-center gap-2">
+        <Activity size={15} className="text-brand" />
+        <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Repository activity</h2>
+      </div>
+      <div className="space-y-3">
+        {activity.map((item) => (
+          <div key={item.title} className="flex gap-3 rounded-2xl border border-border/70 bg-background/70 px-4 py-3">
+            <div className={cn('mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-brand/10', item.tone)}>
+              <ShieldCheck size={14} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{item.title}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function FastActionsPanel({
+  repoId,
+  repoStatus,
+  onOpenDigitalTwin,
+}: {
+  repoId: string;
+  repoStatus: string;
+  onOpenDigitalTwin: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.1 }}
+      className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
+    >
+      <div className="mb-4 flex items-center gap-2">
+        <Sparkles size={15} className="text-brand" />
+        <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Fast actions</h2>
+      </div>
+      <div className="space-y-3">
+        <Link href={`/repo/${repoId}/chat`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-brand/30 hover:bg-brand/5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">Repository Chat</p>
+              <p className="mt-1 text-xs text-muted-foreground">Start or continue the repository knowledge thread.</p>
+            </div>
+            <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </div>
+        </Link>
+        <Link href={`/repo/${repoId}/eval`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-violet-500/30 hover:bg-violet-500/5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">Run evaluation</p>
+              <p className="mt-1 text-xs text-muted-foreground">Benchmark grounding, relevancy, and latency.</p>
+            </div>
+            <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </div>
+        </Link>
+        <button
+          type="button"
+          onClick={onOpenDigitalTwin}
+          disabled={repoStatus !== 'ready'}
+          className="group w-full block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-pink-500/30 hover:bg-pink-500/5 text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-medium flex items-center gap-1.5">
+                <Brain size={13} className="text-pink-400" />
+                Digital Twin
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Generate living architecture model.</p>
+            </div>
+            <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </div>
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
 
 export default function RepoOverviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
@@ -261,6 +351,12 @@ export default function RepoOverviewPage() {
   const chips = detectTechChips(repo.name);
   const activity = buildActivity(repo, chips);
 
+  const openDigitalTwin = () => {
+    const prompt = 'Generate a complete Repository Digital Twin: map all services, modules, APIs, databases, and external integrations. Create a Mermaid architecture diagram. Provide confidence level based on repository evidence.';
+    sessionStorage.setItem(`codebase:preload-prompt:${repoId}`, prompt);
+    router.push(`/repo/${repoId}/chat`);
+  };
+
   return (
     <div className="space-y-6">
       <RepoHeaderSection
@@ -278,86 +374,8 @@ export default function RepoOverviewPage() {
 
       {/* Repository Intelligence Summary */}
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.25fr_0.85fr]">
-
-        {/* Activity */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.05 }}
-          className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
-        >
-          <div className="mb-4 flex items-center gap-2">
-            <Activity size={15} className="text-brand" />
-            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Repository activity</h2>
-          </div>
-          <div className="space-y-3">
-            {activity.map((item) => (
-              <div key={item.title} className="flex gap-3 rounded-2xl border border-border/70 bg-background/70 px-4 py-3">
-                <div className={cn('mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-brand/10', item.tone)}>
-                  <ShieldCheck size={14} />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{item.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </motion.div>
-
-        {/* Fast Actions */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
-        >
-          <div className="mb-4 flex items-center gap-2">
-            <Sparkles size={15} className="text-brand" />
-            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Fast actions</h2>
-          </div>
-          <div className="space-y-3">
-            <Link href={`/repo/${repoId}/chat`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-brand/30 hover:bg-brand/5">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-medium">Repository Chat</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Start or continue the repository knowledge thread.</p>
-                </div>
-                <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-              </div>
-            </Link>
-            <Link href={`/repo/${repoId}/eval`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-violet-500/30 hover:bg-violet-500/5">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-medium">Run evaluation</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Benchmark grounding, relevancy, and latency.</p>
-                </div>
-                <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-              </div>
-            </Link>
-            <button
-              type="button"
-              onClick={() => {
-                const prompt = 'Generate a complete Repository Digital Twin: map all services, modules, APIs, databases, and external integrations. Create a Mermaid architecture diagram. Provide confidence level based on repository evidence.';
-                sessionStorage.setItem(`codebase:preload-prompt:${repoId}`, prompt);
-                router.push(`/repo/${repoId}/chat`);
-              }}
-              disabled={repo.status !== 'ready'}
-              className="group w-full block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-pink-500/30 hover:bg-pink-500/5 text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-medium flex items-center gap-1.5">
-                    <Brain size={13} className="text-pink-400" />
-                    Digital Twin
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">Generate living architecture model.</p>
-                </div>
-                <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-              </div>
-            </button>
-          </div>
-        </motion.div>
+        <RepositoryActivityPanel activity={activity} />
+        <FastActionsPanel repoId={repoId} repoStatus={repo.status} onOpenDigitalTwin={openDigitalTwin} />
       </section>
 
       {/* Repository Health Intelligence Dashboard */}

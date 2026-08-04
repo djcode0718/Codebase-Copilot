@@ -179,15 +179,26 @@ class ErrorEvent(BaseModel):
 
 def format_repository_anchor(item: Dict[str, Any]) -> str:
     summary = item.get("executive_summary") or item.get("technical_summary") or ""
-    refs = []
-    if item.get("files_discussed"):
-        refs.append("files=" + ", ".join(item.get("files_discussed")[:3]))
-    if item.get("services_discussed"):
-        refs.append("services=" + ", ".join(item.get("services_discussed")[:3]))
-    if item.get("apis_discussed"):
-        refs.append("apis=" + ", ".join(item.get("apis_discussed")[:3]))
-    refs_suffix = f" ({'; '.join(refs)})" if refs else ""
+    refs_suffix = _format_anchor_refs_suffix(item)
     return f"- {item.get('title') or 'Previous conversation'}: {summary}{refs_suffix}"
+
+
+def _format_anchor_refs_suffix(item: Dict[str, Any]) -> str:
+    refs = _collect_anchor_refs(item)
+    return f" ({'; '.join(refs)})" if refs else ""
+
+
+def _collect_anchor_refs(item: Dict[str, Any]) -> List[str]:
+    refs: List[str] = []
+    for key, label in (
+        ("files_discussed", "files"),
+        ("services_discussed", "services"),
+        ("apis_discussed", "apis"),
+    ):
+        values = item.get(key) or []
+        if values:
+            refs.append(f"{label}=" + ", ".join(values[:3]))
+    return refs
 
 
 def build_repository_memory_context(memory_hits: List[Dict[str, Any]], current_context: str = "") -> str:

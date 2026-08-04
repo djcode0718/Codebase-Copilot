@@ -204,7 +204,7 @@ async def stream_message(
     After streaming completes, persists both the user message and
     assistant response to Supabase asynchronously.
     """
-    query = body.query.strip()
+    query = body.query_stripped
     if not query:
         raise HTTPException(status_code=400, detail="Query must not be empty")
 

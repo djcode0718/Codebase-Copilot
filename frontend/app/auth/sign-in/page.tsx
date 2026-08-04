@@ -52,6 +52,88 @@ function PasswordVisibilityButton({
   );
 }
 
+function EmailField({
+  email,
+  onChange,
+}: {
+  email: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="email">Email</Label>
+      <Input
+        id="email"
+        type="email"
+        placeholder="you@example.com"
+        value={email}
+        onChange={(e) => onChange(e.target.value)}
+        required
+        autoComplete="email"
+        className="bg-background border-border focus-visible:ring-brand"
+      />
+    </div>
+  );
+}
+
+function PasswordField({
+  password,
+  showPassword,
+  onChange,
+  onToggle,
+}: {
+  password: string;
+  showPassword: boolean;
+  onChange: (value: string) => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label htmlFor="password">Password</Label>
+        <Link
+          href="/auth/forgot-password"
+          className="text-xs text-muted-foreground hover:text-brand transition-colors"
+        >
+          Forgot password?
+        </Link>
+      </div>
+      <div className="relative">
+        <Input
+          id="password"
+          type={showPassword ? 'text' : 'password'}
+          placeholder="••••••••"
+          value={password}
+          onChange={(e) => onChange(e.target.value)}
+          required
+          autoComplete="current-password"
+          className="bg-background border-border focus-visible:ring-brand pr-10"
+        />
+        <PasswordVisibilityButton showPassword={showPassword} onToggle={onToggle} />
+      </div>
+    </div>
+  );
+}
+
+function SubmitButton({ loading }: { loading: boolean }) {
+  return (
+    <Button
+      type="submit"
+      className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200 cursor-pointer"
+      disabled={loading}
+    >
+      {loading ? (
+        <>
+          <Loader2 size={16} className="animate-spin mr-2" />
+          Signing in…
+        </>
+      ) : (
+        'Sign in'
+      )}
+    </Button>
+  );
+}
+
 
 function useAuthActions(
   supabase: ReturnType<typeof createClient>,
@@ -141,62 +223,14 @@ function SignInForm() {
         {/* Card */}
         <div className="bg-card border border-border rounded-xl p-6 space-y-5">
           <form onSubmit={handleSignIn} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                className="bg-background border-border focus-visible:ring-brand"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
-                <Link
-                  href="/auth/forgot-password"
-                  className="text-xs text-muted-foreground hover:text-brand transition-colors"
-                >
-                  Forgot password?
-                </Link>
-              </div>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete="current-password"
-                  className="bg-background border-border focus-visible:ring-brand pr-10"
-                />
-                <PasswordVisibilityButton
-                  showPassword={showPassword}
-                  onToggle={() => setShowPassword(!showPassword)}
-                />
-              </div>
-            </div>
-
-            <Button
-              type="submit"
-              className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200 cursor-pointer"
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <Loader2 size={16} className="animate-spin mr-2" />
-                  Signing in…
-                </>
-              ) : (
-                'Sign in'
-              )}
-            </Button>
+            <EmailField email={email} onChange={setEmail} />
+            <PasswordField
+              password={password}
+              showPassword={showPassword}
+              onChange={setPassword}
+              onToggle={() => setShowPassword(!showPassword)}
+            />
+            <SubmitButton loading={loading} />
           </form>
 
           <div className="flex items-center gap-3">
