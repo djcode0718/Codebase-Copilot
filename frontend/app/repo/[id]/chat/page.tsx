@@ -325,8 +325,8 @@ export default function ChatPage() {
         </div>
       </motion.section>
 
-      <div className="grid min-h-[62vh] grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm">
+      <div className="grid min-h-[62vh] grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+        <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-[calc(100vh-10rem)] xl:flex xl:flex-col">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Activity size={15} className="text-brand" />
@@ -474,7 +474,7 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="min-h-[32rem] overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm">
+        <div className="min-h-[32rem] overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:sticky xl:top-6 xl:h-[calc(100vh-10rem)]">
           <AIInspector
             data={inspectedIndex !== null ? inspectorData : pendingMetadata
               ? {

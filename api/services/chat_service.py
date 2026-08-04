@@ -139,6 +139,14 @@ _NO_MATCH_CODE_LOOKUP_RESPONSE = (
     "Try rephrasing or asking about a specific file or function."
 )
 
+_REPO_INTENT_KEYWORDS = {
+    "repo", "repository", "code", "file", "module", "class", "function", "method",
+    "bug", "error", "traceback", "api", "endpoint", "schema", "table", "query",
+    "sql", "migration", "test", "pytest", "frontend", "backend", "service", "router",
+    "model", "component", "typescript", "python", "javascript", "java", "go", "rust",
+    "c#", "c++", ".py", ".ts", ".tsx", ".js", ".jsx",
+}
+
 
 def _repo_focused_rephrase_suggestions() -> List[str]:
     """Guided fallback suggestions for out-of-scope or invalid repository questions."""
@@ -154,6 +162,26 @@ def _is_no_match_code_lookup_response(response_text: str) -> bool:
     return text.startswith(_NO_MATCH_CODE_LOOKUP_RESPONSE.lower())
 
 
+def _looks_repository_intent(query: str) -> bool:
+    text = (query or "").strip().lower()
+    if not text:
+        return False
+
+    if any(tok in text for tok in _REPO_INTENT_KEYWORDS):
+        return True
+
+    # Code-ish hints that usually indicate repository intent.
+    return any(marker in text for marker in ("/", "\\", "::", "()", "{", "}"))
+
+
+def _should_force_no_match(query: str, top_score: float) -> bool:
+    """Short-circuit clearly out-of-scope prompts to the strict no-match response."""
+    if _looks_repository_intent(query):
+        return False
+    # Irrelevant prompts should not proceed to full LLM synthesis.
+    return top_score < 0.7
+
+
 def _safe_chat_error_message(err: Exception) -> str:
     """Convert internal exceptions to user-safe, actionable chat guidance."""
     msg = str(err)
@@ -167,6 +195,7 @@ def _safe_chat_error_message(err: Exception) -> str:
         or "schema cache" in msg_l
         or "pgrst" in msg_l
         or "conversation_summaries" in msg_l
+        or "conversation_tags" in msg_l
     ):
         return (
             "I hit a temporary repository memory issue. "
@@ -309,6 +338,25 @@ async def stream_chat_response(
             {"path": n.node.metadata.get("path", "unknown"), "score": round(float(n.score or 0.0), 4)}
             for n in reranked_nodes
         ]
+
+        top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
+        if _should_force_no_match(query, top_score):
+            full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
+            query_mode_value = QueryMode.CODE_LOOKUP.value
+            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+
+            t_total_ms = int((time.time() - t_start) * 1000)
+            metadata = {
+                "type": "metadata",
+                "query_mode": query_mode_value,
+                "retrieved_files": retrieved_files,
+                "latency_retrieval_ms": t_retrieval_ms,
+                "latency_llm_ms": 0,
+                "latency_total_ms": t_total_ms,
+            }
+            yield f"data: {json.dumps(metadata)}\n\n"
+            yield f"data: {json.dumps({'type': 'suggestions', 'questions': _repo_focused_rephrase_suggestions()})}\n\n"
+            return
 
         # ── Build context string ───────────────────────────────────────────
         context_str = "\n\n".join([

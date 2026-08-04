@@ -9,7 +9,7 @@ Tables used (see schema in blueprint):
 """
 
 import uuid
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 from datetime import datetime, timezone, timedelta
 
 from supabase import Client
@@ -20,6 +20,7 @@ _HEALTH_SCHEMA_AVAILABLE: Optional[bool] = None
 _HEALTH_SCHEMA_LAST_CHECKED_AT: Optional[datetime] = None
 _HEALTH_SCHEMA_CHECK_TTL_SECONDS = 60
 _HEALTH_SCHEMA_WARNED = False
+_MISSING_REPO_MEMORY_TABLE_WARNED: Set[str] = set()
 
 
 def _is_missing_column_error(err: Exception, columns: List[str]) -> bool:
@@ -36,6 +37,23 @@ def _is_missing_health_table_error(err: Exception) -> bool:
     if "pgrst205" in msg and "repository_health_" in msg:
         return True
     return "could not find the table 'public.repository_health_" in msg
+
+
+def _missing_repo_memory_table_name(err: Exception) -> Optional[str]:
+    msg = str(err).lower()
+    for table in ("conversation_summaries", "conversation_tags"):
+        if table in msg and ("could not find the table" in msg or "schema cache" in msg or "pgrst205" in msg):
+            return table
+    return None
+
+
+def _warn_missing_repo_memory_table_once(table_name: str) -> None:
+    if table_name in _MISSING_REPO_MEMORY_TABLE_WARNED:
+        return
+    logger.warning(
+        f"Repository memory table '{table_name}' is missing. Apply repository memory migration to enable this feature."
+    )
+    _MISSING_REPO_MEMORY_TABLE_WARNED.add(table_name)
 
 
 def is_repository_health_schema_available(
@@ -523,7 +541,11 @@ def upsert_conversation_summary(
             result = supabase.table("conversation_summaries").insert(record).execute()
         return result.data[0] if result.data else record
     except Exception as e:
-        logger.warning(f"upsert_conversation_summary skipped for chat_id='{chat_id}': {e}")
+        missing_table = _missing_repo_memory_table_name(e)
+        if missing_table:
+            _warn_missing_repo_memory_table_once(missing_table)
+        else:
+            logger.warning(f"upsert_conversation_summary skipped for chat_id='{chat_id}': {e}")
         return record
 
 
@@ -580,6 +602,10 @@ def replace_conversation_tags(supabase: Client, *, chat_id: str, tags: List[str]
         if rows:
             supabase.table("conversation_tags").insert(rows).execute()
     except Exception as e:
+        missing_table = _missing_repo_memory_table_name(e)
+        if missing_table:
+            _warn_missing_repo_memory_table_once(missing_table)
+            return
         logger.warning(f"replace_conversation_tags failed for chat_id='{chat_id}': {e}")
 
 

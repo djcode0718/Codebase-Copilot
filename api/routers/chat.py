@@ -61,6 +61,7 @@ def _safe_stream_error_message(err: Exception) -> str:
         or "schema cache" in msg
         or "pgrst" in msg
         or "conversation_summaries" in msg
+        or "conversation_tags" in msg
     ):
         return (
             "I hit a temporary repository memory issue. "

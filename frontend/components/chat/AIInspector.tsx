@@ -91,6 +91,7 @@ function LatencyBar({
   if (!total) return null;
   const ret = retrieval ?? 0;
   const l = llm ?? 0;
+  const other = Math.max(0, total - ret - l);
   const retPct = (ret / total) * 100;
   const llmPct = (l / total) * 100;
   const otherPct = Math.max(0, 100 - retPct - llmPct);
@@ -117,20 +118,27 @@ function LatencyBar({
       </div>
 
       {/* Legend */}
-      <div className="grid grid-cols-3 gap-1 text-xs text-muted-foreground">
-        <div className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-sm bg-blue-400 flex-shrink-0" />
-          <span>Retrieval</span>
-          <span className="font-mono ml-auto">{ret}ms</span>
+      <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+        <div className="flex items-center justify-between gap-2 rounded-md bg-background/60 px-2 py-1.5">
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <span className="w-2 h-2 rounded-sm bg-blue-400 flex-shrink-0" />
+            <span className="truncate">Retrieval</span>
+          </span>
+          <span className="font-mono whitespace-nowrap">{ret}ms</span>
         </div>
-        <div className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-sm bg-violet-400 flex-shrink-0" />
-          <span>Other</span>
+        <div className="flex items-center justify-between gap-2 rounded-md bg-background/60 px-2 py-1.5">
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <span className="w-2 h-2 rounded-sm bg-violet-400 flex-shrink-0" />
+            <span className="truncate">Other</span>
+          </span>
+          <span className="font-mono whitespace-nowrap">{other}ms</span>
         </div>
-        <div className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-sm bg-amber-400 flex-shrink-0" />
-          <span>LLM</span>
-          <span className="font-mono ml-auto">{l}ms</span>
+        <div className="flex items-center justify-between gap-2 rounded-md bg-background/60 px-2 py-1.5 sm:col-span-2">
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <span className="w-2 h-2 rounded-sm bg-amber-400 flex-shrink-0" />
+            <span className="truncate">LLM</span>
+          </span>
+          <span className="font-mono whitespace-nowrap">{l}ms</span>
         </div>
       </div>
 
