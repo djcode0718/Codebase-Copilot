@@ -196,6 +196,7 @@ Conversation memory is treated as long-term repository intelligence, not disposa
 **Intelligence Action auto-run and chat UX**
 - Triggering an Intelligence Action now preloads and automatically sends its prompt in Repository Chat (no extra Enter/click required).
 - Repository Chat resumes the latest repository session by default to preserve long-term engineering memory.
+- If a question is out of scope for the indexed repo, chat now returns a strict rephrase prompt and only shows repository-focused follow-up chips (no unrelated topic suggestions).
 - Assistant markdown rendering supports clearer headings, ordered/unordered lists, inline emphasis, and improved contrast in light/dark themes.
 - Repository status signal card surfaces score, grade, status, and top improvement priorities in a compact KPI format.
 
@@ -760,8 +761,10 @@ Both scripts:
 
 * free ports `8000` and `3000` before startup
 * stream prefixed logs in one terminal (`[backend]` / `[frontend]`)
+* wait for service readiness (ports and optional HTTP checks) before announcing success
 * stop both services on **Ctrl+C**
 * exit if either backend or frontend stops unexpectedly
+* support `.venv` and `venv_copilot` Python environments on startup
 
 | Service  | URL                      |
 | -------- | ------------------------ |

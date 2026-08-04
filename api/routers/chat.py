@@ -10,7 +10,6 @@ Chat endpoints:
   DELETE /api/chat/{chat_id}                 Delete a chat + all messages
 """
 
-import asyncio
 import json
 from typing import List, Optional
 
@@ -53,6 +52,24 @@ from app.utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _safe_stream_error_message(err: Exception) -> str:
+    msg = str(err).lower()
+    if (
+        "could not find the table" in msg
+        or "schema cache" in msg
+        or "pgrst" in msg
+        or "conversation_summaries" in msg
+    ):
+        return (
+            "I hit a temporary repository memory issue. "
+            "Please ask a repository-specific question about a file, function, class, or module."
+        )
+    return (
+        "I ran into an internal error while answering. "
+        "Please retry with a repository-specific question (file, function, class, or module)."
+    )
 
 
 def _ensure_repo_access(supabase: Client, user_id: str, repo_id: str) -> dict:
@@ -235,7 +252,7 @@ async def stream_message(
                         pass
         except Exception as e:
             logger.error(f"Error during SSE chat stream: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': _safe_stream_error_message(e)})}\n\n"
 
         # After stream: persist assistant message to DB
         if full_response:

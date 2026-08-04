@@ -507,7 +507,6 @@ def upsert_conversation_summary(
     user_id: str,
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    existing = get_conversation_summary(supabase, chat_id)
     record = {
         "chat_id": chat_id,
         "repo_id": repo_id,
@@ -515,12 +514,17 @@ def upsert_conversation_summary(
         **payload,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    if existing and existing.get("id"):
-        result = supabase.table("conversation_summaries").update(record).eq("id", existing["id"]).execute()
-    else:
-        record["id"] = str(uuid.uuid4())
-        result = supabase.table("conversation_summaries").insert(record).execute()
-    return result.data[0] if result.data else record
+    try:
+        existing = get_conversation_summary(supabase, chat_id)
+        if existing and existing.get("id"):
+            result = supabase.table("conversation_summaries").update(record).eq("id", existing["id"]).execute()
+        else:
+            record["id"] = str(uuid.uuid4())
+            result = supabase.table("conversation_summaries").insert(record).execute()
+        return result.data[0] if result.data else record
+    except Exception as e:
+        logger.warning(f"upsert_conversation_summary skipped for chat_id='{chat_id}': {e}")
+        return record
 
 
 def get_conversation_summary(supabase: Client, chat_id: str) -> Optional[Dict[str, Any]]:

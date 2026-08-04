@@ -134,6 +134,50 @@ AI Response: {response}
 
 Output exactly 3-4 follow-up questions, one per line, nothing else."""
 
+_NO_MATCH_CODE_LOOKUP_RESPONSE = (
+    "I couldn't find that in the retrieved code. "
+    "Try rephrasing or asking about a specific file or function."
+)
+
+
+def _repo_focused_rephrase_suggestions() -> List[str]:
+    """Guided fallback suggestions for out-of-scope or invalid repository questions."""
+    return [
+        "Can you ask about a specific file in this repository?",
+        "Which function or class should we inspect first?",
+        "Can I get a quick map of the main folders?",
+    ]
+
+
+def _is_no_match_code_lookup_response(response_text: str) -> bool:
+    text = (response_text or "").strip().lower()
+    return text.startswith(_NO_MATCH_CODE_LOOKUP_RESPONSE.lower())
+
+
+def _safe_chat_error_message(err: Exception) -> str:
+    """Convert internal exceptions to user-safe, actionable chat guidance."""
+    msg = str(err)
+    msg_l = msg.lower()
+
+    if _is_rate_limit_error(err):
+        return "The model provider is rate-limited right now. Please retry in a moment."
+
+    if (
+        "could not find the table" in msg_l
+        or "schema cache" in msg_l
+        or "pgrst" in msg_l
+        or "conversation_summaries" in msg_l
+    ):
+        return (
+            "I hit a temporary repository memory issue. "
+            "Please ask a repository-specific question about a file, function, class, or module."
+        )
+
+    return (
+        "I ran into an internal error while answering. "
+        "Please retry with a repository-specific question (file, function, class, or module)."
+    )
+
 
 def _default_followup_suggestions() -> List[str]:
     return [
@@ -341,13 +385,16 @@ async def stream_chat_response(
         }
         yield f"data: {json.dumps(metadata)}\n\n"
 
-        # ── Generate dynamic follow-up suggestions ─────────────────────────
-        followup_questions = await _generate_followup_suggestions(resolved_query, full_response)
+        # Keep follow-up chips repository-focused when the model indicates no grounded match.
+        if _is_no_match_code_lookup_response(full_response):
+            followup_questions = _repo_focused_rephrase_suggestions()
+        else:
+            followup_questions = await _generate_followup_suggestions(resolved_query, full_response)
         yield f"data: {json.dumps({'type': 'suggestions', 'questions': followup_questions})}\n\n"
 
     except Exception as e:
         logger.error(f"Streaming chat error: {e}", exc_info=True)
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': _safe_chat_error_message(e)})}\n\n"
 
     finally:
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
