@@ -44,6 +44,7 @@ from api.services.chat_session_service import (
     restore_session,
 )
 from api.services.chat_search_service import search_repository_conversations
+from api.services.chat_history_service import get_chat_history
 from api.services.repository_memory_service import refresh_session_memory
 from api.services.export_service import build_export_payload
 from api.services.repository_knowledge_service import get_repository_knowledge_context
@@ -87,11 +88,44 @@ def _get_stream_chat_response_callable():
     return stream_chat_response
 
 
-def _build_memory_context(memory_hits: List[dict]) -> str:
-    return "\n\n".join(
-        f"- {item.get('title') or 'Previous conversation'}: {item.get('executive_summary') or item.get('technical_summary') or ''}"
-        for item in memory_hits
-    )
+def _build_current_conversation_context(supabase: Client, chat_id: str, max_messages: int = 6) -> str:
+    messages = get_chat_history(supabase, chat_id)
+    if not messages:
+        return ""
+
+    lines = []
+    for msg in messages[-max_messages:]:
+        role = (msg.get("role") or "").upper()
+        content = (msg.get("content") or "").strip()
+        if not role or not content:
+            continue
+        lines.append(f"{role}: {content[:280]}")
+
+    return "\n".join(lines)
+
+
+def _build_memory_context(memory_hits: List[dict], current_context: str = "") -> str:
+    anchor_blocks = []
+    for item in memory_hits:
+        summary = item.get("executive_summary") or item.get("technical_summary") or ""
+        refs = []
+        if item.get("files_discussed"):
+            refs.append("files=" + ", ".join(item.get("files_discussed")[:3]))
+        if item.get("services_discussed"):
+            refs.append("services=" + ", ".join(item.get("services_discussed")[:3]))
+        if item.get("apis_discussed"):
+            refs.append("apis=" + ", ".join(item.get("apis_discussed")[:3]))
+        refs_suffix = f" ({'; '.join(refs)})" if refs else ""
+        anchor_blocks.append(
+            f"- {item.get('title') or 'Previous conversation'}: {summary}{refs_suffix}"
+        )
+
+    sections = []
+    if current_context:
+        sections.append("CURRENT CONVERSATION CONTEXT:\n" + current_context)
+    if anchor_blocks:
+        sections.append("REPOSITORY KNOWLEDGE ANCHORS:\n" + "\n".join(anchor_blocks))
+    return "\n\n".join(sections)
 
 
 def _persist_user_message(supabase: Client, chat_id: str, query: str):
@@ -211,7 +245,8 @@ async def stream_message(
         chat_id=chat_id,
         max_items=3,
     )
-    memory_context = _build_memory_context(memory_hits)
+    current_context = _build_current_conversation_context(supabase, chat_id)
+    memory_context = _build_memory_context(memory_hits, current_context)
 
     # Lazy import keeps API startup resilient when optional AI deps are not installed yet.
     try:

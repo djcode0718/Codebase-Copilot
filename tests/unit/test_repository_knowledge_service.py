@@ -46,8 +46,12 @@ def test_get_repository_knowledge_context_filters_current_chat_and_sorts(monkeyp
         },
     ]
     monkeypatch.setattr(
-        "api.services.supabase_service.get_conversation_summaries_for_repo",
+        "api.services.repository_knowledge_service.get_repo_conversation_summaries",
         lambda *_a, **_k: summaries,
+    )
+    monkeypatch.setattr(
+        "api.services.repository_knowledge_service.get_repo_memory_messages",
+        lambda *_a, **_k: [],
     )
 
     result = get_repository_knowledge_context(
@@ -60,4 +64,32 @@ def test_get_repository_knowledge_context_filters_current_chat_and_sorts(monkeyp
     )
     assert len(result) == 1
     assert result[0]["chat_id"] == "c1"
+
+
+def test_get_repository_knowledge_context_backfills_from_messages(monkeypatch):
+    monkeypatch.setattr(
+        "api.services.repository_knowledge_service.get_repo_conversation_summaries",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        "api.services.repository_knowledge_service.get_repo_memory_messages",
+        lambda *_a, **_k: [
+            {"chat_id": "c9", "content": "Authentication middleware validates jwt token"},
+            {"chat_id": "c8", "content": "Caching with redis"},
+        ],
+    )
+
+    result = get_repository_knowledge_context(
+        MagicMock(),
+        user_id="u1",
+        repo_id="r1",
+        query="jwt token auth",
+        chat_id="c-current",
+        max_items=3,
+    )
+
+    assert len(result) == 1
+    assert result[0]["chat_id"] == "c9"
+    assert result[0]["anchor_type"] == "message"
+
 

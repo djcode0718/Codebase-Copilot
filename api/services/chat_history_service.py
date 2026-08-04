@@ -31,3 +31,19 @@ def get_repo_memory_messages(
         limit=limit,
     )
 
+
+def get_repo_conversation_summaries(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    return _supabase_service_module().get_conversation_summaries_for_repo(
+        supabase,
+        repo_id=repo_id,
+        user_id=user_id,
+        limit=limit,
+    )
+
+
