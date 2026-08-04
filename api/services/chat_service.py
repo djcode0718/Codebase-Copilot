@@ -18,7 +18,6 @@ Note on streaming:
 """
 
 import asyncio
-import json
 import time
 from typing import AsyncGenerator, Optional, Tuple, List
 
@@ -39,6 +38,7 @@ from app.config import (
     OLLAMA_LLM_MODEL,
 )
 from app.utils.logger import get_logger
+from api.services.chat_stream_utils import to_sse_data, safe_chat_error_message
 
 logger = get_logger(__name__)
 
@@ -63,17 +63,6 @@ def _ensure_llamaindex():
         Settings.llm = get_llm()
     if Settings.embed_model is None:
         Settings.embed_model = get_embed_model()
-
-
-def _is_rate_limit_error(err: Exception) -> bool:
-    msg = str(err).lower()
-    return (
-        "rate limit" in msg
-        or "rate_limit_exceeded" in msg
-        or "too many requests" in msg
-        or "error code: 429" in msg
-        or "quota" in msg
-    )
 
 
 def _build_fallback_llms() -> List[Tuple[str, object]]:
@@ -182,30 +171,95 @@ def _should_force_no_match(query: str, top_score: float) -> bool:
     return top_score < 0.7
 
 
-def _safe_chat_error_message(err: Exception) -> str:
-    """Convert internal exceptions to user-safe, actionable chat guidance."""
-    msg = str(err)
-    msg_l = msg.lower()
+def _build_retriever(query_mode, vector_index, bm25_retriever):
+    from llama_index.core.retrievers import QueryFusionRetriever
 
-    if _is_rate_limit_error(err):
-        return "The model provider is rate-limited right now. Please retry in a moment."
-
-    if (
-        "could not find the table" in msg_l
-        or "schema cache" in msg_l
-        or "pgrst" in msg_l
-        or "conversation_summaries" in msg_l
-        or "conversation_tags" in msg_l
-    ):
-        return (
-            "I hit a temporary repository memory issue. "
-            "Please ask a repository-specific question about a file, function, class, or module."
+    if query_mode == QueryMode.CODE_LOOKUP and bm25_retriever is not None:
+        return QueryFusionRetriever(
+            retrievers=[bm25_retriever, vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS)],
+            similarity_top_k=TOP_K_CHUNKS,
+            num_queries=1,
+            mode="reciprocal_rerank",
+            use_async=False,
         )
 
+    return vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS + 5)
+
+
+async def _retrieve_nodes(retriever, resolved_query: str):
+    return await asyncio.get_event_loop().run_in_executor(None, retriever.retrieve, resolved_query)
+
+
+async def _rerank_nodes(resolved_query: str, raw_nodes):
+    if USE_COLBERT and raw_nodes:
+        from app.retrieval.reranker import rerank_with_colbert
+
+        return await asyncio.get_event_loop().run_in_executor(
+            None, rerank_with_colbert, resolved_query, raw_nodes, TOP_K_RERANK
+        )
+
+    return sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
+
+
+def _build_retrieved_files(reranked_nodes) -> List[dict]:
+    return [
+        {"path": n.node.metadata.get("path", "unknown"), "score": round(float(n.score or 0.0), 4)}
+        for n in reranked_nodes
+    ]
+
+
+def _build_context_str(reranked_nodes) -> str:
+    return "\n\n".join([
+        f"[{n.node.metadata.get('path', 'unknown')}]\n{n.node.get_content()}"
+        for n in reranked_nodes
+    ])
+
+
+def _build_history_str(memory) -> str:
+    try:
+        history_msgs = memory.get()
+        history_str = ""
+        for msg in history_msgs[-6:]:  # last 3 turns
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role and content:
+                history_str += f"{role.upper()}: {content}\n"
+        return history_str
+    except Exception:
+        return ""
+
+
+def _build_full_prompt(
+    system_prompt: str,
+    memory_context: Optional[str],
+    history_str: str,
+    context_str: str,
+    resolved_query: str,
+) -> str:
     return (
-        "I ran into an internal error while answering. "
-        "Please retry with a repository-specific question (file, function, class, or module)."
+        f"{system_prompt}\n\n"
+        f"{'REPOSITORY MEMORY:' + chr(10) + memory_context + chr(10) if memory_context else ''}"
+        f"{'CONVERSATION HISTORY:' + chr(10) + history_str if history_str else ''}"
+        f"Context:\n{context_str}\n\n"
+        f"Question: {resolved_query}\n\nAnswer:"
     )
+
+
+def _build_metadata_event(
+    query_mode_value: str,
+    retrieved_files: List[dict],
+    t_retrieval_ms: int,
+    t_llm_ms: int,
+    t_total_ms: int,
+) -> dict:
+    return {
+        "type": "metadata",
+        "query_mode": query_mode_value,
+        "retrieved_files": retrieved_files,
+        "latency_retrieval_ms": t_retrieval_ms,
+        "latency_llm_ms": t_llm_ms,
+        "latency_total_ms": t_total_ms,
+    }
 
 
 def _default_followup_suggestions() -> List[str]:
@@ -305,64 +359,36 @@ async def stream_chat_response(
         # ── Retrieve nodes (for metadata + ColBERT path) ───────────────────
         t_ret_start = time.time()
 
-        from llama_index.core.retrievers import QueryFusionRetriever
-        from llama_index.core import QueryBundle
-
-        if query_mode == QueryMode.CODE_LOOKUP and bm25_retriever is not None:
-            retriever = QueryFusionRetriever(
-                retrievers=[bm25_retriever, vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS)],
-                similarity_top_k=TOP_K_CHUNKS,
-                num_queries=1,
-                mode="reciprocal_rerank",
-                use_async=False,
-            )
-        else:
-            retriever = vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS + 5)
-
-        raw_nodes = await asyncio.get_event_loop().run_in_executor(
-            None, retriever.retrieve, resolved_query
-        )
+        retriever = _build_retriever(query_mode, vector_index, bm25_retriever)
+        raw_nodes = await _retrieve_nodes(retriever, resolved_query)
         t_retrieval_ms = int((time.time() - t_ret_start) * 1000)
 
         # ── ColBERT reranking ──────────────────────────────────────────────
-        if USE_COLBERT and raw_nodes:
-            from app.retrieval.reranker import rerank_with_colbert
-            reranked_nodes = await asyncio.get_event_loop().run_in_executor(
-                None, rerank_with_colbert, resolved_query, raw_nodes, TOP_K_RERANK
-            )
-        else:
-            reranked_nodes = sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
+        reranked_nodes = await _rerank_nodes(resolved_query, raw_nodes)
 
         # Build retrieved files list for metadata event
-        retrieved_files = [
-            {"path": n.node.metadata.get("path", "unknown"), "score": round(float(n.score or 0.0), 4)}
-            for n in reranked_nodes
-        ]
+        retrieved_files = _build_retrieved_files(reranked_nodes)
 
         top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
         if _should_force_no_match(query, top_score):
             full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
             query_mode_value = QueryMode.CODE_LOOKUP.value
-            yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
+            yield to_sse_data({'type': 'token', 'content': full_response})
 
             t_total_ms = int((time.time() - t_start) * 1000)
-            metadata = {
-                "type": "metadata",
-                "query_mode": query_mode_value,
-                "retrieved_files": retrieved_files,
-                "latency_retrieval_ms": t_retrieval_ms,
-                "latency_llm_ms": 0,
-                "latency_total_ms": t_total_ms,
-            }
-            yield f"data: {json.dumps(metadata)}\n\n"
-            yield f"data: {json.dumps({'type': 'suggestions', 'questions': _repo_focused_rephrase_suggestions()})}\n\n"
+            metadata = _build_metadata_event(
+                query_mode_value,
+                retrieved_files,
+                t_retrieval_ms,
+                0,
+                t_total_ms,
+            )
+            yield to_sse_data(metadata)
+            yield to_sse_data({'type': 'suggestions', 'questions': _repo_focused_rephrase_suggestions()})
             return
 
         # ── Build context string ───────────────────────────────────────────
-        context_str = "\n\n".join([
-            f"[{n.node.metadata.get('path', 'unknown')}]\n{n.node.get_content()}"
-            for n in reranked_nodes
-        ])
+        context_str = _build_context_str(reranked_nodes)
 
         system_prompt = (
             CODE_LOOKUP_PROMPT
@@ -371,24 +397,8 @@ async def stream_chat_response(
         )
 
         # ── Memory: get history ────────────────────────────────────────────
-        try:
-            history_msgs = memory.get()
-            history_str = ""
-            for msg in history_msgs[-6:]:  # last 3 turns
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role and content:
-                    history_str += f"{role.upper()}: {content}\n"
-        except Exception:
-            history_str = ""
-
-        full_prompt = (
-            f"{system_prompt}\n\n"
-            f"{'REPOSITORY MEMORY:' + chr(10) + memory_context + chr(10) if memory_context else ''}"
-            f"{'CONVERSATION HISTORY:' + chr(10) + history_str if history_str else ''}"
-            f"Context:\n{context_str}\n\n"
-            f"Question: {resolved_query}\n\nAnswer:"
-        )
+        history_str = _build_history_str(memory)
+        full_prompt = _build_full_prompt(system_prompt, memory_context, history_str, context_str, resolved_query)
 
         # ── Stream LLM response ────────────────────────────────────────────
         t_llm_start = time.time()
@@ -402,7 +412,7 @@ async def stream_chat_response(
                 delta = chunk.delta or ""
                 if delta:
                     full_response += delta
-                    yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
+                    yield to_sse_data({'type': 'token', 'content': delta})
                     # Small yield to let the event loop breathe
                     await asyncio.sleep(0)
         except Exception as llm_err:
@@ -423,29 +433,28 @@ async def stream_chat_response(
         t_total_ms = int((time.time() - t_start) * 1000)
 
         # ── Metadata event ─────────────────────────────────────────────────
-        metadata = {
-            "type": "metadata",
-            "query_mode": query_mode_value,
-            "retrieved_files": retrieved_files,
-            "latency_retrieval_ms": t_retrieval_ms,
-            "latency_llm_ms": t_llm_ms,
-            "latency_total_ms": t_total_ms,
-        }
-        yield f"data: {json.dumps(metadata)}\n\n"
+        metadata = _build_metadata_event(
+            query_mode_value,
+            retrieved_files,
+            t_retrieval_ms,
+            t_llm_ms,
+            t_total_ms,
+        )
+        yield to_sse_data(metadata)
 
         # Keep follow-up chips repository-focused when the model indicates no grounded match.
         if _is_no_match_code_lookup_response(full_response):
             followup_questions = _repo_focused_rephrase_suggestions()
         else:
             followup_questions = await _generate_followup_suggestions(resolved_query, full_response)
-        yield f"data: {json.dumps({'type': 'suggestions', 'questions': followup_questions})}\n\n"
+        yield to_sse_data({'type': 'suggestions', 'questions': followup_questions})
 
     except Exception as e:
         logger.error(f"Streaming chat error: {e}", exc_info=True)
-        yield f"data: {json.dumps({'type': 'error', 'message': _safe_chat_error_message(e)})}\n\n"
+        yield to_sse_data({'type': 'error', 'message': safe_chat_error_message(e, include_rate_limit=True)})
 
     finally:
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield to_sse_data({'type': 'done'})
 
     # Return full_response and metadata for DB persistence
     # (caller can access via the returned values if needed)

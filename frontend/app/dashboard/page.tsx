@@ -16,6 +16,103 @@ import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
 
+type ActivityItem = {
+  label: string;
+  value: number | string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  tone: string;
+};
+
+function getDashboardStats(repos: Repo[]) {
+  const readyRepos = repos.filter((r) => r.status === 'ready');
+  const indexingRepos = repos.filter((r) => r.status === 'indexing');
+  const failedRepos = repos.filter((r) => r.status === 'failed');
+  const totalFiles = repos.reduce((sum, repo) => sum + (repo.file_count ?? 0), 0);
+  const totalChunks = repos.reduce((sum, repo) => sum + (repo.node_count ?? 0), 0);
+  const recentRepos = [...repos]
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .slice(0, 6);
+  const activityItems: ActivityItem[] = [
+    { label: 'Repositories ready', value: readyRepos.length, icon: CircleCheck, tone: 'text-brand' },
+    { label: 'Currently indexing', value: indexingRepos.length, icon: Activity, tone: 'text-amber-400' },
+    { label: 'Failed runs', value: failedRepos.length, icon: CircleAlert, tone: 'text-destructive' },
+    { label: 'Files observed', value: totalFiles.toLocaleString(), icon: FileCode2, tone: 'text-blue-400' },
+  ];
+
+  return {
+    readyRepos,
+    indexingRepos,
+    failedRepos,
+    totalFiles,
+    totalChunks,
+    recentRepos,
+    activityItems,
+  };
+}
+
+function ActivityCard({ item }: { item: ActivityItem }) {
+  return (
+    <div className="rounded-2xl border border-border bg-background/70 px-3 py-3">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <item.icon size={12} className={item.tone} />
+        {item.label}
+      </div>
+      <div className="mt-2 font-heading text-xl font-semibold tracking-tight">{item.value}</div>
+    </div>
+  );
+}
+
+function ActivityTimelineItem({ repo }: { repo: Repo }) {
+  return (
+    <div className="flex items-start gap-3 rounded-2xl border border-border/70 bg-background/70 px-4 py-3">
+      <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-brand/10 text-brand">
+        <Clock3 size={14} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate text-sm font-medium">{repo.name}</p>
+          <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            {repo.status}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {repo.status === 'ready'
+            ? 'Ready for grounded chat and exploration.'
+            : repo.status === 'indexing'
+            ? 'Pipeline is processing files and embeddings.'
+            : 'Indexing needs attention before chat can start.'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RepoSection({
+  title,
+  subtitle,
+  repos,
+  onDelete,
+}: {
+  title: string;
+  subtitle?: string;
+  repos: Repo[];
+  onDelete?: (id: string) => void;
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">{title}</h2>
+        {subtitle ? <span className="text-xs text-muted-foreground">{subtitle}</span> : null}
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {repos.map((repo, i) => (
+          <RepoCard key={repo.id} repo={repo} index={i} onDelete={onDelete} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 async function getToken(): Promise<string> {
   const supabase = createClient();
   const { data } = await supabase.auth.getSession();
@@ -70,18 +167,7 @@ export default function DashboardPage() {
     indexMutation.mutate(trimmed);
   }
 
-  const readyRepos = repos.filter((r) => r.status === 'ready');
-  const indexingRepos = repos.filter((r) => r.status === 'indexing');
-  const failedRepos = repos.filter((r) => r.status === 'failed');
-  const totalFiles = repos.reduce((sum, repo) => sum + (repo.file_count ?? 0), 0);
-  const totalChunks = repos.reduce((sum, repo) => sum + (repo.node_count ?? 0), 0);
-  const recentRepos = [...repos].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 6);
-  const activityItems = [
-    { label: 'Repositories ready', value: readyRepos.length, icon: CircleCheck, tone: 'text-brand' },
-    { label: 'Currently indexing', value: indexingRepos.length, icon: Activity, tone: 'text-amber-400' },
-    { label: 'Failed runs', value: failedRepos.length, icon: CircleAlert, tone: 'text-destructive' },
-    { label: 'Files observed', value: totalFiles.toLocaleString(), icon: FileCode2, tone: 'text-blue-400' },
-  ];
+  const { readyRepos, indexingRepos, failedRepos, totalChunks, recentRepos, activityItems } = getDashboardStats(repos);
 
   return (
     <div className="space-y-6">
@@ -107,13 +193,7 @@ export default function DashboardPage() {
             </div>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[28rem]">
               {activityItems.map((item) => (
-                <div key={item.label} className="rounded-2xl border border-border bg-background/70 px-3 py-3">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <item.icon size={12} className={item.tone} />
-                    {item.label}
-                  </div>
-                  <div className="mt-2 font-heading text-xl font-semibold tracking-tight">{item.value}</div>
-                </div>
+                  <ActivityCard key={item.label} item={item} />
               ))}
             </div>
           </div>
@@ -131,26 +211,7 @@ export default function DashboardPage() {
               </p>
             ) : (
               recentRepos.map((repo) => (
-                <div key={repo.id} className="flex items-start gap-3 rounded-2xl border border-border/70 bg-background/70 px-4 py-3">
-                  <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-brand/10 text-brand">
-                    <Clock3 size={14} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-sm font-medium">{repo.name}</p>
-                      <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-                        {repo.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {repo.status === 'ready'
-                        ? 'Ready for grounded chat and exploration.'
-                        : repo.status === 'indexing'
-                        ? 'Pipeline is processing files and embeddings.'
-                        : 'Indexing needs attention before chat can start.'}
-                    </p>
-                  </div>
-                </div>
+                <ActivityTimelineItem key={repo.id} repo={repo} />
               ))
             )}
           </div>
@@ -202,17 +263,7 @@ export default function DashboardPage() {
       </motion.form>
 
       {indexingRepos.length > 0 && (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Currently indexing</h2>
-            <span className="text-xs text-muted-foreground">{indexingRepos.length} active</span>
-          </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {indexingRepos.map((repo, i) => (
-              <RepoCard key={repo.id} repo={repo} index={i} />
-            ))}
-          </div>
-        </section>
+        <RepoSection title="Currently indexing" subtitle={`${indexingRepos.length} active`} repos={indexingRepos} />
       )}
 
       {isLoading ? (
@@ -222,22 +273,12 @@ export default function DashboardPage() {
           ))}
         </div>
       ) : readyRepos.length > 0 ? (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Ready to chat</h2>
-            <span className="text-xs text-muted-foreground">{readyRepos.length} ready · {totalChunks.toLocaleString()} chunks</span>
-          </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {readyRepos.map((repo, i) => (
-              <RepoCard
-                key={repo.id}
-                repo={repo}
-                index={i}
-                onDelete={(id) => deleteMutation.mutate(id)}
-              />
-            ))}
-          </div>
-        </section>
+        <RepoSection
+          title="Ready to chat"
+          subtitle={`${readyRepos.length} ready · ${totalChunks.toLocaleString()} chunks`}
+          repos={readyRepos}
+          onDelete={(id) => deleteMutation.mutate(id)}
+        />
       ) : (
         !indexingRepos.length && (
           <motion.div
@@ -262,19 +303,7 @@ export default function DashboardPage() {
       )}
 
       {failedRepos.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Failed</h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {failedRepos.map((repo, i) => (
-              <RepoCard
-                key={repo.id}
-                repo={repo}
-                index={i}
-                onDelete={(id) => deleteMutation.mutate(id)}
-              />
-            ))}
-          </div>
-        </section>
+        <RepoSection title="Failed" repos={failedRepos} onDelete={(id) => deleteMutation.mutate(id)} />
       )}
     </div>
   );

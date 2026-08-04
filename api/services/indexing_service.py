@@ -215,12 +215,10 @@ api/services/indexing_service.py
 """
 
 import asyncio
-import time
 import os
 import json
 from typing import AsyncGenerator, Optional
 
-from app.config import LLM_PROVIDER, REPOS_DIR
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -253,6 +251,174 @@ def _check_model_available(model_name: str = "nomic-embed-text") -> bool:
         return False
 
 
+def _emit_progress_event(
+    loop: asyncio.AbstractEventLoop,
+    progress_queue: asyncio.Queue,
+    step: str,
+    message: str,
+    progress: int,
+    **kwargs,
+):
+    event = {"step": step, "message": message, "progress": progress, **kwargs}
+    try:
+        loop.call_soon_threadsafe(progress_queue.put_nowait, event)
+    except Exception as e:
+        logger.warning(f"Failed to emit progress event: {e}")
+
+
+def _load_pipeline_dependencies(emit):
+    try:
+        from app.llm.llm_client import configure_llamaindex_settings
+
+        configure_llamaindex_settings()
+    except ModuleNotFoundError as e:
+        emit(
+            "error",
+            f"Missing Python dependency: {e}\n"
+            "Install LlamaIndex with:\n"
+            "  pip install -r requirements-llamaindex.txt\n"
+            "or:\n"
+            "  pip install llama-index llama-index-llms-groq llama-index-embeddings-ollama",
+            100,
+        )
+        return None
+
+    try:
+        from app.ingestion.repo_loader import load_repository
+        from app.ingestion.file_filter import filter_files
+        from app.parsing.code_parser import load_documents, parse_documents
+        from app.indexing.context_builder import build_codebase_context
+        from app.indexing.index_builder import build_vector_index
+        from llama_index.core.node_parser import SentenceSplitter
+    except ModuleNotFoundError as e:
+        emit(
+            "error",
+            f"Missing Python dependency: {e}\n"
+            "Install with:  pip install -r requirements-llamaindex.txt",
+            100,
+        )
+        return None
+
+    return (
+        load_repository,
+        filter_files,
+        load_documents,
+        parse_documents,
+        build_codebase_context,
+        build_vector_index,
+        SentenceSplitter,
+    )
+
+
+def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
+    if not _check_ollama_running():
+        emit(
+            "error",
+            "Ollama is not running.\n"
+            "Start it with:  ollama serve\n"
+            "Then pull the model:  ollama pull nomic-embed-text",
+            100,
+        )
+        return None
+
+    if not _check_model_available("nomic-embed-text"):
+        emit(
+            "error",
+            "Embedding model not found in Ollama.\n"
+            "Run:  ollama pull nomic-embed-text",
+            100,
+        )
+        return None
+
+    pipeline_dependencies = _load_pipeline_dependencies(emit)
+    if pipeline_dependencies is None:
+        return None
+
+    (
+        load_repository,
+        filter_files,
+        load_documents,
+        parse_documents,
+        build_codebase_context,
+        build_vector_index,
+        SentenceSplitter,
+    ) = pipeline_dependencies
+
+    # Step 1 - Clone
+    emit("cloning", "Cloning repository…", 10)
+    repo_path = load_repository(source)
+    index_name = os.path.basename(os.path.normpath(repo_path))
+
+    # Step 2 - Filter
+    emit("filtering", "Filtering source files…", 20)
+    valid_files = filter_files(repo_path)
+    if not valid_files:
+        emit("error", "No valid code files found in this repository.", 100)
+        return None
+    logger.info(f"Found {len(valid_files)} valid files")
+
+    # Step 3 - Parse
+    emit("parsing", f"Parsing {len(valid_files)} files…", 40)
+    context_doc = build_codebase_context(valid_files, repo_path, index_name)
+    documents = load_documents(valid_files, repo_path)
+    if not documents:
+        emit("error", "No documents could be loaded.", 100)
+        return None
+
+    nodes = parse_documents(documents)
+    if not nodes:
+        emit("error", "No nodes generated from documents.", 100)
+        return None
+
+    context_splitter = SentenceSplitter(chunk_size=768, chunk_overlap=64)
+    context_nodes = context_splitter.get_nodes_from_documents([context_doc])
+    nodes = context_nodes + nodes
+    logger.info(f"Total nodes: {len(nodes)}")
+
+    # Step 4 - Embed
+    emit("embedding", f"Building embeddings for {len(nodes)} chunks…", 65)
+    build_vector_index(nodes, index_name)
+
+    # Step 5 - Done
+    emit("summary", "Finalising architectural context…", 90)
+    file_count = len(valid_files)
+    node_count = len(nodes)
+
+    emit(
+        "done",
+        "Indexing complete!",
+        100,
+        index_name=index_name,
+        file_count=file_count,
+        node_count=node_count,
+    )
+
+    return {
+        "index_name": index_name,
+        "file_count": file_count,
+        "node_count": node_count,
+    }
+
+
+def _build_existing_repo_done_event(repo: dict) -> dict:
+    return {
+        "step": "done",
+        "message": f"Repository already indexed: {repo.get('file_count', 0)} files, {repo.get('node_count', 0)} chunks.",
+        "progress": 100,
+        "file_count": repo.get("file_count", 0),
+        "node_count": repo.get("node_count", 0),
+        "index_name": repo.get("index_name", ""),
+    }
+
+
+def _build_inflight_event(scope: str) -> dict:
+    return {
+        "step": "error",
+        "message": f"Indexing already in progress for this {scope}. Please wait for it to complete.",
+        "progress": 0,
+    }
+
+
 async def run_indexing_pipeline(
     source: str,
     repo_id: str,
@@ -261,122 +427,11 @@ async def run_indexing_pipeline(
     loop = asyncio.get_event_loop()
 
     def emit(step: str, message: str, progress: int, **kwargs):
-        event = {"step": step, "message": message, "progress": progress, **kwargs}
-        try:
-            loop.call_soon_threadsafe(progress_queue.put_nowait, event)
-        except Exception as e:
-            logger.warning(f"Failed to emit progress event: {e}")
+        _emit_progress_event(loop, progress_queue, step, message, progress, **kwargs)
 
     def _run_pipeline():
-        if not _check_ollama_running():
-            emit(
-                "error",
-                "Ollama is not running.\n"
-                "Start it with:  ollama serve\n"
-                "Then pull the model:  ollama pull nomic-embed-text",
-                100,
-            )
-            return None
-
-        if not _check_model_available("nomic-embed-text"):
-            emit(
-                "error",
-                "Embedding model not found in Ollama.\n"
-                "Run:  ollama pull nomic-embed-text",
-                100,
-            )
-            return None
-
         try:
-            # Imports inside try so any ModuleNotFoundError is caught and emitted
-            try:
-                from app.llm.llm_client import configure_llamaindex_settings
-                configure_llamaindex_settings()
-            except ModuleNotFoundError as e:
-                emit(
-                    "error",
-                    f"Missing Python dependency: {e}\n"
-                    "Install LlamaIndex with:\n"
-                    "  pip install -r requirements-llamaindex.txt\n"
-                    "or:\n"
-                    "  pip install llama-index llama-index-llms-groq llama-index-embeddings-ollama",
-                    100,
-                )
-                return None
-
-            try:
-                from app.ingestion.repo_loader import load_repository
-                from app.ingestion.file_filter import filter_files
-                from app.parsing.code_parser import load_documents, parse_documents
-                from app.indexing.context_builder import build_codebase_context
-                from app.indexing.index_builder import build_vector_index
-                from llama_index.core.node_parser import SentenceSplitter
-            except ModuleNotFoundError as e:
-                emit(
-                    "error",
-                    f"Missing Python dependency: {e}\n"
-                    "Install with:  pip install -r requirements-llamaindex.txt",
-                    100,
-                )
-                return None
-
-            # Step 1 — Clone
-            emit("cloning", "Cloning repository…", 10)
-            repo_path = load_repository(source)
-            index_name = os.path.basename(os.path.normpath(repo_path))
-
-            # Step 2 — Filter
-            emit("filtering", "Filtering source files…", 20)
-            valid_files = filter_files(repo_path)
-            if not valid_files:
-                emit("error", "No valid code files found in this repository.", 100)
-                return None
-            logger.info(f"Found {len(valid_files)} valid files")
-
-            # Step 3 — Parse
-            emit("parsing", f"Parsing {len(valid_files)} files…", 40)
-            context_doc = build_codebase_context(valid_files, repo_path, index_name)
-            documents = load_documents(valid_files, repo_path)
-            if not documents:
-                emit("error", "No documents could be loaded.", 100)
-                return None
-            nodes = parse_documents(documents)
-            if not nodes:
-                emit("error", "No nodes generated from documents.", 100)
-                return None
-
-            context_splitter = SentenceSplitter(chunk_size=768, chunk_overlap=64)
-            context_nodes = context_splitter.get_nodes_from_documents([context_doc])
-            nodes = context_nodes + nodes
-            logger.info(f"Total nodes: {len(nodes)}")
-
-            # Step 4 — Embed
-            emit(
-                "embedding",
-                f"Building embeddings for {len(nodes)} chunks…",
-                65,
-            )
-            build_vector_index(nodes, index_name)
-
-            # Step 5 — Done
-            emit("summary", "Finalising architectural context…", 90)
-            file_count = len(valid_files)
-            node_count = len(nodes)
-
-            emit(
-                "done",
-                "Indexing complete!",
-                100,
-                index_name=index_name,
-                file_count=file_count,
-                node_count=node_count,
-            )
-
-            return {
-                "index_name": index_name,
-                "file_count": file_count,
-                "node_count": node_count,
-            }
+            return _run_pipeline_sync(source, emit)
 
         except Exception as e:
             logger.error(f"Indexing pipeline failed: {e}", exc_info=True)
@@ -417,35 +472,20 @@ async def indexing_event_generator(
     # If already successfully indexed, return the existing index metadata
     if repo["status"] == "ready":
         logger.info(f"Repository {repo_id} is already indexed. Returning existing metadata.")
-        ready_event = {
-            'step': 'done',
-            'message': f'Repository already indexed: {repo.get("file_count", 0)} files, {repo.get("node_count", 0)} chunks.',
-            'progress': 100,
-            'file_count': repo.get("file_count", 0),
-            'node_count': repo.get("node_count", 0),
-            'index_name': repo.get("index_name", ""),
-        }
+        ready_event = _build_existing_repo_done_event(repo)
         yield f"data: {json.dumps(ready_event)}\n\n"
         return
 
     # If currently being indexed by another request, reject with 409-like error
     if repo_id in _indexing_in_flight:
         logger.warning(f"Indexing already in progress for repo {repo_id}. Rejecting concurrent attempt.")
-        in_flight_event = {
-            'step': 'error',
-            'message': 'Indexing already in progress for this repository. Please wait for it to complete.',
-            'progress': 0,
-        }
+        in_flight_event = _build_inflight_event("repository")
         yield f"data: {json.dumps(in_flight_event)}\n\n"
         return
 
     if source_key in _indexing_sources_in_flight:
         logger.warning(f"Indexing already in progress for source {source}. Rejecting concurrent attempt.")
-        in_flight_source_event = {
-            'step': 'error',
-            'message': 'Indexing already in progress for this source. Please wait for it to complete.',
-            'progress': 0,
-        }
+        in_flight_source_event = _build_inflight_event("source")
         yield f"data: {json.dumps(in_flight_source_event)}\n\n"
         return
 

@@ -14,18 +14,53 @@ import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import { Suspense } from 'react';
 
-function SignInForm() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const next = searchParams.get('next') ?? '/dashboard';
-  const supabase = createClient();
+type AuthHandlers = {
+  handleSignIn: (e: React.FormEvent) => Promise<void>;
+  handleGuestAccess: () => Promise<void>;
+};
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [guestLoading, setGuestLoading] = useState(false);
+function LogoHeader() {
+  return (
+    <div className="text-center mb-8">
+      <Link href="/" className="inline-flex items-center gap-2">
+        <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center">
+          <span className="font-code font-bold text-sm text-green-950">CC</span>
+        </div>
+        <span className="font-heading font-semibold text-lg tracking-tight">Codebase Copilot</span>
+      </Link>
+      <p className="text-muted-foreground text-sm mt-2">Sign in to your account</p>
+    </div>
+  );
+}
 
+function PasswordVisibilityButton({
+  showPassword,
+  onToggle,
+}: {
+  showPassword: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+      aria-label={showPassword ? 'Hide password' : 'Show password'}
+    >
+      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+    </button>
+  );
+}
+
+function useAuthActions(
+  supabase: ReturnType<typeof createClient>,
+  router: ReturnType<typeof useRouter>,
+  next: string,
+  email: string,
+  password: string,
+  setLoading: (loading: boolean) => void,
+  setGuestLoading: (loading: boolean) => void,
+): AuthHandlers {
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -51,6 +86,31 @@ function SignInForm() {
     }
   }
 
+  return { handleSignIn, handleGuestAccess };
+}
+
+function SignInForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = searchParams.get('next') ?? '/dashboard';
+  const supabase = createClient();
+
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
+
+  const { handleSignIn, handleGuestAccess } = useAuthActions(
+    supabase,
+    router,
+    next,
+    email,
+    password,
+    setLoading,
+    setGuestLoading,
+  );
+
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       {/* Background grid */}
@@ -63,17 +123,7 @@ function SignInForm() {
         className="relative w-full max-w-sm"
       >
         {/* Logo */}
-        <div className="text-center mb-8">
-          <Link href="/" className="inline-flex items-center gap-2">
-            <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center">
-              <span className="font-code font-bold text-sm text-green-950">CC</span>
-            </div>
-            <span className="font-heading font-semibold text-lg tracking-tight">
-              Codebase Copilot
-            </span>
-          </Link>
-          <p className="text-muted-foreground text-sm mt-2">Sign in to your account</p>
-        </div>
+        <LogoHeader />
 
         {/* Card */}
         <div className="bg-card border border-border rounded-xl p-6 space-y-5">
@@ -113,14 +163,10 @@ function SignInForm() {
                   autoComplete="current-password"
                   className="bg-background border-border focus-visible:ring-brand pr-10"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
+                <PasswordVisibilityButton
+                  showPassword={showPassword}
+                  onToggle={() => setShowPassword(!showPassword)}
+                />
               </div>
             </div>
 

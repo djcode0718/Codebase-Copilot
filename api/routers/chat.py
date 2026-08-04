@@ -10,7 +10,6 @@ Chat endpoints:
   DELETE /api/chat/{chat_id}                 Delete a chat + all messages
 """
 
-import json
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -48,29 +47,11 @@ from api.services.chat_search_service import search_repository_conversations
 from api.services.repository_memory_service import refresh_session_memory
 from api.services.export_service import build_export_payload
 from api.services.repository_knowledge_service import get_repository_knowledge_context
+from api.services.chat_stream_utils import safe_chat_error_message, to_sse_data, parse_sse_data_line
 from app.utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
-
-
-def _safe_stream_error_message(err: Exception) -> str:
-    msg = str(err).lower()
-    if (
-        "could not find the table" in msg
-        or "schema cache" in msg
-        or "pgrst" in msg
-        or "conversation_summaries" in msg
-        or "conversation_tags" in msg
-    ):
-        return (
-            "I hit a temporary repository memory issue. "
-            "Please ask a repository-specific question about a file, function, class, or module."
-        )
-    return (
-        "I ran into an internal error while answering. "
-        "Please retry with a repository-specific question (file, function, class, or module)."
-    )
 
 
 def _ensure_repo_access(supabase: Client, user_id: str, repo_id: str) -> dict:
@@ -104,6 +85,39 @@ def _ensure_report_access(supabase: Client, user_id: str, report_id: str) -> dic
 def _get_stream_chat_response_callable():
     from api.services.chat_service import stream_chat_response
     return stream_chat_response
+
+
+def _build_memory_context(memory_hits: List[dict]) -> str:
+    return "\n\n".join(
+        f"- {item.get('title') or 'Previous conversation'}: {item.get('executive_summary') or item.get('technical_summary') or ''}"
+        for item in memory_hits
+    )
+
+
+def _persist_user_message(supabase: Client, chat_id: str, query: str):
+    try:
+        supabase_service.save_message(supabase, chat_id, role="user", content=query)
+    except Exception as e:
+        logger.warning(f"Failed to persist user message: {e}")
+
+
+def _maybe_update_first_message_title(supabase: Client, chat_id: str, query: str):
+    try:
+        existing_messages = supabase_service.get_messages_for_chat(supabase, chat_id)
+        if len(existing_messages) <= 1:  # only the user msg we just saved
+            title = query[:60] + ("..." if len(query) > 60 else "")
+            supabase_service.update_chat_title(supabase, chat_id, title)
+    except Exception:
+        pass
+
+
+def _ensure_attachment_access(supabase: Client, user_id: str, attachment_id: str) -> dict:
+    row = supabase_service.get_attachment(supabase, attachment_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    if row["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return row
 
 
 @router.post("/session", response_model=CreateSessionResponse)
@@ -197,10 +211,7 @@ async def stream_message(
         chat_id=chat_id,
         max_items=3,
     )
-    memory_context = "\n\n".join(
-        f"- {item.get('title') or 'Previous conversation'}: {item.get('executive_summary') or item.get('technical_summary') or ''}"
-        for item in memory_hits
-    )
+    memory_context = _build_memory_context(memory_hits)
 
     # Lazy import keeps API startup resilient when optional AI deps are not installed yet.
     try:
@@ -216,19 +227,10 @@ async def stream_message(
 
     # Persist user message to DB immediately (before streaming)
     # This ensures it shows even if the stream fails halfway
-    try:
-        supabase_service.save_message(supabase, chat_id, role="user", content=query)
-    except Exception as e:
-        logger.warning(f"Failed to persist user message: {e}")
+    _persist_user_message(supabase, chat_id, query)
 
     # Update chat title on first message
-    try:
-        existing_messages = supabase_service.get_messages_for_chat(supabase, chat_id)
-        if len(existing_messages) <= 1:  # only the user msg we just saved
-            title = query[:60] + ("..." if len(query) > 60 else "")
-            supabase_service.update_chat_title(supabase, chat_id, title)
-    except Exception:
-        pass
+    _maybe_update_first_message_title(supabase, chat_id, query)
 
     async def event_generator():
         """
@@ -242,18 +244,14 @@ async def stream_message(
                 yield sse_line
 
                 # Parse events to collect full response and metadata
-                if sse_line.startswith("data: "):
-                    try:
-                        event = json.loads(sse_line[6:])
-                        if event.get("type") == "token":
-                            full_response += event.get("content", "")
-                        elif event.get("type") == "metadata":
-                            metadata_event = event
-                    except Exception:
-                        pass
+                event = parse_sse_data_line(sse_line)
+                if event and event.get("type") == "token":
+                    full_response += event.get("content", "")
+                elif event and event.get("type") == "metadata":
+                    metadata_event = event
         except Exception as e:
             logger.error(f"Error during SSE chat stream: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': _safe_stream_error_message(e)})}\n\n"
+            yield to_sse_data({'type': 'error', 'message': safe_chat_error_message(e, include_rate_limit=False)})
 
         # After stream: persist assistant message to DB
         if full_response:
@@ -508,11 +506,7 @@ async def get_attachment(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    row = supabase_service.get_attachment(supabase, attachment_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Attachment not found")
-    if row["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    row = _ensure_attachment_access(supabase, user_id, attachment_id)
     return AttachmentResponse(**row)
 
 
@@ -523,11 +517,7 @@ async def update_attachment(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    row = supabase_service.get_attachment(supabase, attachment_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Attachment not found")
-    if row["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    row = _ensure_attachment_access(supabase, user_id, attachment_id)
 
     updates = body.model_dump(exclude_none=True)
     if updates:
@@ -543,11 +533,7 @@ async def delete_attachment(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    row = supabase_service.get_attachment(supabase, attachment_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Attachment not found")
-    if row["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _ensure_attachment_access(supabase, user_id, attachment_id)
 
     if hard_delete:
         supabase.table("attachments").delete().eq("id", attachment_id).execute()
