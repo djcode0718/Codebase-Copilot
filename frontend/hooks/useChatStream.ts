@@ -9,22 +9,22 @@ import { useState, useRef, useCallback } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 import type { ChatEvent, RetrievedFile, QueryMode } from '@/lib/types';
 
-function parseSseEvents(chunk: string): { events: ChatEvent[]; rest: string } {
+function parseSseEvents(chunk: string, flush = false): { events: ChatEvent[]; rest: string } {
   const normalized = chunk.replace(/\r\n/g, '\n');
-  const blocks = normalized.split('\n\n');
-  const rest = blocks.pop() ?? '';
+  const lines = normalized.split('\n');
+  let rest = lines.pop() ?? '';
   const events: ChatEvent[] = [];
 
-  for (const block of blocks) {
-    const dataLines = block
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart());
+  if (flush && rest.trim()) {
+    lines.push(rest);
+    rest = '';
+  }
 
-    if (dataLines.length === 0) continue;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) continue;
 
-    const payload = dataLines.join('\n').trim();
+    const payload = line.slice(5).trimStart();
     if (!payload) continue;
 
     try {
@@ -121,7 +121,7 @@ export function useChatStream(): UseChatStreamResult {
             buffer += decoder.decode(value, { stream: true });
           }
 
-          const parsed = parseSseEvents(buffer);
+          const parsed = parseSseEvents(buffer, done);
           buffer = parsed.rest;
 
           for (const event of parsed.events) {
@@ -153,17 +153,6 @@ export function useChatStream(): UseChatStreamResult {
           }
         }
 
-        const hasMetadata =
-          metadata.queryMode !== null ||
-          metadata.retrievedFiles.length > 0 ||
-          metadata.latencyRetrievalMs !== null ||
-          metadata.latencyLlmMs !== null ||
-          metadata.latencyTotalMs !== null ||
-          Boolean(metadata.suggestions?.length);
-
-        if (!fullText.trim() && !hasMetadata) {
-          throw new Error('No streamed answer received. Please retry.');
-        }
 
         setStreaming(false);
         return { content: fullText, ...metadata };
