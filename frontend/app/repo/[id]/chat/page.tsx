@@ -659,6 +659,10 @@ function useMessageMutationHandlers({
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const result = await sendMessage(chatId, modelQuery, token);
     if (!result) return;
+    if (!result.content.trim()) {
+      toast.error('No answer content received. Please retry.');
+      return;
+    }
     const assistantMsg: Message = {
       id: `a-${Date.now()}`,
       chat_id: chatId,

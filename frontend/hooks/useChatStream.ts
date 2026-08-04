@@ -9,6 +9,34 @@ import { useState, useRef, useCallback } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 import type { ChatEvent, RetrievedFile, QueryMode } from '@/lib/types';
 
+function parseSseEvents(chunk: string): { events: ChatEvent[]; rest: string } {
+  const normalized = chunk.replace(/\r\n/g, '\n');
+  const blocks = normalized.split('\n\n');
+  const rest = blocks.pop() ?? '';
+  const events: ChatEvent[] = [];
+
+  for (const block of blocks) {
+    const dataLines = block
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart());
+
+    if (dataLines.length === 0) continue;
+
+    const payload = dataLines.join('\n').trim();
+    if (!payload) continue;
+
+    try {
+      events.push(JSON.parse(payload) as ChatEvent);
+    } catch {
+      // Skip malformed SSE payloads and keep processing the stream.
+    }
+  }
+
+  return { events, rest };
+}
+
 export interface StreamedResponse {
   content: string;
   queryMode: QueryMode | null;
@@ -83,25 +111,20 @@ export function useChatStream(): UseChatStreamResult {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let shouldStop = false;
 
-        while (true) {
+        while (!shouldStop) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            buffer += decoder.decode();
+          } else {
+            buffer += decoder.decode(value, { stream: true });
+          }
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
+          const parsed = parseSseEvents(buffer);
+          buffer = parsed.rest;
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('data: ')) continue;
-
-            let event: ChatEvent;
-            try {
-              event = JSON.parse(trimmed.slice(6));
-            } catch {
-              continue;
-            }
+          for (const event of parsed.events) {
 
             if (event.type === 'token') {
               fullText += event.content;
@@ -120,9 +143,26 @@ export function useChatStream(): UseChatStreamResult {
             } else if (event.type === 'error') {
               throw new Error(event.message);
             } else if (event.type === 'done') {
+              shouldStop = true;
               break;
             }
           }
+
+          if (done) {
+            shouldStop = true;
+          }
+        }
+
+        const hasMetadata =
+          metadata.queryMode !== null ||
+          metadata.retrievedFiles.length > 0 ||
+          metadata.latencyRetrievalMs !== null ||
+          metadata.latencyLlmMs !== null ||
+          metadata.latencyTotalMs !== null ||
+          Boolean(metadata.suggestions?.length);
+
+        if (!fullText.trim() && !hasMetadata) {
+          throw new Error('No streamed answer received. Please retry.');
         }
 
         setStreaming(false);
