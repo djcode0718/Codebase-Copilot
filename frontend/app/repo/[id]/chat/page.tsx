@@ -5,9 +5,9 @@
  * Creates a new chat session on mount and handles full SSE streaming.
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus } from 'lucide-react';
+import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus, Wrench } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -43,6 +43,22 @@ function buildThreadStats(messages: Message[], suggestions: string[], inspectedI
   ];
 }
 
+function collectReviewTargets(messages: Message[]): string[] {
+  const orderedPaths: string[] = [];
+  const seen = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role !== 'assistant' || !msg.retrieved_files?.length) continue;
+    for (const file of msg.retrieved_files) {
+      const path = (file.path || '').trim();
+      if (!path || seen.has(path)) continue;
+      seen.add(path);
+      orderedPaths.push(path);
+      if (orderedPaths.length >= 8) return orderedPaths;
+    }
+  }
+  return orderedPaths;
+}
+
 function ChatHeaderSection({
   repoId,
   routedMode,
@@ -50,6 +66,7 @@ function ChatHeaderSection({
   token,
   streaming,
   onCreateQuickAsk,
+  onOpenReview,
   threadStats,
   repo,
   chatId,
@@ -60,6 +77,7 @@ function ChatHeaderSection({
   token: string;
   streaming: boolean;
   onCreateQuickAsk: () => void;
+  onOpenReview: () => void;
   threadStats: { label: string; value: string | number }[];
   repo: Repo | null;
   chatId: string | null;
@@ -105,6 +123,16 @@ function ChatHeaderSection({
             >
               <Plus size={13} className="mr-1.5" />
               New chat
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-border cursor-pointer"
+              onClick={onOpenReview}
+              disabled={!token || streaming}
+            >
+              <Wrench size={13} className="mr-1.5" />
+              Review
             </Button>
           </div>
         </div>
@@ -587,6 +615,8 @@ function useChatInteractionHandlers({
     streaming,
     sendMessage,
     messages,
+    streamedText,
+    pendingMetadata,
     setMessages,
     setSuggestions,
     setInput,
@@ -618,6 +648,8 @@ function useMessageMutationHandlers({
   streaming,
   sendMessage,
   messages,
+  streamedText,
+  pendingMetadata,
   setMessages,
   setSuggestions,
   setInput,
@@ -633,6 +665,8 @@ function useMessageMutationHandlers({
   streaming: boolean;
   sendMessage: (chatId: string, query: string, token: string) => Promise<StreamedResponse | null>;
   messages: Message[];
+  streamedText: string;
+  pendingMetadata: Omit<StreamedResponse, 'content'> | null;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   setSuggestions: React.Dispatch<React.SetStateAction<string[]>>;
   setInput: React.Dispatch<React.SetStateAction<string>>;
@@ -660,22 +694,50 @@ function useMessageMutationHandlers({
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const result = await sendMessage(chatId, modelQuery, token);
     if (!result || !result.content.trim()) {
+      if (streamedText.trim()) {
+        const partialAssistantMsg: Message = {
+          id: `a-partial-${Date.now()}`,
+          chat_id: chatId,
+          role: 'assistant',
+          content: streamedText,
+          query_mode: pendingMetadata?.queryMode ?? undefined,
+          retrieved_files: pendingMetadata?.retrievedFiles ?? [],
+          latency_ms: pendingMetadata?.latencyTotalMs ?? undefined,
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, partialAssistantMsg]);
+        setInspectedIndex(messages.length + 1);
+        setInspectorData({
+          content: streamedText,
+          queryMode: pendingMetadata?.queryMode ?? null,
+          retrievedFiles: pendingMetadata?.retrievedFiles ?? [],
+          latencyRetrievalMs: pendingMetadata?.latencyRetrievalMs ?? null,
+          latencyLlmMs: pendingMetadata?.latencyLlmMs ?? null,
+          latencyTotalMs: pendingMetadata?.latencyTotalMs ?? null,
+        });
+        toast.warning('Recovered partial streamed answer due to stream interruption.');
+        return;
+      }
+
       try {
-        const latestMessages = await getMessages(token, chatId);
         const expectedMinCount = initialMessageCount + 2;
-        const latestAssistant = latestMessages[latestMessages.length - 1];
-        if (latestMessages.length >= expectedMinCount && latestAssistant?.role === 'assistant') {
-          setMessages(latestMessages);
-          setInspectedIndex(latestMessages.length - 1);
-          setInspectorData({
-            content: latestAssistant.content,
-            queryMode: latestAssistant.query_mode ?? null,
-            retrievedFiles: latestAssistant.retrieved_files ?? [],
-            latencyRetrievalMs: null,
-            latencyLlmMs: null,
-            latencyTotalMs: latestAssistant.latency_ms ?? null,
-          });
-          return;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const latestMessages = await getMessages(token, chatId);
+          const latestAssistant = latestMessages[latestMessages.length - 1];
+          if (latestMessages.length >= expectedMinCount && latestAssistant?.role === 'assistant' && latestAssistant.content?.trim()) {
+            setMessages(latestMessages);
+            setInspectedIndex(latestMessages.length - 1);
+            setInspectorData({
+              content: latestAssistant.content,
+              queryMode: latestAssistant.query_mode ?? null,
+              retrievedFiles: latestAssistant.retrieved_files ?? [],
+              latencyRetrievalMs: null,
+              latencyLlmMs: null,
+              latencyTotalMs: latestAssistant.latency_ms ?? null,
+            });
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
         }
       } catch {
         // If recovery fails, keep the current error flow below.
@@ -704,7 +766,7 @@ function useMessageMutationHandlers({
     }
     setInspectorData(result);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
-  }, [chatId, token, streaming, sendMessage, messages.length, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef]);
+  }, [chatId, token, streaming, sendMessage, messages.length, streamedText, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef]);
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
@@ -738,6 +800,7 @@ function useMessageMutationHandlers({
 
 export default function ChatPage() {
   const { id: repoId } = useParams<{ id: string }>();
+  const router = useRouter();
   const [token, setToken] = useState('');
   const [chatId, setChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -779,6 +842,19 @@ export default function ChatPage() {
       toast.error(err instanceof Error ? err.message : 'Failed to create repository chat');
     }
   }, [token, repoId, refreshSessions, loadSession]);
+  const handleOpenReview = useCallback(() => {
+    const files = collectReviewTargets(messages);
+    const payload = {
+      files,
+      prompt: 'Review these files for correctness, security, performance, and maintainability risks.',
+    };
+    try {
+      sessionStorage.setItem(`codebase:review-prefill:${repoId}`, JSON.stringify(payload));
+    } catch {
+      // Ignore storage errors and still navigate.
+    }
+    router.push(`/repo/${repoId}/review`);
+  }, [messages, repoId, router]);
   useChatBootstrapEffect({
     repoId,
     loadSession,
@@ -822,6 +898,7 @@ export default function ChatPage() {
         token={token}
         streaming={streaming}
         onCreateQuickAsk={handleCreateQuickAsk}
+        onOpenReview={handleOpenReview}
         threadStats={displayThreadStats}
         repo={repo}
         chatId={chatId}

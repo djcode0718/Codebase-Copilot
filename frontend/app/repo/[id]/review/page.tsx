@@ -63,9 +63,29 @@ export default function RepositoryReviewPage() {
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to load review history');
       }
+
+      try {
+        const prefillKey = `codebase:review-prefill:${repoId}`;
+        const rawPrefill = sessionStorage.getItem(prefillKey);
+        if (rawPrefill) {
+          sessionStorage.removeItem(prefillKey);
+          const parsed = JSON.parse(rawPrefill) as { files?: string[]; prompt?: string };
+          const files = (parsed.files || []).filter((f) => typeof f === 'string' && f.trim().length > 0);
+          if (files.length > 0) {
+            setFilePath(files[0]);
+            setFilesCsv(files.join(','));
+            setPrFilesCsv(files.join(','));
+          }
+          if (parsed.prompt && parsed.prompt.trim()) {
+            setPrompt(parsed.prompt.trim());
+          }
+        }
+      } catch {
+        // Ignore invalid prefill payloads.
+      }
     }
     void init();
-  }, [loadHistory]);
+  }, [loadHistory, repoId]);
 
   const runReview = useCallback(async (runner: () => Promise<ReviewRun>) => {
     if (!token) return;

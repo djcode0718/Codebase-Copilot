@@ -634,6 +634,10 @@ def get_conversation_summaries_for_repo(
         )
         return result.data or []
     except Exception as e:
+        missing_table = _missing_repo_memory_table_name(e)
+        if missing_table:
+            _warn_missing_repo_memory_table_once(missing_table)
+            return []
         logger.warning(f"get_conversation_summaries_for_repo failed for repo_id='{repo_id}': {e}")
         return []
 
