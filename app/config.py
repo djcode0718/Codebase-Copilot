@@ -48,6 +48,16 @@ INDEX_DIR = os.path.join(DATA_DIR, "index")
 os.makedirs(REPOS_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)
 
+
+def get_repos_dir() -> str:
+    """Return repositories directory path for lazy consumers."""
+    return REPOS_DIR
+
+
+def get_index_dir() -> str:
+    """Return index directory path for lazy consumers."""
+    return INDEX_DIR
+
 # ─── Retrieval ────────────────────────────────────────────────────────────────
 TOP_K_FILES   = 3    # files returned by DocumentSummaryIndex coarse pass
 TOP_K_CHUNKS  = 10   # chunks returned by hybrid retriever before rerank

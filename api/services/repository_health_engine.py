@@ -21,7 +21,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from app.config import REPOS_DIR
+
+def _resolve_repos_dir() -> str:
+    # Lazy import avoids eager config dependency at module import time.
+    from app.config import get_repos_dir
+
+    return get_repos_dir()
 
 
 CATEGORY_ORDER: List[str] = [
@@ -1019,7 +1024,8 @@ class TrendAnalyzer:
 
 
 class RepositoryHealthEngine:
-    def __init__(self) -> None:
+    def __init__(self, repos_dir: Optional[str] = None) -> None:
+        self._repos_dir = repos_dir or _resolve_repos_dir()
         self.analyzers: List[BaseAnalyzer] = [
             ArchitectureAnalyzer(),
             SecurityAnalyzer(),
@@ -1093,7 +1099,7 @@ class RepositoryHealthEngine:
 
     def _build_snapshot(self, repo: Dict[str, Any]) -> Snapshot:
         index_name = repo.get("index_name") or repo.get("name") or "repo"
-        repo_path = os.path.join(REPOS_DIR, index_name)
+        repo_path = os.path.join(self._repos_dir, index_name)
         files: List[RepoFile] = []
 
         language_counts: Counter = Counter()

@@ -6,11 +6,15 @@ from typing import Dict, Any, List
 
 from supabase import Client
 
-from api.services import supabase_service
+
+def _supabase_service_module():
+    from api.services import supabase_service
+
+    return supabase_service
 
 
 def get_chat_history(supabase: Client, chat_id: str) -> List[Dict[str, Any]]:
-    return supabase_service.get_messages_for_chat(supabase, chat_id)
+    return _supabase_service_module().get_messages_for_chat(supabase, chat_id)
 
 
 def get_repo_memory_messages(
@@ -20,7 +24,7 @@ def get_repo_memory_messages(
     exclude_chat_id: str | None = None,
     limit: int = 30,
 ) -> List[Dict[str, Any]]:
-    return supabase_service.get_recent_messages_for_repo(
+    return _supabase_service_module().get_recent_messages_for_repo(
         supabase,
         repo_id,
         exclude_chat_id=exclude_chat_id,
