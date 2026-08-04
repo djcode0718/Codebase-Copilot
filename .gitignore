@@ -26,8 +26,6 @@ data/index/
 # VS Code
 .vscode/
 
-# Streamlit cache
-.streamlit/
 
 # Notebook checkpoints
 .ipynb_checkpoints/

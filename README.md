@@ -290,7 +290,6 @@ A dedicated `tests/` suite (pytest) covering config, ingestion, utilities, query
 | **Backend API**   | FastAPI, Uvicorn, Pydantic, Server-Sent Events (SSE)                      |
 | **Database & Auth**| Supabase (PostgreSQL), Supabase Auth (JWT)                              |
 | **Frontend**      | Next.js 16, React 19, TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Query, Framer Motion |
-| **Legacy UI**     | Streamlit (still available for quick local testing)                      |
 | **Testing**       | pytest, pytest-asyncio, FastAPI TestClient, unittest.mock                 |
 | **Evaluation**    | LlamaIndex Evaluators — FaithfulnessEvaluator, RelevancyEvaluator          |
 
@@ -366,9 +365,6 @@ codebase-copilot/
 │   │   ├── useChatStream.ts
 │   │   └── useIndexingStream.ts
 │   └── proxy.ts                    # Supabase session proxy for route protection
-│
-├── ui/
-│   └── streamlit_app.py          # Legacy/lightweight local UI
 │
 ├── tests/                        # 238 tests across 13 files
 │   ├── conftest.py                # Shared fixtures (FastAPI TestClient, mock Supabase)
@@ -792,14 +788,6 @@ npm run dev
 ```
 The app is available at `http://localhost:3000`.
 
-### 7️⃣ (Optional) Launch the Legacy Streamlit UI
-
-```bash
-streamlit run ui/streamlit_app.py
-```
-
----
-
 ## 🧪 Running Evaluation
 
 **Via CLI (standalone)**
@@ -821,7 +809,7 @@ POST /api/eval/run
 
 **Retrieval Pipeline** — retrieval latency is extremely low (~0.1s), reranking adds modest overhead (~1s), and the primary bottleneck is local LLM inference.
 
-**Backend Architecture** — the `api/` layer is deliberately thin: routers handle HTTP concerns only (auth, validation, response shaping), all business logic lives in `app/` (provider-agnostic core), and `api/services/` handles Supabase persistence and SSE coordination. This separation means the Next.js frontend, the legacy Streamlit UI, and the evaluation CLI all share the same core RAG engine without duplication.
+**Backend Architecture** — the `api/` layer is deliberately thin: routers handle HTTP concerns only (auth, validation, response shaping), all business logic lives in `app/` (provider-agnostic core), and `api/services/` handles Supabase persistence and SSE coordination. This separation means the Next.js frontend and the evaluation CLI share the same core RAG engine without duplication.
 
 **Streaming Design** — both indexing and chat use Server-Sent Events (SSE): indexing progress is streamed step-by-step so the frontend can show a live progress bar, and chat responses are streamed token-by-token using LlamaIndex's `stream_complete()`. A `metadata` event is emitted after the full response, carrying `query_mode`, `retrieved_files`, and latency breakdowns. Messages are persisted to Supabase after the stream closes.
 
