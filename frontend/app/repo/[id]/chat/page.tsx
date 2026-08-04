@@ -651,6 +651,7 @@ function useMessageMutationHandlers({
 
   const handleSend = useCallback(async (query: string) => {
     if (!chatId || !token || !query.trim() || streaming) return;
+    const initialMessageCount = messages.length;
     const userQuery = query.trim();
     const modelQuery = withMermaidGuardrails(userQuery);
     const userMsg: Message = { id: `u-${Date.now()}`, chat_id: chatId, role: 'user', content: userQuery, created_at: new Date().toISOString() };
@@ -658,8 +659,28 @@ function useMessageMutationHandlers({
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const result = await sendMessage(chatId, modelQuery, token);
-    if (!result) return;
-    if (!result.content.trim()) {
+    if (!result || !result.content.trim()) {
+      try {
+        const latestMessages = await getMessages(token, chatId);
+        const expectedMinCount = initialMessageCount + 2;
+        const latestAssistant = latestMessages[latestMessages.length - 1];
+        if (latestMessages.length >= expectedMinCount && latestAssistant?.role === 'assistant') {
+          setMessages(latestMessages);
+          setInspectedIndex(latestMessages.length - 1);
+          setInspectorData({
+            content: latestAssistant.content,
+            queryMode: latestAssistant.query_mode ?? null,
+            retrievedFiles: latestAssistant.retrieved_files ?? [],
+            latencyRetrievalMs: null,
+            latencyLlmMs: null,
+            latencyTotalMs: latestAssistant.latency_ms ?? null,
+          });
+          return;
+        }
+      } catch {
+        // If recovery fails, keep the current error flow below.
+      }
+
       toast.error('No answer content received. Please retry.');
       return;
     }
@@ -673,8 +694,14 @@ function useMessageMutationHandlers({
       latency_ms: result.latencyTotalMs ?? undefined,
       created_at: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, assistantMsg]);
-    setInspectedIndex(messages.length + 1);
+    let insertedAssistantIndex = -1;
+    setMessages((prev) => {
+      insertedAssistantIndex = prev.length;
+      return [...prev, assistantMsg];
+    });
+    if (insertedAssistantIndex >= 0) {
+      setInspectedIndex(insertedAssistantIndex);
+    }
     setInspectorData(result);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
   }, [chatId, token, streaming, sendMessage, messages.length, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef]);

@@ -303,9 +303,46 @@ def _build_no_match_events(
 async def _stream_llm_response(full_prompt: str) -> AsyncGenerator[str, None]:
     from app.services.llm_fallback import stream_with_fallback
 
+    def _coerce_text(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    def _pick_attr_or_key(chunk_obj, field: str):
+        if isinstance(chunk_obj, dict):
+            return chunk_obj.get(field)
+        return getattr(chunk_obj, field, None)
+
+    def _extract_chunk_delta(chunk_obj, last_cumulative: str) -> Tuple[str, str]:
+        # Preferred token-like delta payload.
+        delta = _coerce_text(_pick_attr_or_key(chunk_obj, "delta"))
+        if delta:
+            return delta, last_cumulative
+
+        # Some providers expose cumulative content instead of per-token deltas.
+        cumulative_text = ""
+        for field in ("text", "response", "content"):
+            cumulative_text = _coerce_text(_pick_attr_or_key(chunk_obj, field))
+            if cumulative_text:
+                break
+
+        if cumulative_text:
+            if last_cumulative and cumulative_text.startswith(last_cumulative):
+                return cumulative_text[len(last_cumulative):], cumulative_text
+            return cumulative_text, cumulative_text
+
+        # Fallback: plain string chunk.
+        if isinstance(chunk_obj, str):
+            return chunk_obj, last_cumulative
+
+        return "", last_cumulative
+
     stream_response = stream_with_fallback(full_prompt)
+    last_cumulative_text = ""
     async for chunk in stream_response:
-        delta = chunk.delta or ""
+        delta, last_cumulative_text = _extract_chunk_delta(chunk, last_cumulative_text)
         if not delta:
             continue
         yield delta
