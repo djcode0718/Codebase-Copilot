@@ -14,6 +14,9 @@ import type {
   HealthHistoryResponse,
   HealthLatestResponse,
   HealthRun,
+  ReviewFixResponse,
+  ReviewListResponse,
+  ReviewRun,
   SuggestionsResponse,
   ChatSearchResponse,
   ConversationSummary,
@@ -413,6 +416,119 @@ export async function getRepositoryHealthCategoryDetails(
   });
   if (!res.ok) throw new Error('Failed to load category details');
   return res.json();
+}
+
+// -- AI Engineering Review -----------------------------------------------------
+
+export async function reviewFile(
+  token: string,
+  payload: { repo_id: string; filename: string; prompt?: string }
+): Promise<ReviewRun> {
+  const res = await fetch(apiUrl('/api/reviews/file'), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to review file');
+  }
+  return res.json();
+}
+
+export async function reviewFiles(
+  token: string,
+  payload: { repo_id: string; files: string[]; prompt?: string }
+): Promise<ReviewRun> {
+  const res = await fetch(apiUrl('/api/reviews/files'), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to review files');
+  }
+  return res.json();
+}
+
+export async function reviewCommit(
+  token: string,
+  payload: { repo_id: string; commit_hash: string; prompt?: string }
+): Promise<ReviewRun> {
+  const res = await fetch(apiUrl('/api/reviews/commit'), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to review commit');
+  }
+  return res.json();
+}
+
+export async function reviewPullRequest(
+  token: string,
+  payload: { repo_id: string; changed_files: string[]; diff: string; prompt?: string }
+): Promise<ReviewRun> {
+  const res = await fetch(apiUrl('/api/reviews/pr'), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to review pull request');
+  }
+  return res.json();
+}
+
+export async function generateReviewFix(
+  token: string,
+  payload: { review_id: string; finding_id?: string; finding?: string; file?: string; code_area?: string }
+): Promise<ReviewFixResponse> {
+  const res = await fetch(apiUrl('/api/reviews/fix'), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to generate fix');
+  }
+  return res.json();
+}
+
+export async function listReviews(
+  token: string,
+  repoId: string,
+  limit = 50
+): Promise<ReviewListResponse> {
+  const params = new URLSearchParams({ repo_id: repoId, limit: String(limit) });
+  const res = await fetch(apiUrl(`/api/reviews?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to list reviews');
+  return res.json();
+}
+
+export async function getReview(token: string, reviewId: string): Promise<ReviewRun> {
+  const res = await fetch(apiUrl(`/api/reviews/${reviewId}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load review');
+  return res.json();
+}
+
+export async function deleteReview(token: string, reviewId: string): Promise<void> {
+  const res = await fetch(apiUrl(`/api/reviews/${reviewId}`), {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error('Failed to delete review');
 }
 
 // ── Evaluation endpoints ──────────────────────────────────────────────────

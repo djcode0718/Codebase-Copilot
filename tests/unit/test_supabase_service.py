@@ -420,3 +420,50 @@ class TestGetLatestEvaluation:
         result = supabase_service.get_latest_evaluation(mock, "repo-1")
         assert result is None
 
+
+class TestRepositoryReviews:
+    def test_insert_repository_review_returns_inserted(self):
+        expected = {"id": "rv-1", "repo_id": "r1", "target_type": "file"}
+        mock = MagicMock()
+        chain = MagicMock()
+        chain.execute.return_value = MagicMock(data=[expected])
+        mock.table.return_value.insert.return_value = chain
+
+        with patch("api.services.supabase_service.is_repository_review_schema_available", return_value=True):
+            result = supabase_service.insert_repository_review(
+                mock,
+                repo_id="r1",
+                user_id="u1",
+                target_type="file",
+                summary="done",
+                findings=[],
+                changed_files=["api/routers/chat.py"],
+            )
+
+        assert result["id"] == "rv-1"
+
+    def test_list_repository_reviews_returns_rows(self):
+        rows = [{"id": "rv-1"}, {"id": "rv-2"}]
+        mock = MagicMock()
+        chain = MagicMock()
+        chain.execute.return_value = MagicMock(data=rows)
+        mock.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value = chain
+
+        with patch("api.services.supabase_service.is_repository_review_schema_available", return_value=True):
+            result = supabase_service.list_repository_reviews(mock, repo_id="r1", user_id="u1", limit=20)
+
+        assert len(result) == 2
+
+    def test_get_repository_review_by_id(self):
+        row = {"id": "rv-1", "repo_id": "r1"}
+        mock = MagicMock()
+        chain = MagicMock()
+        chain.execute.return_value = MagicMock(data=[row])
+        mock.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value = chain
+
+        with patch("api.services.supabase_service.is_repository_review_schema_available", return_value=True):
+            result = supabase_service.get_repository_review_by_id(mock, review_id="rv-1", user_id="u1")
+
+        assert result and result["id"] == "rv-1"
+
+

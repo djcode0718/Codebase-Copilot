@@ -112,7 +112,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import repo, chat, eval, suggestions, health
+from api.routers import repo, chat, eval, suggestions, health, reviews
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -159,6 +159,7 @@ app.include_router(chat.router,        prefix="/api/chat",  tags=["Chat"])
 app.include_router(eval.router,        prefix="/api/eval",  tags=["Evaluation"])
 app.include_router(suggestions.router, prefix="/api/repo",  tags=["Suggestions"])
 app.include_router(health.router,      prefix="/api/repo",  tags=["Repository Health"])
+app.include_router(reviews.router,     prefix="/api/reviews", tags=["Engineering Review"])
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────

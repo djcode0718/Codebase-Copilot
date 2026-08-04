@@ -263,6 +263,15 @@ function FastActionsPanel({
             <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </div>
         </Link>
+        <Link href={`/repo/${repoId}/review`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-cyan-500/30 hover:bg-cyan-500/5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">AI engineering review</p>
+              <p className="mt-1 text-xs text-muted-foreground">Review files, commits, and PR diffs with fix suggestions.</p>
+            </div>
+            <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </div>
+        </Link>
         <button
           type="button"
           onClick={onOpenDigitalTwin}

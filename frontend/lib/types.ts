@@ -317,3 +317,59 @@ export interface PipelineStep {
   elapsedMs?: number;
   startedAt?: number;
 }
+
+// -- AI Engineering Review -----------------------------------------------------
+
+export type ReviewSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type ReviewRiskLevel = 'low' | 'medium' | 'high';
+export type ReviewTargetType = 'file' | 'files' | 'commit' | 'pr';
+
+export interface ReviewFinding {
+  id: string;
+  severity: ReviewSeverity;
+  file: string;
+  code_area: string;
+  finding: string;
+  recommendation: string;
+  suggested_fix: string;
+  risk_level: ReviewRiskLevel;
+  impact: string;
+  complexity: string;
+  estimated_effort: string;
+  expected_benefit: string;
+}
+
+export interface ReviewRun {
+  review_id: string;
+  repo_id: string;
+  target_type: ReviewTargetType;
+  status: string;
+  summary: string;
+  findings: ReviewFinding[];
+  changed_files: string[];
+  commit_hash?: string | null;
+  created_at?: string;
+}
+
+export interface ReviewHistoryItem {
+  review_id: string;
+  repo_id: string;
+  target_type: ReviewTargetType;
+  status: string;
+  summary: string;
+  commit_hash?: string | null;
+  changed_files: string[];
+  created_at?: string;
+}
+
+export interface ReviewListResponse {
+  items: ReviewHistoryItem[];
+}
+
+export interface ReviewFixResponse {
+  review_id: string;
+  suggested_fix: string;
+  target_file?: string | null;
+  metadata: Record<string, unknown>;
+}
+

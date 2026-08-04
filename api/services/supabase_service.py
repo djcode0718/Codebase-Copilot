@@ -21,6 +21,10 @@ _HEALTH_SCHEMA_LAST_CHECKED_AT: Optional[datetime] = None
 _HEALTH_SCHEMA_CHECK_TTL_SECONDS = 60
 _HEALTH_SCHEMA_WARNED = False
 _MISSING_REPO_MEMORY_TABLE_WARNED: Set[str] = set()
+_REVIEW_SCHEMA_AVAILABLE: Optional[bool] = None
+_REVIEW_SCHEMA_LAST_CHECKED_AT: Optional[datetime] = None
+_REVIEW_SCHEMA_CHECK_TTL_SECONDS = 60
+_REVIEW_SCHEMA_WARNED = False
 
 
 def _is_missing_column_error(err: Exception, columns: List[str]) -> bool:
@@ -37,6 +41,13 @@ def _is_missing_health_table_error(err: Exception) -> bool:
     if "pgrst205" in msg and "repository_health_" in msg:
         return True
     return "could not find the table 'public.repository_health_" in msg
+
+
+def _is_missing_review_table_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    if "pgrst205" in msg and "repository_reviews" in msg:
+        return True
+    return "could not find the table 'public.repository_reviews'" in msg
 
 
 def _missing_repo_memory_table_name(err: Exception) -> Optional[str]:
@@ -93,6 +104,46 @@ def is_repository_health_schema_available(
                 _HEALTH_SCHEMA_WARNED = True
             return False
         logger.warning(f"Health schema availability check failed: {e}")
+        return False
+
+
+def is_repository_review_schema_available(
+    supabase: Client,
+    *,
+    force_refresh: bool = False,
+) -> bool:
+    global _REVIEW_SCHEMA_AVAILABLE, _REVIEW_SCHEMA_LAST_CHECKED_AT, _REVIEW_SCHEMA_WARNED
+
+    now = datetime.now(timezone.utc)
+    if (
+        not force_refresh
+        and _REVIEW_SCHEMA_LAST_CHECKED_AT is not None
+        and (now - _REVIEW_SCHEMA_LAST_CHECKED_AT).total_seconds() < _REVIEW_SCHEMA_CHECK_TTL_SECONDS
+        and _REVIEW_SCHEMA_AVAILABLE is not None
+    ):
+        return bool(_REVIEW_SCHEMA_AVAILABLE)
+
+    try:
+        (
+            supabase.table("repository_reviews")
+            .select("id")
+            .limit(1)
+            .execute()
+        )
+        _REVIEW_SCHEMA_AVAILABLE = True
+        _REVIEW_SCHEMA_LAST_CHECKED_AT = now
+        return True
+    except Exception as e:
+        _REVIEW_SCHEMA_AVAILABLE = False
+        _REVIEW_SCHEMA_LAST_CHECKED_AT = now
+        if _is_missing_review_table_error(e):
+            if not _REVIEW_SCHEMA_WARNED:
+                logger.warning(
+                    "Repository review schema is missing. Apply migration before enabling persisted review runs."
+                )
+                _REVIEW_SCHEMA_WARNED = True
+            return False
+        logger.warning(f"Review schema availability check failed: {e}")
         return False
 
 
@@ -1113,5 +1164,117 @@ def get_health_history(
             return []
         logger.warning(f"get_health_history failed for repo_id='{repo_id}': {e}")
         return []
+
+
+# -- AI Engineering Review -----------------------------------------------------
+
+def insert_repository_review(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    target_type: str,
+    summary: str,
+    findings: List[Dict[str, Any]],
+    changed_files: List[str],
+    commit_hash: Optional[str] = None,
+    status: str = "completed",
+    request_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    record = {
+        "id": str(uuid.uuid4()),
+        "repo_id": repo_id,
+        "user_id": user_id,
+        "target_type": target_type,
+        "status": status,
+        "summary": summary,
+        "findings": findings,
+        "changed_files": changed_files,
+        "commit_hash": commit_hash,
+        "request_payload": request_payload or {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if not is_repository_review_schema_available(supabase):
+        return record
+
+    try:
+        result = supabase.table("repository_reviews").insert(record).execute()
+        return result.data[0] if result.data else record
+    except Exception as e:
+        if _is_missing_review_table_error(e):
+            return record
+        logger.warning(f"insert_repository_review failed for repo_id='{repo_id}': {e}")
+        return record
+
+
+def list_repository_reviews(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    if not is_repository_review_schema_available(supabase):
+        return []
+    try:
+        result = (
+            supabase.table("repository_reviews")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        if _is_missing_review_table_error(e):
+            return []
+        logger.warning(f"list_repository_reviews failed for repo_id='{repo_id}': {e}")
+        return []
+
+
+def get_repository_review_by_id(
+    supabase: Client,
+    *,
+    review_id: str,
+    user_id: str,
+) -> Optional[Dict[str, Any]]:
+    if not is_repository_review_schema_available(supabase):
+        return None
+    try:
+        result = (
+            supabase.table("repository_reviews")
+            .select("*")
+            .eq("id", review_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        if _is_missing_review_table_error(e):
+            return None
+        logger.warning(f"get_repository_review_by_id failed for review_id='{review_id}': {e}")
+        return None
+
+
+def delete_repository_review(
+    supabase: Client,
+    *,
+    review_id: str,
+    user_id: str,
+) -> bool:
+    if not is_repository_review_schema_available(supabase):
+        return False
+    try:
+        supabase.table("repository_reviews").delete().eq("id", review_id).eq("user_id", user_id).execute()
+        return True
+    except Exception as e:
+        if _is_missing_review_table_error(e):
+            return False
+        logger.warning(f"delete_repository_review failed for review_id='{review_id}': {e}")
+        return False
 
 
