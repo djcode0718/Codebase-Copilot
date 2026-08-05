@@ -12,6 +12,7 @@ import {
   Download,
   GitBranch,
   MessageSquare,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -107,7 +108,7 @@ function ChatContextMenu({
             'flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-sidebar-accent',
             (danger as boolean | undefined) ? 'text-destructive hover:text-destructive' : 'text-sidebar-foreground/80 hover:text-sidebar-foreground'
           )}
-          onClick={() => { onAction(key, chat, repoId); onClose(); }}
+          onClick={() => { onClose(); void onAction(key, chat, repoId); }}
         >
           <Icon size={13} className="flex-shrink-0" />
           {label}
@@ -129,9 +130,21 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
   const [contextMenu,      setContextMenu]      = useState<ChatMenuState | null>(null);
   const [renamingChatId,   setRenamingChatId]   = useState<string | null>(null);
   const [renameValue,      setRenameValue]      = useState('');
+  const [authToken,        setAuthToken]        = useState('');
   // Per-repo inline search
   const [searchOpen,   setSearchOpen]   = useState<Record<string, boolean>>({});
   const [searchQuery,  setSearchQuery]  = useState<Record<string, string>>({});
+
+  // Keep auth token fresh — avoids async session fetch inside action handlers
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setAuthToken(data.session?.access_token ?? '');
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthToken(session?.access_token ?? '');
+    });
+    return () => subscription.unsubscribe();
+  }, [supabase]);
 
   const isHydrated = useSyncExternalStore(
     () => () => {},
@@ -171,8 +184,10 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
   const sortedRepos  = useMemo(() => [...repos].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')), [repos]);
   const recentRepos  = sortedRepos.slice(0, 5);
 
-  async function fetchChats(token: string, repoId: string) {
-    const sessions = await listChatSessions(token, repoId, { includeArchived: true, includeDeleted: false, limit: 20 });
+  async function fetchChats(repoId: string, token?: string) {
+    const t = token ?? authToken;
+    if (!t) return;
+    const sessions = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 20 });
     setRepoChats((prev) => ({ ...prev, [repoId]: sessions }));
     return sessions;
   }
@@ -187,7 +202,7 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
         if (repo.status !== 'ready' || repoChats[repo.id]) continue;
         try {
           setLoadingChatRepoId(repo.id);
-          await fetchChats(token, repo.id);
+          await fetchChats(repo.id, token);
         } catch {
           setRepoChats((prev) => ({ ...prev, [repo.id]: [] }));
         } finally {
@@ -209,7 +224,6 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
   /** Create a new chat — works whether or not we're already on the chat page */
   function handleNewChat(repoId: string) {
     try { sessionStorage.setItem(`codebase:new-chat:${repoId}`, '1'); } catch {}
-    // Dispatch event so the chat page can react without a full remount
     window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
     router.push(`/repo/${repoId}/chat`);
     closeMobileIfOpen();
@@ -223,9 +237,8 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
     if (action === 'open')   { openChatSession(repoId, chat.id); return; }
     if (action === 'rename') { setRenamingChatId(chat.id); setRenameValue(chat.title || ''); return; }
 
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token ?? '';
-    if (!token) return;
+    const token = authToken;
+    if (!token) { toast.error('Not authenticated'); return; }
 
     try {
       if (action === 'pin') {
@@ -235,7 +248,6 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
         await updateChatSession(token, chat.id, { is_archived: !chat.is_archived });
         toast.success(chat.is_archived ? 'Unarchived' : 'Archived');
       } else if (action === 'delete') {
-        // Delete immediately — no confirm dialog (avoids async blocking issues)
         await deleteChat(token, chat.id);
         toast.success('Conversation deleted');
       } else if (action === 'download') {
@@ -246,16 +258,15 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
         } catch { toast.error('Export failed'); }
         return;
       }
-      await fetchChats(token, repoId);
+      await fetchChats(repoId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed');
     }
   }
 
   async function handleDeleteAllChats(repoId: string) {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token ?? '';
-    if (!token) return;
+    const token = authToken;
+    if (!token) { toast.error('Not authenticated'); return; }
     try {
       await deleteAllChats(token, repoId);
       setRepoChats((prev) => ({ ...prev, [repoId]: [] }));
@@ -268,12 +279,11 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
   async function commitRename(repoId: string) {
     const title = renameValue.trim();
     if (!title || !renamingChatId) { setRenamingChatId(null); return; }
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token ?? '';
+    const token = authToken;
     if (!token) return;
     try {
       await updateChatSession(token, renamingChatId, { title });
-      await fetchChats(token, repoId);
+      await fetchChats(repoId);
       toast.success('Renamed');
     } catch { toast.error('Failed to rename'); }
     finally { setRenamingChatId(null); }
@@ -441,34 +451,20 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
                                         >
                                           {chat.is_pinned ? '★ ' : ''}{chat.title || 'Untitled chat'}
                                         </button>
-                                        {/* Inline action buttons on hover */}
-                                        <div className="mr-1 hidden group-hover:flex items-center gap-0.5">
-                                          <button type="button" title="Rename"
-                                            onClick={(e) => { e.stopPropagation(); setRenamingChatId(chat.id); setRenameValue(chat.title || ''); }}
-                                            className="h-5 w-5 flex items-center justify-center rounded text-sidebar-foreground/40 hover:text-sidebar-foreground hover:bg-sidebar-border/50 transition-colors">
-                                            <Pencil size={10} />
-                                          </button>
-                                          <button type="button" title={chat.is_pinned ? 'Unpin' : 'Pin'}
-                                            onClick={(e) => { e.stopPropagation(); void handleContextAction('pin', chat, repo.id); }}
-                                            className="h-5 w-5 flex items-center justify-center rounded text-sidebar-foreground/40 hover:text-sidebar-foreground hover:bg-sidebar-border/50 transition-colors">
-                                            {chat.is_pinned ? <PinOff size={10} /> : <Pin size={10} />}
-                                          </button>
-                                          <button type="button" title={chat.is_archived ? 'Unarchive' : 'Archive'}
-                                            onClick={(e) => { e.stopPropagation(); void handleContextAction('archive', chat, repo.id); }}
-                                            className="h-5 w-5 flex items-center justify-center rounded text-sidebar-foreground/40 hover:text-sidebar-foreground hover:bg-sidebar-border/50 transition-colors">
-                                            <Archive size={10} />
-                                          </button>
-                                          <button type="button" title="Export"
-                                            onClick={(e) => { e.stopPropagation(); void handleContextAction('download', chat, repo.id); }}
-                                            className="h-5 w-5 flex items-center justify-center rounded text-sidebar-foreground/40 hover:text-sidebar-foreground hover:bg-sidebar-border/50 transition-colors">
-                                            <Download size={10} />
-                                          </button>
-                                          <button type="button" title="Delete"
-                                            onClick={(e) => { e.stopPropagation(); void handleContextAction('delete', chat, repo.id); }}
-                                            className="h-5 w-5 flex items-center justify-center rounded text-destructive/50 hover:text-destructive hover:bg-destructive/10 transition-colors">
-                                            <Trash2 size={10} />
-                                          </button>
-                                        </div>
+                                        {/* Single "..." button — replaces 5 tiny hover icons for reliability */}
+                                        <button
+                                          type="button"
+                                          title="More options"
+                                          className="mr-1 hidden group-hover:flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-border/60 transition-colors"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                            setContextMenu({ chat, repoId: repo.id, x: rect.left, y: rect.bottom + 4 });
+                                          }}
+                                        >
+                                          <MoreHorizontal size={13} />
+                                        </button>
                                       </>
                                     )}
                                   </div>

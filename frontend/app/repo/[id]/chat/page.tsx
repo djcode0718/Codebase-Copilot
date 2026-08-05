@@ -487,16 +487,16 @@ function EmptyThreadState() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="flex flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-border bg-background/70 px-6 py-10 text-center"
+      className="flex flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-border bg-background/70 px-6 py-6 text-center"
     >
-      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-brand/20 bg-brand/10 text-brand">
-        <Sparkles size={22} />
+      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl border border-brand/20 bg-brand/10 text-brand">
+        <Sparkles size={18} />
       </div>
-      <h2 className="font-heading text-lg font-semibold">Ask anything about this codebase</h2>
-      <p className="mt-2 max-w-md text-sm text-muted-foreground">
+      <h2 className="font-heading text-base font-semibold">Ask anything about this codebase</h2>
+      <p className="mt-1.5 max-w-md text-xs text-muted-foreground">
         Questions are grounded in real code. Answers show retrieval mode, matched files, and latency.
       </p>
-      <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground">
           <ShieldCheck size={11} className="text-brand" />
           Grounded responses
@@ -731,8 +731,8 @@ function ChatWorkspace({
   const inspectorPayload = buildInspectorPayload();
 
   return (
-    <div className="grid min-h-[62vh] grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
-      <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-[calc(100vh-10rem)] xl:flex xl:flex-col">
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+      <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-[calc(100vh-21rem)] xl:flex xl:flex-col">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Activity size={15} className="text-brand" />
@@ -786,7 +786,7 @@ function ChatWorkspace({
         </div>
       </div>
 
-      <div className="min-h-[32rem] overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:sticky xl:top-6 xl:h-[calc(100vh-10rem)]">
+      <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:sticky xl:top-[4.5rem] xl:h-[calc(100vh-21rem)]">
         <AIInspector data={inspectorPayload} streaming={streaming} />
       </div>
     </div>
