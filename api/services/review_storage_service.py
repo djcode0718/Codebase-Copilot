@@ -40,7 +40,7 @@ def list_reviews(supabase: Client, *, repo_id: str, user_id: str, limit: int = 5
     return supabase_service.list_repository_reviews(supabase, repo_id=repo_id, user_id=user_id, limit=limit)
 
 
-def get_review(supabase: Client, *, review_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+def get_review(supabase: Client, *, review_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     return supabase_service.get_repository_review_by_id(supabase, review_id=review_id, user_id=user_id)
 
 

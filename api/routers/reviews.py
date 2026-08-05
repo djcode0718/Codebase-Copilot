@@ -175,8 +175,33 @@ async def generate_fix_endpoint(
     supabase: Client = Depends(get_supabase),
 ):
     record = get_review(supabase, review_id=body.review_id, user_id=user_id)
+
+    # If DB record not found but the request carries enough inline data, allow
+    # fix generation anyway (covers the case where the review was in-memory only
+    # due to a stale schema-unavailable cache at creation time).
+    if record is None and body.finding and body.repo_id:
+        # Verify the user owns the repo passed inline
+        _ensure_repo_access(supabase, user_id, body.repo_id)
+        suggested_fix = await generate_fix_text({
+            "review_id": body.review_id,
+            "repo_id": body.repo_id,
+            "finding": body.finding,
+            "file": body.file,
+            "code_area": body.code_area,
+            "recommendation": body.recommendation,
+        })
+        return ReviewFixResponse(
+            review_id=body.review_id,
+            suggested_fix=suggested_fix,
+            target_file=body.file,
+            metadata={"finding_id": body.finding_id, "source": "inline"},
+        )
+
     if not record:
         raise HTTPException(status_code=404, detail="Review not found")
+
+    # Verify user has access to the repository owning this review
+    _ensure_repo_access(supabase, user_id, record["repo_id"])
 
     target_finding = None
     findings = record.get("findings") or []

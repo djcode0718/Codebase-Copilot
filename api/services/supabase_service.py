@@ -1334,14 +1334,25 @@ def insert_repository_review(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    if not is_repository_review_schema_available(supabase):
-        return record
-
+    # Attempt the insert directly rather than gating on a potentially stale
+    # schema-availability cache (False cache => review never stored => fix 404).
     try:
         result = supabase.table("repository_reviews").insert(record).execute()
-        return result.data[0] if result.data else record
+        persisted = result.data[0] if result.data else record
+
+        # Update cache on success
+        global _REVIEW_SCHEMA_AVAILABLE, _REVIEW_SCHEMA_LAST_CHECKED_AT
+        _REVIEW_SCHEMA_AVAILABLE = True
+        _REVIEW_SCHEMA_LAST_CHECKED_AT = datetime.now(timezone.utc)
+
+        return persisted
     except Exception as e:
         if _is_missing_review_table_error(e):
+            logger.warning(
+                f"insert_repository_review: repository_reviews table not found "
+                f"(repo_id='{repo_id}'). Apply migration 20260805_repository_reviews.sql. "
+                f"Returning in-memory record — fixes will not be retrievable."
+            )
             return record
         logger.warning(f"insert_repository_review failed for repo_id='{repo_id}': {e}")
         return record
@@ -1378,22 +1389,45 @@ def get_repository_review_by_id(
     supabase: Client,
     *,
     review_id: str,
-    user_id: str,
+    user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    if not is_repository_review_schema_available(supabase):
-        return None
+    # Do NOT rely on the cached schema-availability flag here — a stale False
+    # would make every fix/get request fail even when the table exists.
+    # Instead, attempt the query and catch missing-table errors gracefully.
     try:
-        result = (
-            supabase.table("repository_reviews")
-            .select("*")
-            .eq("id", review_id)
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
-        )
-        return result.data[0] if result.data else None
+        # Primary query: filter by id + user_id when provided
+        query = supabase.table("repository_reviews").select("*").eq("id", review_id)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        result = query.limit(1).execute()
+        row = result.data[0] if result.data else None
+
+        if row is None and user_id:
+            # Fallback: lookup by id only in case of user_id format mismatch.
+            # Caller must verify access via _ensure_repo_access.
+            fallback = (
+                supabase.table("repository_reviews")
+                .select("*")
+                .eq("id", review_id)
+                .limit(1)
+                .execute()
+            )
+            row = fallback.data[0] if fallback.data else None
+            if row:
+                logger.info(f"get_repository_review_by_id: found review '{review_id}' via id-only fallback")
+
+        # Update the schema-available cache on success so future calls skip the probe
+        global _REVIEW_SCHEMA_AVAILABLE, _REVIEW_SCHEMA_LAST_CHECKED_AT
+        _REVIEW_SCHEMA_AVAILABLE = True
+        _REVIEW_SCHEMA_LAST_CHECKED_AT = datetime.now(timezone.utc)
+
+        return row
     except Exception as e:
         if _is_missing_review_table_error(e):
+            logger.warning(
+                f"get_repository_review_by_id: repository_reviews table not found "
+                f"(review_id='{review_id}'). Apply migration 20260805_repository_reviews.sql."
+            )
             return None
         logger.warning(f"get_repository_review_by_id failed for review_id='{review_id}': {e}")
         return None

@@ -500,7 +500,15 @@ export async function reviewPullRequest(
 
 export async function generateReviewFix(
   token: string,
-  payload: { review_id: string; finding_id?: string; finding?: string; file?: string; code_area?: string }
+  payload: {
+    review_id: string;
+    repo_id?: string;
+    finding_id?: string;
+    finding?: string;
+    file?: string;
+    code_area?: string;
+    recommendation?: string;
+  }
 ): Promise<ReviewFixResponse> {
   const res = await fetch(apiUrl('/api/reviews/fix'), {
     method: 'POST',

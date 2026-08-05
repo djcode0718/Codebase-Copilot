@@ -680,6 +680,7 @@ function ChatWorkspace({
   onKeyDown,
   onSubmit,
   onCancel,
+  sessionLoading,
 }: {
   repoId: string;
   sessionReady: boolean;
@@ -703,6 +704,7 @@ function ChatWorkspace({
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  sessionLoading?: boolean;
 }) {
   const inspectorPayload = inspectedIndex !== null
     ? inspectorData
@@ -724,28 +726,37 @@ function ChatWorkspace({
             <Activity size={15} className="text-brand" />
             Chat thread
           </div>
-          {!sessionReady && (
+          {(sessionLoading || !sessionReady) && (
             <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-xs text-muted-foreground">
               <Loader2 size={12} className="animate-spin" />
-              Initialising
+              {sessionLoading ? 'Loading conversation…' : 'Initialising'}
             </div>
           )}
         </div>
 
         <div className="flex h-full min-h-0 flex-col">
-          <ChatMessageList
-            showEmptyState={showEmptyState}
-            messages={messages}
-            inspectedIndex={inspectedIndex}
-            onInspect={onInspect}
-            streaming={streaming}
-            streamedText={streamedText}
-            error={error}
-            suggestions={suggestions}
-            onSuggestion={onSuggestion}
-            sessionReady={sessionReady}
-            messagesEndRef={messagesEndRef}
-          />
+          {sessionLoading ? (
+            <div className="flex flex-1 items-center justify-center py-20 text-muted-foreground">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 size={22} className="animate-spin text-brand" />
+                <span className="text-sm">Loading conversation…</span>
+              </div>
+            </div>
+          ) : (
+            <ChatMessageList
+              showEmptyState={showEmptyState}
+              messages={messages}
+              inspectedIndex={inspectedIndex}
+              onInspect={onInspect}
+              streaming={streaming}
+              streamedText={streamedText}
+              error={error}
+              suggestions={suggestions}
+              onSuggestion={onSuggestion}
+              sessionReady={sessionReady}
+              messagesEndRef={messagesEndRef}
+            />
+          )}
 
           <ChatComposer
             repoId={repoId}
@@ -1176,6 +1187,7 @@ export default function ChatPage() {
   const [inspectedIndex, setInspectedIndex] = useState<number | null>(null);
   const [inspectorData, setInspectorData] = useState<StreamedResponse | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
   const [repo, setRepo] = useState<Repo | null>(null);
   const pendingAutoPromptRef = useRef<string | null>(null);
   const [autoPromptTick, setAutoPromptTick] = useState(0);
@@ -1185,13 +1197,23 @@ export default function ChatPage() {
     useChatStream();
 
   const loadSession = useCallback(async (t: string, targetChatId: string) => {
-    const history = await getMessages(t, targetChatId);
-    setChatId(targetChatId);
-    setMessages(history.filter((msg) => msg.role !== 'system'));
+    setSessionReady(false);
+    setSessionLoading(true);
+    setMessages([]);
     setInspectedIndex(null);
     setInspectorData(null);
-    setSessionReady(true);
-    return history.length;
+    setChatId(targetChatId);
+    try {
+      const history = await getMessages(t, targetChatId);
+      setMessages(history.filter((msg) => msg.role !== 'system'));
+      setSessionReady(true);
+      return history.length;
+    } catch (e) {
+      setSessionReady(true); // restore so user isn't stuck
+      throw e;
+    } finally {
+      setSessionLoading(false);
+    }
   }, []);
 
   const refreshSessions = useCallback(async (t: string) => {
@@ -1224,7 +1246,7 @@ export default function ChatPage() {
     router.push(`/repo/${repoId}/review`);
   }, [messages, repoId, router]);
   const handleOpenSession = useCallback(async (targetChatId: string) => {
-    if (!token || streaming || targetChatId === chatId) return;
+    if (!token || streaming || sessionLoading) return;
     try {
       await loadSession(token, targetChatId);
       const saved = localStorage.getItem(`chat_suggestions_${targetChatId}`);
@@ -1232,7 +1254,7 @@ export default function ChatPage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to open conversation');
     }
-  }, [chatId, loadSession, streaming, token]);
+  }, [loadSession, sessionLoading, streaming, token]);
   const handleSessionsChanged = useCallback(async () => {
     if (!token) return;
     await refreshSessions(token);
@@ -1294,7 +1316,7 @@ export default function ChatPage() {
           repoId={repoId}
           sessions={sessions}
           currentChatId={chatId}
-          streaming={streaming}
+          streaming={streaming || sessionLoading}
           onNewChat={handleCreateQuickAsk}
           onOpenSession={handleOpenSession}
           onSessionsChanged={handleSessionsChanged}
@@ -1302,8 +1324,8 @@ export default function ChatPage() {
 
         <ChatWorkspace
           repoId={repoId}
-          sessionReady={sessionReady}
-          showEmptyState={showEmptyState}
+          sessionReady={sessionReady && !sessionLoading}
+          showEmptyState={showEmptyState && !sessionLoading}
           messages={messages}
           inspectedIndex={inspectedIndex}
           streaming={streaming}
@@ -1323,6 +1345,7 @@ export default function ChatPage() {
           onKeyDown={(e) => handleKeyDown(e, input)}
           onSubmit={() => handleSend(input)}
           onCancel={cancelStream}
+          sessionLoading={sessionLoading}
         />
       </div>
     </div>

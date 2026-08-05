@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Bot, FileCode2, GitCommitHorizontal, GitPullRequest, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Bot, FileCode2, GitCommitHorizontal, GitPullRequest, Loader2, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,6 +39,8 @@ export default function RepositoryReviewPage() {
   const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
   const [selectedReview, setSelectedReview] = useState<ReviewRun | null>(null);
   const [loading, setLoading] = useState(false);
+  const [fixLoading, setFixLoading] = useState<string | null>(null); // finding id being fixed
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [filePath, setFilePath] = useState('api/services/chat_service.py');
   const [filesCsv, setFilesCsv] = useState('');
   const [commitHash, setCommitHash] = useState('');
@@ -173,24 +175,37 @@ export default function RepositoryReviewPage() {
 
         <div className="space-y-4">
           <div className="rounded-2xl border border-border bg-card/80 p-4">
-            <div className="mb-3 text-sm font-medium">Review history</div>
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-sm font-medium">Review history</div>
+              {historyLoading && <Loader2 size={13} className="animate-spin text-muted-foreground" />}
+            </div>
             <div className="space-y-2 max-h-[18rem] overflow-auto">
               {history.length === 0 && <p className="text-sm text-muted-foreground">No reviews yet.</p>}
-              {history.map((item) => (
-                <button
-                  key={item.review_id}
-                  className="w-full text-left rounded-xl border border-border bg-background/70 p-3 hover:border-brand/30"
-                  onClick={async () => {
-                    if (!token) return;
-                    const row = await getReview(token, item.review_id);
-                    setSelectedReview(row);
-                    setFixOutput(null);
-                  }}
-                >
-                  <div className="text-xs text-muted-foreground">{item.target_type.toUpperCase()} • {item.created_at ? new Date(item.created_at).toLocaleString() : 'n/a'}</div>
-                  <div className="mt-1 text-sm font-medium truncate">{item.summary}</div>
-                </button>
-              ))}
+              {history.map((item) => {
+                const isActive = selectedReview?.review_id === item.review_id;
+                return (
+                  <button
+                    key={item.review_id}
+                    className={`w-full text-left rounded-xl border p-3 transition-colors ${isActive ? 'border-brand/40 bg-brand/5' : 'border-border bg-background/70 hover:border-brand/30'}`}
+                    onClick={async () => {
+                      if (!token || historyLoading) return;
+                      setHistoryLoading(true);
+                      setFixOutput(null);
+                      try {
+                        const row = await getReview(token, item.review_id);
+                        setSelectedReview(row);
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : 'Failed to load review');
+                      } finally {
+                        setHistoryLoading(false);
+                      }
+                    }}
+                  >
+                    <div className="text-xs text-muted-foreground">{item.target_type.toUpperCase()} • {item.created_at ? new Date(item.created_at).toLocaleString() : 'n/a'}</div>
+                    <div className="mt-1 text-sm font-medium truncate">{item.summary}</div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -206,10 +221,15 @@ export default function RepositoryReviewPage() {
                   size="sm"
                   onClick={async () => {
                     if (!token) return;
-                    await deleteReview(token, selectedReview.review_id);
-                    setSelectedReview(null);
-                    setFixOutput(null);
-                    await loadHistory(token);
+                    try {
+                      await deleteReview(token, selectedReview.review_id);
+                      setSelectedReview(null);
+                      setFixOutput(null);
+                      await loadHistory(token);
+                      toast.success('Review deleted');
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : 'Failed to delete review');
+                    }
                   }}
                 >
                   <Trash2 size={13} className="mr-1" /> Delete
@@ -217,8 +237,11 @@ export default function RepositoryReviewPage() {
               </div>
 
               <div className="space-y-2 max-h-[18rem] overflow-auto">
+                {findings.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No findings for this review.</p>
+                )}
                 {findings.map((f) => (
-                  <div key={f.id} className="rounded-xl border border-border bg-background/70 p-3 space-y-2">
+                  <div key={f.id} className={`rounded-xl border p-3 space-y-2 transition-colors ${fixOutput && fixLoading === null && (fixOutput as ReviewFixResponse & { _findingId?: string })._findingId === f.id ? 'border-brand/40 bg-brand/5' : 'border-border bg-background/70'}`}>
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-medium">{f.finding}</div>
                       <SeverityPill severity={f.severity} />
@@ -228,22 +251,46 @@ export default function RepositoryReviewPage() {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={fixLoading !== null}
                       onClick={async () => {
                         if (!token) return;
-                        const fix = await generateReviewFix(token, { review_id: selectedReview.review_id, finding_id: f.id });
-                        setFixOutput(fix);
+                        setFixLoading(f.id);
+                        setFixOutput(null);
+                        try {
+                          const fix = await generateReviewFix(token, {
+                            review_id: selectedReview.review_id,
+                            repo_id: selectedReview.repo_id,
+                            finding_id: f.id,
+                            finding: f.finding,
+                            file: f.file,
+                            code_area: f.code_area,
+                            recommendation: f.recommendation,
+                          });
+                          setFixOutput(fix);
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : 'Failed to generate fix');
+                        } finally {
+                          setFixLoading(null);
+                        }
                       }}
                     >
-                      <Wrench size={13} className="mr-1" /> Generate fix
+                      {fixLoading === f.id ? (
+                        <><Loader2 size={13} className="mr-1 animate-spin" /> Generating…</>
+                      ) : (
+                        <><Wrench size={13} className="mr-1" /> Generate fix</>
+                      )}
                     </Button>
                   </div>
                 ))}
               </div>
 
               {fixOutput && (
-                <div className="rounded-xl border border-border bg-background/70 p-3">
-                  <div className="mb-1 text-xs text-muted-foreground">Suggested fix for {fixOutput.target_file ?? 'selected target'}</div>
-                  <pre className="whitespace-pre-wrap text-sm">{fixOutput.suggested_fix}</pre>
+                <div className="rounded-xl border border-brand/30 bg-brand/5 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-brand">
+                    <Wrench size={12} />
+                    Suggested fix{fixOutput.target_file ? ` for ${fixOutput.target_file}` : ''}
+                  </div>
+                  <pre className="whitespace-pre-wrap text-sm leading-relaxed">{fixOutput.suggested_fix}</pre>
                 </div>
               )}
             </div>

@@ -86,9 +86,12 @@ class ReviewPullRequestRequest(BaseModel):
 class ReviewFixRequest(BaseModel):
     review_id: str
     finding_id: Optional[str] = None
+    # Direct finding payload — used as fallback when the DB record is unavailable
     finding: Optional[str] = None
     file: Optional[str] = None
     code_area: Optional[str] = None
+    recommendation: Optional[str] = None
+    repo_id: Optional[str] = None
 
 
 class ReviewFixResponse(BaseModel):
