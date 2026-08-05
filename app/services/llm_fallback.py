@@ -4,16 +4,16 @@ import logging
 import time
 import threading
 import inspect
-from dataclasses import dataclass
 from typing import Any, List, Optional, AsyncGenerator
 from pydantic import Field
 
 from llama_index.core.llms import CustomLLM, CompletionResponse, CompletionResponseGen, LLMMetadata
 from app.config import (
-    GEMINI_API_KEY,
-    GROQ_API_KEY,
     LLM_FALLBACK_RETRY_THRESHOLD,
-    LLM_FALLBACK_CHAIN_STR
+)
+from app.services.model_manager import (
+    create_llm_client,
+    get_available_model_specs,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,33 +72,6 @@ def _sleep_safe(seconds: float) -> None:
         # No running event loop → pure sync context, safe to block.
         time.sleep(seconds)
 
-@dataclass
-class FallbackModelConfig:
-    provider: str  # "gemini" or "groq"
-    model_name: str
-    rpd_limit: Optional[int] = None
-
-def _parse_fallback_chain() -> List[FallbackModelConfig]:
-    chain = []
-    # RPD limits mapping for default names
-    rpd_limits = {
-        "models/gemini-3.6-flash": 20,
-        "models/gemini-3-flash": 20,
-        "models/gemini-2.5-flash": 20,
-        "models/gemini-3.1-flash-lite": 500,
-        "models/gemini-2.5-flash-lite": 500
-    }
-    for item in LLM_FALLBACK_CHAIN_STR.split(","):
-        item = item.strip()
-        if not item or ":" not in item:
-            continue
-        provider, model_name = item.split(":", 1)
-        limit = rpd_limits.get(model_name)
-        chain.append(FallbackModelConfig(provider=provider, model_name=model_name, rpd_limit=limit))
-    return chain
-
-FALLBACK_CHAIN = _parse_fallback_chain()
-
 class AllModelsExhaustedError(Exception):
     """Exception raised when all fallback LLMs in the chain fail."""
     def __init__(self, message: str, errors: dict):
@@ -141,29 +114,10 @@ def parse_retry_delay(err: Exception) -> Optional[int]:
 
     return None
 
-_client_cache = {}
-
-def get_llm_client(config: FallbackModelConfig) -> Any:
-    """Lazily construct and cache LLM clients."""
-    cache_key = (config.provider, config.model_name)
-    if cache_key in _client_cache:
-        return _client_cache[cache_key]
-
-    if config.provider == "gemini":
-        from llama_index.llms.gemini import Gemini
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY is not configured.")
-        client = Gemini(model=config.model_name, api_key=GEMINI_API_KEY)
-    elif config.provider == "groq":
-        from llama_index.llms.groq import Groq
-        if not GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY is not configured.")
-        client = Groq(model=config.model_name, api_key=GROQ_API_KEY)
-    else:
-        raise ValueError(f"Unknown provider: {config.provider}")
-
-    _client_cache[cache_key] = client
-    return client
+def _provider_and_model(llm: Any) -> tuple[str, str]:
+    provider = getattr(llm, "_cb_provider", type(llm).__name__)
+    model_name = getattr(llm, "_cb_model_name", getattr(llm, "model", getattr(llm, "model_name", "unknown")))
+    return str(provider), str(model_name)
 
 class ResilientFallbackLLM(CustomLLM):
     """LlamaIndex-compliant LLM class supporting fallback chain across models and providers."""
@@ -176,8 +130,7 @@ class ResilientFallbackLLM(CustomLLM):
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
         errors = {}
         for llm in self.fallback_chain:
-            provider = type(llm).__name__
-            model_name = getattr(llm, "model", getattr(llm, "model_name", "unknown"))
+            provider, model_name = _provider_and_model(llm)
             
             # Allow up to 1 retry attempt if retry-after delay is small
             retries = 1
@@ -190,8 +143,11 @@ class ResilientFallbackLLM(CustomLLM):
                     return response
                 except Exception as e:
                     if not is_rate_limit_or_quota_error(e):
-                        logger.error(f"Non-rate-limit error on {provider}/{model_name}: {e}. Raising immediately.")
-                        raise e
+                        logger.warning(
+                            f"Non-rate-limit error on {provider}/{model_name}. Trying next fallback model: {e}"
+                        )
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
                     
                     delay = parse_retry_delay(e)
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
@@ -217,8 +173,7 @@ class ResilientFallbackLLM(CustomLLM):
         def gen():
             errors = {}
             for llm in self.fallback_chain:
-                provider = type(llm).__name__
-                model_name = getattr(llm, "model", getattr(llm, "model_name", "unknown"))
+                provider, model_name = _provider_and_model(llm)
                 
                 retries = 1
                 for attempt in range(retries + 1):
@@ -234,9 +189,17 @@ class ResilientFallbackLLM(CustomLLM):
                         logger.info(f"Streaming completion succeeded with {provider}/{model_name}.")
                         return
                     except Exception as e:
-                        if tokens_yielded or not is_rate_limit_or_quota_error(e):
+                        if tokens_yielded:
                             logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
                             raise e
+
+                        if not is_rate_limit_or_quota_error(e):
+                            logger.warning(
+                                f"Stream startup error on {provider}/{model_name}. "
+                                f"Trying next fallback model: {e}"
+                            )
+                            errors[f"{provider}/{model_name}"] = str(e)
+                            break
                         
                         delay = parse_retry_delay(e)
                         if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
@@ -263,8 +226,7 @@ class ResilientFallbackLLM(CustomLLM):
     async def acomplete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
         errors = {}
         for llm in self.fallback_chain:
-            provider = type(llm).__name__
-            model_name = getattr(llm, "model", getattr(llm, "model_name", "unknown"))
+            provider, model_name = _provider_and_model(llm)
             
             retries = 1
             for attempt in range(retries + 1):
@@ -276,8 +238,11 @@ class ResilientFallbackLLM(CustomLLM):
                     return response
                 except Exception as e:
                     if not is_rate_limit_or_quota_error(e):
-                        logger.error(f"Non-rate-limit error on {provider}/{model_name}: {e}. Raising immediately.")
-                        raise e
+                        logger.warning(
+                            f"Non-rate-limit error on {provider}/{model_name}. Trying next fallback model: {e}"
+                        )
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
                     
                     delay = parse_retry_delay(e)
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
@@ -302,8 +267,7 @@ class ResilientFallbackLLM(CustomLLM):
     async def astream_complete(self, prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
         errors = {}
         for llm in self.fallback_chain:
-            provider = type(llm).__name__
-            model_name = getattr(llm, "model", getattr(llm, "model_name", "unknown"))
+            provider, model_name = _provider_and_model(llm)
 
             retries = 1
             for attempt in range(retries + 1):
@@ -327,9 +291,17 @@ class ResilientFallbackLLM(CustomLLM):
                     logger.info(f"Async streaming completion succeeded with {provider}/{model_name}.")
                     return
                 except Exception as e:
-                    if tokens_yielded or not is_rate_limit_or_quota_error(e):
+                    if tokens_yielded:
                         logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
                         raise e
+
+                    if not is_rate_limit_or_quota_error(e):
+                        logger.warning(
+                            f"Async stream startup error on {provider}/{model_name}. "
+                            f"Trying next fallback model: {e}"
+                        )
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
 
                     delay = parse_retry_delay(e)
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
@@ -358,12 +330,12 @@ def get_resilient_llm() -> ResilientFallbackLLM:
     global _resilient_llm_instance
     if _resilient_llm_instance is None:
         chain = []
-        for config in FALLBACK_CHAIN:
+        for spec in get_available_model_specs():
             try:
-                llm = get_llm_client(config)
+                llm = create_llm_client(spec)
                 chain.append(llm)
             except Exception as e:
-                logger.warning(f"Could not pre-initialize {config.provider}/{config.model_name}: {e}")
+                logger.warning(f"Could not pre-initialize {spec.provider}/{spec.model_name}: {e}")
         
         if not chain:
             raise RuntimeError("No fallback LLM clients could be initialized.")

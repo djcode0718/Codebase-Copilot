@@ -115,7 +115,7 @@ Full indexing pipeline:
 
 FIX: uses configure_llamaindex_settings() instead of the old
 `if Settings.llm is None` pattern, which was silently skipped because
-LlamaIndex auto-sets Settings.embed_model to OpenAI at import time.
+LlamaIndex may auto-set a default embed model at import time.
 """
 
 import os
@@ -141,7 +141,7 @@ def process_repository(source: str) -> Optional[str]:
     try:
         # ── 0. Force LlamaIndex to use our LLM + Ollama embeddings ────────────
         # FIX: replaces the old `if Settings.llm is None` guard which was
-        # bypassed because LlamaIndex auto-sets embed_model=OpenAI at import time.
+        # bypassed because LlamaIndex may pre-populate embed_model at import time.
         configure_llamaindex_settings()
 
         logger.info(f"Starting indexing pipeline for: {source}")

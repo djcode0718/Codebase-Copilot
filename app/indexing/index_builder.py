@@ -59,7 +59,7 @@ def _get_chroma_collection(index_name: str):
 
 def build_vector_index(nodes: List[BaseNode], index_name: str) -> VectorStoreIndex:
     # Explicitly re-set embed model in this thread to prevent
-    # LlamaIndex from falling back to OpenAI default
+    # LlamaIndex from falling back to an implicit default embed model
     from llama_index.core import Settings
     from app.llm.llm_client import get_embed_model
     if Settings.embed_model is None:

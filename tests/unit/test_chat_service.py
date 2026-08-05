@@ -30,7 +30,6 @@ _STUBS = [
     "llama_index.core.retrievers",
     "llama_index.core.retrievers.QueryFusionRetriever",
     "llama_index.llms.groq",
-    "llama_index.llms.openai",
     "llama_index.llms.gemini",
     "llama_index.llms.ollama",
     "app.llm.llm_client",
@@ -177,22 +176,26 @@ def test_rephrase_suggestions_returns_non_empty_list():
 
 def test_build_fallback_llms_excludes_active_provider():
     """Active provider should not appear in the fallback list."""
+    spec_groq = MagicMock(provider="groq", model_name="llama-3.1-8b-instant")
+    spec_gemini = MagicMock(provider="gemini", model_name="models/gemini-flash-latest")
+    spec_ollama = MagicMock(provider="ollama", model_name="llama3.2:3b")
     with patch.object(chat_service, "LLM_PROVIDER", "groq"), \
-         patch.object(chat_service, "GROQ_API_KEY", ""), \
-         patch.object(chat_service, "GEMINI_API_KEY", ""), \
-         patch.object(chat_service, "OPENAI_API_KEY", ""):
+         patch("app.services.model_manager.get_available_model_specs", return_value=[spec_groq, spec_gemini, spec_ollama]), \
+         patch("app.services.model_manager.create_llm_client", side_effect=lambda s: f"{s.provider}:{s.model_name}"):
         candidates = chat_service._build_fallback_llms()
         providers = [name for name, _ in candidates]
         assert "groq" not in providers
+        assert providers == ["gemini", "ollama"]
 
 
 def test_build_fallback_llms_returns_list():
+    spec_gemini = MagicMock(provider="gemini", model_name="models/gemini-flash-latest")
     with patch.object(chat_service, "LLM_PROVIDER", "ollama"), \
-         patch.object(chat_service, "GROQ_API_KEY", ""), \
-         patch.object(chat_service, "GEMINI_API_KEY", ""), \
-         patch.object(chat_service, "OPENAI_API_KEY", ""):
+         patch("app.services.model_manager.get_available_model_specs", return_value=[spec_gemini]), \
+         patch("app.services.model_manager.create_llm_client", return_value="gemini-client"):
         candidates = chat_service._build_fallback_llms()
         assert isinstance(candidates, list)
+        assert candidates == [("gemini", "gemini-client")]
 
 
 @pytest.mark.asyncio

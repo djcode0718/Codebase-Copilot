@@ -96,19 +96,19 @@ def test_fallback_on_429():
     llm2.complete.assert_called_once()
 
 
-def test_fallback_non_rate_limit_raises_immediately():
+def test_fallback_non_rate_limit_tries_next_model():
     llm1 = create_mock_llm("gemini-3.6-flash")
     llm2 = create_mock_llm("gemini-3-flash")
     
     llm1.complete.side_effect = ValueError("Invalid auth token")
+    llm2.complete.return_value = make_completion_response("Fallback after startup error")
     
     pipeline = ResilientFallbackLLM(fallback_chain=[llm1, llm2])
-    
-    with pytest.raises(ValueError, match="Invalid auth token"):
-        pipeline.complete("test prompt")
-        
+
+    res = pipeline.complete("test prompt")
+    assert res.text == "Fallback after startup error"
     llm1.complete.assert_called_once()
-    llm2.complete.assert_not_called()
+    llm2.complete.assert_called_once()
 
 
 def test_fallback_respects_retry_delay_short(monkeypatch):

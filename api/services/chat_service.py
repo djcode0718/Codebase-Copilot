@@ -31,11 +31,6 @@ from app.config import (
     TOP_K_CHUNKS,
     TOP_K_RERANK,
     LLM_PROVIDER,
-    GROQ_API_KEY,
-    GEMINI_API_KEY,
-    OPENAI_API_KEY,
-    OLLAMA_BASE_URL,
-    OLLAMA_LLM_MODEL,
     STREAM_FIRST_TOKEN_TIMEOUT_SECONDS,
     STREAM_FIRST_TOKEN_FALLBACK_TEXT,
 )
@@ -68,44 +63,18 @@ def _ensure_llamaindex():
 
 
 def _build_fallback_llms() -> List[Tuple[str, object]]:
-    """Build fallback LLM candidates in priority order, excluding the active provider."""
-    active = (LLM_PROVIDER or "").lower()
+    """Build fallback LLM candidates from configured providers, excluding active provider."""
+    from app.services.model_manager import create_llm_client, get_available_model_specs
 
-    if active == "groq":
-        providers_order = ["gemini", "openai", "ollama"]
-    elif active == "openai":
-        providers_order = ["gemini", "groq", "ollama"]
-    elif active == "gemini":
-        providers_order = ["groq", "openai", "ollama"]
-    else:
-        providers_order = ["gemini", "groq", "openai", "ollama"]
-
+    active = (LLM_PROVIDER or "").strip().lower()
     candidates: List[Tuple[str, object]] = []
-    for provider in providers_order:
+    for spec in get_available_model_specs():
+        if spec.provider == active:
+            continue
         try:
-            if provider == "ollama":
-                from llama_index.llms.ollama import Ollama
-                candidates.append(
-                    (
-                        "ollama",
-                        Ollama(
-                            model=OLLAMA_LLM_MODEL,
-                            base_url=OLLAMA_BASE_URL,
-                            request_timeout=120.0,
-                        ),
-                    )
-                )
-            elif provider == "groq" and GROQ_API_KEY:
-                from llama_index.llms.groq import Groq
-                candidates.append(("groq", Groq(model="llama-3.1-8b-instant", api_key=GROQ_API_KEY)))
-            elif provider == "openai" and OPENAI_API_KEY:
-                from llama_index.llms.openai import OpenAI
-                candidates.append(("openai", OpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY)))
-            elif provider == "gemini" and GEMINI_API_KEY:
-                from llama_index.llms.gemini import Gemini
-                candidates.append(("gemini", Gemini(model="models/gemini-flash-latest", api_key=GEMINI_API_KEY)))
+            candidates.append((spec.provider, create_llm_client(spec)))
         except Exception as build_err:
-            logger.warning(f"Skipping fallback provider '{provider}': {build_err}")
+            logger.warning(f"Skipping fallback provider '{spec.provider}/{spec.model_name}': {build_err}")
 
     return candidates
 

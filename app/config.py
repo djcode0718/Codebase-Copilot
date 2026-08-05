@@ -5,7 +5,7 @@ import sys
 load_dotenv(override="pytest" not in sys.modules)
 
 # ─── LLM Provider ────────────────────────────────────────────────────────────
-# Options: "ollama" | "gemini" | "groq" | "openai"
+# Options: "ollama" | "gemini" | "groq"
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
 
 # ─── Fast LLM Toggle ─────────────────────────────────────────────────────────
@@ -32,11 +32,14 @@ GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "llama-3.3-70b-versatile")
 # ─── API Keys ────────────────────────────────────────────────────────────────
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
+
+# ─── Provider Models ─────────────────────────────────────────────────────────
+GEMINI_LLM_MODEL = os.getenv("GEMINI_LLM_MODEL", "models/gemini-flash-latest")
+GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_LLM_MODEL   = os.getenv("OLLAMA_LLM_MODEL", "llama3.2:3b")
+OLLAMA_LLM_MODEL   = (os.getenv("OLLAMA_LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
 # ─── Directories ─────────────────────────────────────────────────────────────

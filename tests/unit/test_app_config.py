@@ -34,11 +34,6 @@ class TestLLMProviderConfig:
         cfg = reload_config({"LLM_PROVIDER": "Gemini"})
         assert cfg.LLM_PROVIDER == "gemini"
 
-    def test_llm_provider_openai(self):
-        cfg = reload_config({"LLM_PROVIDER": "openai"})
-        assert cfg.LLM_PROVIDER == "openai"
-
-
 class TestFastLLMToggle:
     def test_use_fast_llm_false_by_default(self):
         cfg = reload_config({"USE_FAST_LLM": "false"})
@@ -76,13 +71,11 @@ class TestAPIKeys:
         import app.config as cfg
         assert isinstance(cfg.GEMINI_API_KEY, str)
         assert isinstance(cfg.GROQ_API_KEY, str)
-        assert isinstance(cfg.OPENAI_API_KEY, str)
 
     def test_missing_key_defaults_to_empty_string(self):
-        cfg = reload_config({"GEMINI_API_KEY": "", "GROQ_API_KEY": "", "OPENAI_API_KEY": ""})
+        cfg = reload_config({"GEMINI_API_KEY": "", "GROQ_API_KEY": ""})
         assert cfg.GEMINI_API_KEY == ""
         assert cfg.GROQ_API_KEY == ""
-        assert cfg.OPENAI_API_KEY == ""
 
     def test_custom_api_key(self):
         cfg = reload_config({"GROQ_API_KEY": "test-groq-key-123"})
@@ -105,6 +98,25 @@ class TestOllamaConfig:
     def test_custom_llm_model(self):
         cfg = reload_config({"OLLAMA_LLM_MODEL": "mistral"})
         assert cfg.OLLAMA_LLM_MODEL == "mistral"
+
+    def test_ollama_model_alias(self):
+        cfg = reload_config({"OLLAMA_MODEL": "llama3:8b", "OLLAMA_LLM_MODEL": ""})
+        assert cfg.OLLAMA_LLM_MODEL == "llama3:8b"
+
+
+class TestProviderModelConfig:
+    def test_default_provider_models_are_non_empty(self):
+        import app.config as cfg
+        assert isinstance(cfg.GEMINI_LLM_MODEL, str) and cfg.GEMINI_LLM_MODEL
+        assert isinstance(cfg.GROQ_LLM_MODEL, str) and cfg.GROQ_LLM_MODEL
+
+    def test_custom_provider_models(self):
+        cfg = reload_config({
+            "GEMINI_LLM_MODEL": "models/gemini-2.0-flash",
+            "GROQ_LLM_MODEL": "llama-3.1-8b-instant",
+        })
+        assert cfg.GEMINI_LLM_MODEL == "models/gemini-2.0-flash"
+        assert cfg.GROQ_LLM_MODEL == "llama-3.1-8b-instant"
 
 
 class TestDirectories:

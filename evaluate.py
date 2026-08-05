@@ -95,7 +95,7 @@ EVAL_DATASET = [
     {
         "question": "What LLM providers are supported?",
         "expected_files": ["app/llm/llm_client.py", "app/config.py"],
-        "expected_keywords": ["gemini", "ollama", "groq", "openai"],
+        "expected_keywords": ["gemini", "ollama", "groq", "fallback"],
         "mode": "code_lookup",
     },
     {
