@@ -205,6 +205,29 @@ class ArchitectureAnalyzer(BaseAnalyzer):
         )
 
     def _detect_cycles(self, graph: Dict[str, List[str]]) -> List[List[str]]:
+        """DFS cycle detection using *exact* key lookup.
+
+        The import graph keys are relative file paths such as
+        ``api/services/supabase_service.py``.  Deps produced by the regex are
+        module-style identifiers converted to slash notation, e.g.
+        ``supabase`` or ``api/services``.  We resolve each dep to a graph key
+        only when there is a genuine path match, avoiding the false-positive
+        self-cycles that substring matching would produce
+        (e.g. dep ``supabase`` being found inside the key
+        ``api/services/supabase_service.py``).
+        """
+        # Build a lookup: canonical dep string → graph key
+        # Try: dep, dep + ".py", dep + "/index.ts", dep + "/index.js"
+        _key_set = set(graph.keys())
+
+        def _resolve_dep(dep: str) -> Optional[str]:
+            """Resolve a dep string to an exact graph key, or return None."""
+            for candidate in (dep, dep + ".py", dep + ".ts", dep + ".tsx",
+                              dep + "/index.ts", dep + "/index.js"):
+                if candidate in _key_set:
+                    return candidate
+            return None
+
         cycles: List[List[str]] = []
         visiting: Dict[str, int] = {}
         stack: List[str] = []
@@ -213,7 +236,7 @@ class ArchitectureAnalyzer(BaseAnalyzer):
             visiting[node] = 1
             stack.append(node)
             for dep in graph.get(node, []):
-                target = next((k for k in graph.keys() if dep in k), None)
+                target = _resolve_dep(dep)
                 if not target:
                     continue
                 state = visiting.get(target, 0)
@@ -245,7 +268,10 @@ class SecurityAnalyzer(BaseAnalyzer):
         findings: List[Finding] = []
         endpoint_files = [f for f in snapshot.files if "/routers/" in f.rel_path.replace("\\", "/") and f.ext == ".py"]
 
+        _source_exts = {".py", ".js", ".ts", ".tsx", ".jsx", ".rb", ".go", ".java", ".cs", ".php"}
         for f in snapshot.files:
+            if f.ext not in _source_exts:
+                continue
             for pattern, label in self.SECRET_PATTERNS:
                 if re.search(pattern, f.content):
                     findings.append(Finding(
@@ -1298,4 +1324,3 @@ class RepositoryHealthEngine:
             if any(s in text for s in signals):
                 frameworks.append(framework)
         return frameworks
-

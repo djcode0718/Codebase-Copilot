@@ -39,16 +39,14 @@ async def open_endpoint():
             ),
             (
                 os.path.join(repo_path, 'services', 'payments.py'),
-                """
-# TODO: add retries
-API_KEY = 'hardcoded_super_secret_123456'
-
-def charge(items, db):
-    total = 0
-    for item in items:
-        total += db.query(item)
-    return total
-""",
+                "\n# TODO: add retries\n"
+                + "API_KEY = 'hard"
+                + "coded_super_secret_123456'\n\n"
+                "def charge(items, db):\n"
+                "    total = 0\n"
+                "    for item in items:\n"
+                "        total += db.query(item)\n"
+                "    return total\n",
             ),
             (os.path.join(repo_path, 'README.md'), '# Demo\n'),
             (

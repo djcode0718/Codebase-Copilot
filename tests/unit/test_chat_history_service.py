@@ -1,21 +1,12 @@
 """
 Unit tests for api/services/chat_history_service.py
-
-Tests cover:
-- get_chat_history delegates to supabase_service
-- get_repo_memory_messages delegates with correct keyword args
-- get_repo_conversation_summaries delegates with correct keyword args
-- Negative paths: functions propagate exceptions from underlying service
 """
 
 from __future__ import annotations
 
 import pytest
-import unittest.mock as mock
 from unittest.mock import MagicMock, patch
 
-
-# ─── Fixtures ────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
 def mock_supabase():
@@ -24,10 +15,8 @@ def mock_supabase():
 
 @pytest.fixture()
 def stub_supabase_service():
-    """Patch the supabase_service module used inside chat_history_service."""
-    with patch("api.services.chat_history_service._supabase_service_module") as m:
-        svc = MagicMock()
-        m.return_value = svc
+    """Patch supabase_service as imported inside chat_history_service."""
+    with patch("api.services.chat_history_service.supabase_service") as svc:
         yield svc
 
 
@@ -137,4 +126,3 @@ def test_get_repo_conversation_summaries_propagates_exception(
     stub_supabase_service.get_conversation_summaries_for_repo.side_effect = ValueError("bad")
     with pytest.raises(ValueError, match="bad"):
         get_repo_conversation_summaries(mock_supabase, repo_id="r", user_id="u")
-

@@ -5,16 +5,11 @@ from __future__ import annotations
 from typing import Dict, Any, List
 
 from supabase import Client
-
-
-def _supabase_service_module():
-    from api.services import supabase_service
-
-    return supabase_service
+from api.services import supabase_service
 
 
 def get_chat_history(supabase: Client, chat_id: str) -> List[Dict[str, Any]]:
-    return _supabase_service_module().get_messages_for_chat(supabase, chat_id)
+    return supabase_service.get_messages_for_chat(supabase, chat_id)
 
 
 def get_repo_memory_messages(
@@ -24,7 +19,7 @@ def get_repo_memory_messages(
     exclude_chat_id: str | None = None,
     limit: int = 30,
 ) -> List[Dict[str, Any]]:
-    return _supabase_service_module().get_recent_messages_for_repo(
+    return supabase_service.get_recent_messages_for_repo(
         supabase,
         repo_id,
         exclude_chat_id=exclude_chat_id,
@@ -39,11 +34,9 @@ def get_repo_conversation_summaries(
     user_id: str,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
-    return _supabase_service_module().get_conversation_summaries_for_repo(
+    return supabase_service.get_conversation_summaries_for_repo(
         supabase,
         repo_id=repo_id,
         user_id=user_id,
         limit=limit,
     )
-
-
