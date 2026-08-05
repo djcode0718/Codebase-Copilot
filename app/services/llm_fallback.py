@@ -2,6 +2,7 @@ import re
 import asyncio
 import logging
 import time
+import threading
 from dataclasses import dataclass
 from typing import Any, List, Optional, AsyncGenerator
 from pydantic import Field
@@ -15,6 +16,29 @@ from app.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_last_llm_usage_lock = threading.Lock()
+_last_llm_usage: dict = {"provider": None, "model": None}
+
+
+def _record_llm_usage(provider: str, model_name: str) -> None:
+    with _last_llm_usage_lock:
+        _last_llm_usage["provider"] = provider
+        _last_llm_usage["model"] = model_name
+
+
+def get_last_llm_usage() -> dict:
+    with _last_llm_usage_lock:
+        return {
+            "provider": _last_llm_usage.get("provider"),
+            "model": _last_llm_usage.get("model"),
+        }
+
+
+def reset_last_llm_usage() -> None:
+    with _last_llm_usage_lock:
+        _last_llm_usage["provider"] = None
+        _last_llm_usage["model"] = None
 
 
 def _sleep_safe(seconds: float) -> None:
@@ -160,6 +184,7 @@ class ResilientFallbackLLM(CustomLLM):
                 try:
                     logger.info(f"Attempting completion with {provider}/{model_name} (attempt {attempt + 1})...")
                     response = llm.complete(prompt, **kwargs)
+                    _record_llm_usage(provider, model_name)
                     logger.info(f"Completion succeeded with {provider}/{model_name}.")
                     return response
                 except Exception as e:
@@ -201,6 +226,8 @@ class ResilientFallbackLLM(CustomLLM):
                         logger.info(f"Attempting streaming completion with {provider}/{model_name} (attempt {attempt + 1})...")
                         stream_response = llm.stream_complete(prompt, **kwargs)
                         for chunk in stream_response:
+                            if not tokens_yielded:
+                                _record_llm_usage(provider, model_name)
                             tokens_yielded = True
                             yield chunk
                         logger.info(f"Streaming completion succeeded with {provider}/{model_name}.")
@@ -243,6 +270,7 @@ class ResilientFallbackLLM(CustomLLM):
                 try:
                     logger.info(f"Attempting async completion with {provider}/{model_name} (attempt {attempt + 1})...")
                     response = await llm.acomplete(prompt, **kwargs)
+                    _record_llm_usage(provider, model_name)
                     logger.info(f"Async completion succeeded with {provider}/{model_name}.")
                     return response
                 except Exception as e:
@@ -285,6 +313,8 @@ class ResilientFallbackLLM(CustomLLM):
                         stream_response = llm.astream_complete(prompt, **kwargs)
                         
                         async for chunk in stream_response:
+                            if not tokens_yielded:
+                                _record_llm_usage(provider, model_name)
                             tokens_yielded = True
                             yield chunk
                         logger.info(f"Async streaming completion succeeded with {provider}/{model_name}.")
@@ -341,23 +371,9 @@ async def generate_with_fallback(prompt: str, **kwargs: Any) -> str:
     response = await llm.acomplete(prompt, **kwargs)
     return str(response).strip()
 
-def _safe_next(generator: Any) -> Any:
-    try:
-        return next(generator)
-    except StopIteration:
-        return None
-
 async def stream_with_fallback(prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
     """Exposes a clean streaming function interface returning an async generator of completion chunks."""
     llm = get_resilient_llm()
-    loop = asyncio.get_running_loop()
-    
-    # Get the sync stream generator in executor to avoid blocking network I/O
-    generator = await loop.run_in_executor(None, lambda: llm.stream_complete(prompt, **kwargs))
-    
-    # Retrieve chunks in executor to avoid blocking on network chunk arrivals
-    while True:
-        chunk = await loop.run_in_executor(None, _safe_next, generator)
-        if chunk is None:
-            break
+    stream_response = await llm.astream_complete(prompt, **kwargs)
+    async for chunk in stream_response:
         yield chunk

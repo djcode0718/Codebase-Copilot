@@ -14,7 +14,6 @@ Tests cover:
 from __future__ import annotations
 
 import sys
-import unittest.mock as mock
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -37,7 +36,6 @@ _STUBS = [
     "app.retrieval.query_router",
     "app.retrieval.reranker",
     "app.services.qa_service",
-    "api.services.chat_stream_utils",
 ]
 for _m in _STUBS:
     if _m not in sys.modules:

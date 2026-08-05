@@ -63,6 +63,8 @@ export type ChatEvent =
       latency_retrieval_ms: number;
       latency_llm_ms: number;
       latency_total_ms: number;
+      llm_provider?: string | null;
+      llm_model?: string | null;
       // NOTE: latency_rerank_ms is NOT in this event
     }
   | { type: 'suggestions'; questions: string[] }

@@ -227,6 +227,90 @@ _indexing_in_flight: set = set()
 _indexing_sources_in_flight: set = set()
 
 
+def _try_persist_post_index_health_run(supabase, repo_id: str) -> None:
+    """Best-effort health snapshot after indexing completes.
+
+    This keeps the 30-day trend chart fresh even when users only run
+    repository refresh/index flows and do not manually click "Run Health Analysis".
+    """
+    try:
+        from api.services import supabase_service
+        from api.services.repository_health_engine import RepositoryHealthEngine
+
+        repo = supabase_service.get_repo(supabase, repo_id)
+        if not repo:
+            return
+
+        user_id = repo.get("user_id")
+        if not user_id:
+            return
+
+        if not supabase_service.is_repository_health_schema_available(supabase):
+            return
+
+        previous_run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
+        previous_scores = None
+        previous_findings = None
+        if previous_run:
+            previous_scores = supabase_service.get_health_category_score_map(
+                supabase,
+                run_id=previous_run["id"],
+                user_id=user_id,
+            )
+            previous_findings = supabase_service.get_health_problem_titles(
+                supabase,
+                run_id=previous_run["id"],
+                user_id=user_id,
+            )
+
+        engine = RepositoryHealthEngine()
+        run_payload = engine.run(repo=repo, previous_scores=previous_scores, previous_findings=previous_findings)
+
+        run_record = supabase_service.insert_health_run(
+            supabase,
+            repo_id=repo_id,
+            user_id=user_id,
+            top_level=run_payload["top_level"],
+            executive_summary=run_payload["executive_summary"],
+            strengths=run_payload["strengths"],
+            weaknesses=run_payload["weaknesses"],
+            critical_risks=run_payload["critical_risks"],
+            architecture_risks=run_payload["architecture_risks"],
+            security_risks=run_payload["security_risks"],
+            performance_risks=run_payload["performance_risks"],
+            recommended_sprint=run_payload["recommended_sprint"],
+            improved_categories=run_payload["improved_categories"],
+            declining_categories=run_payload["declining_categories"],
+            new_risks=run_payload["new_risks"],
+            resolved_risks=run_payload["resolved_risks"],
+            benchmark=run_payload["benchmark"],
+        )
+        supabase_service.insert_health_category_scores(
+            supabase,
+            run_id=run_record["id"],
+            repo_id=repo_id,
+            user_id=user_id,
+            categories=run_payload["categories"],
+        )
+        supabase_service.insert_health_findings(
+            supabase,
+            run_id=run_record["id"],
+            repo_id=repo_id,
+            user_id=user_id,
+            findings=run_payload["findings"],
+        )
+        supabase_service.insert_health_recommendations(
+            supabase,
+            run_id=run_record["id"],
+            repo_id=repo_id,
+            user_id=user_id,
+            recommendations=run_payload["recommendations"],
+        )
+        logger.info(f"Persisted post-index repository health run for repo_id={repo_id}")
+    except Exception as e:
+        logger.warning(f"Post-index health run failed for repo_id={repo_id}: {e}")
+
+
 def _check_ollama_running() -> bool:
     """Returns True if Ollama is reachable on localhost:11434."""
     try:
@@ -532,6 +616,9 @@ async def indexing_event_generator(
                     )
                 except Exception as db_err:
                     logger.warning(f"Failed to update repo status in DB: {db_err}")
+
+                # Keep 30-day health trend current after each successful refresh/index.
+                _try_persist_post_index_health_run(supabase, repo_id)
                 break
 
             if event["step"] == "error":

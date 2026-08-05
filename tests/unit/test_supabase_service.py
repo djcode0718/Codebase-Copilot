@@ -113,6 +113,27 @@ class TestUpdateRepoStatus:
         mock.table.assert_called_with("repositories")
 
 
+class TestUpdateRepoLlmProvider:
+    def test_updates_provider_label(self):
+        mock = MagicMock()
+        chain = MagicMock()
+        mock.table.return_value.update.return_value.eq.return_value = chain
+
+        supabase_service.update_repo_llm_provider(mock, "repo-1", "Groq:llama-3.3-70b-versatile")
+
+        mock.table.assert_called_with("repositories")
+        mock.table.return_value.update.assert_called_once_with(
+            {"llm_provider": "Groq:llama-3.3-70b-versatile"}
+        )
+
+    def test_skips_empty_provider_label(self):
+        mock = MagicMock()
+
+        supabase_service.update_repo_llm_provider(mock, "repo-1", "   ")
+
+        mock.table.assert_not_called()
+
+
 class TestResetRepoForReindex:
     def test_sets_repo_back_to_indexing_state(self):
         mock = MagicMock()

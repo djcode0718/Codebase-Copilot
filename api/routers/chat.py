@@ -281,6 +281,22 @@ async def stream_message(
                     retrieved_files=metadata_event.get("retrieved_files") if metadata_event else None,
                     latency_ms=metadata_event.get("latency_total_ms") if metadata_event else None,
                 )
+
+                llm_provider = None
+                if metadata_event:
+                    provider = (metadata_event.get("llm_provider") or "").strip()
+                    model = (metadata_event.get("llm_model") or "").strip()
+                    if provider and model:
+                        llm_provider = f"{provider}:{model}"
+                    elif provider:
+                        llm_provider = provider
+
+                if llm_provider:
+                    try:
+                        supabase_service.update_repo_llm_provider(supabase, repo_id, llm_provider)
+                    except Exception as provider_err:
+                        logger.warning(f"Failed to update repository LLM provider label: {provider_err}")
+
                 refresh_session_memory(supabase, chat=chat)
             except Exception as db_err:
                 logger.warning(f"Failed to persist assistant message: {db_err}")

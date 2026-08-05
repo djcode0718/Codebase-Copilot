@@ -251,6 +251,8 @@ def _build_metadata_event(
     t_retrieval_ms: int,
     t_llm_ms: int,
     t_total_ms: int,
+    llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
 ) -> dict:
     return {
         "type": "metadata",
@@ -259,7 +261,17 @@ def _build_metadata_event(
         "latency_retrieval_ms": t_retrieval_ms,
         "latency_llm_ms": t_llm_ms,
         "latency_total_ms": t_total_ms,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
     }
+
+
+def _provider_unavailable_response() -> str:
+    return (
+        "I could not generate a full answer right now because the model providers are temporarily "
+        "rate-limited or unavailable. Please retry in a moment, or ask a narrower question about "
+        "a specific file, function, class, or module."
+    )
 
 
 async def _resolve_query_mode(query: str, memory, classify_query):
@@ -294,6 +306,8 @@ def _build_no_match_events(
         t_retrieval_ms,
         0,
         t_total_ms,
+        None,
+        None,
     )
     events.append(to_sse_data(metadata))
     events.append(to_sse_data({"type": "suggestions", "questions": _repo_focused_rephrase_suggestions()}))
@@ -494,6 +508,8 @@ async def stream_chat_response(
     query_mode_value = "code_lookup"
     t_retrieval_ms = 0
     t_llm_ms = 0
+    llm_provider = None
+    llm_model = None
 
     try:
         prep = await _prepare_stream_prompt(
@@ -528,12 +544,18 @@ async def stream_chat_response(
         t_llm_start = time.time()
 
         try:
+            from app.services.llm_fallback import get_last_llm_usage, reset_last_llm_usage
+            reset_last_llm_usage()
             async for delta in _stream_llm_response(full_prompt):
                 full_response += delta
                 yield to_sse_data({'type': 'token', 'content': delta})
+            usage = get_last_llm_usage()
+            llm_provider = usage.get("provider")
+            llm_model = usage.get("model")
         except Exception as llm_err:
-            logger.error(f"LLM streaming failed: {llm_err}")
-            raise llm_err
+            logger.warning(f"LLM streaming failed; falling back to safe assistant response: {llm_err}")
+            full_response = _provider_unavailable_response()
+            yield to_sse_data({'type': 'token', 'content': full_response})
 
         t_llm_ms = int((time.time() - t_llm_start) * 1000)
 
@@ -552,6 +574,8 @@ async def stream_chat_response(
             t_retrieval_ms,
             t_llm_ms,
             t_total_ms,
+            llm_provider,
+            llm_model,
         )
         yield to_sse_data(metadata)
 

@@ -188,6 +188,14 @@ def update_repo_status(
     supabase.table("repositories").update(update_data).eq("id", repo_id).execute()
 
 
+def update_repo_llm_provider(supabase: Client, repo_id: str, llm_provider: str) -> None:
+    """Persist the most recently used runtime LLM provider/model label."""
+    value = (llm_provider or "").strip()
+    if not value:
+        return
+    supabase.table("repositories").update({"llm_provider": value}).eq("id", repo_id).execute()
+
+
 def reset_repo_for_reindex(supabase: Client, repo_id: str) -> None:
     """Prepare an existing repository record for a fresh indexing run."""
     supabase.table("repositories").update({

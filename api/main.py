@@ -218,9 +218,22 @@ async def startup_event():
 async def health():
     from app.config import LLM_PROVIDER, USE_COLBERT, USE_FAST_LLM, OLLAMA_EMBED_MODEL
 
+    active_provider = None
+    active_model = None
+    try:
+        from app.services.llm_fallback import get_last_llm_usage
+        usage = get_last_llm_usage()
+        active_provider = usage.get("provider")
+        active_model = usage.get("model")
+    except Exception:
+        # Keep health endpoint lightweight and resilient when optional services are unavailable.
+        pass
+
     return {
         "status": "ok",
         "llm_provider": LLM_PROVIDER,
+        "active_llm_provider": active_provider,
+        "active_llm_model": active_model,
         "use_fast_llm": USE_FAST_LLM,
         "colbert_enabled": USE_COLBERT,
         # Keep health checks fast and deterministic (no heavy optional imports).

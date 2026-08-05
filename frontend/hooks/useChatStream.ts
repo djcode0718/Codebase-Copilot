@@ -44,6 +44,8 @@ export interface StreamedResponse {
   latencyRetrievalMs: number | null;
   latencyLlmMs: number | null;
   latencyTotalMs: number | null;
+  llmProvider?: string | null;
+  llmModel?: string | null;
   suggestions?: string[];
 }
 
@@ -88,6 +90,8 @@ export function useChatStream(): UseChatStreamResult {
         latencyRetrievalMs: null,
         latencyLlmMs: null,
         latencyTotalMs: null,
+        llmProvider: null,
+        llmModel: null,
       };
 
       try {
@@ -136,6 +140,8 @@ export function useChatStream(): UseChatStreamResult {
                 latencyRetrievalMs: event.latency_retrieval_ms,
                 latencyLlmMs: event.latency_llm_ms,
                 latencyTotalMs: event.latency_total_ms,
+                llmProvider: event.llm_provider ?? null,
+                llmModel: event.llm_model ?? null,
               };
               setPendingMetadata(metadata);
             } else if (event.type === 'suggestions') {

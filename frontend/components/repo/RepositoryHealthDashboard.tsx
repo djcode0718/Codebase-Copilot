@@ -170,12 +170,17 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
 
   const chartData = useMemo(() => {
     if (!history) return [];
-    return [...history.points]
-      .reverse()
-      .map((point, idx) => ({
-        name: idx === 0 ? 'Today' : new Date(point.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        score: point.repository_health,
-      }));
+    const ordered = [...history.points].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    const latestCreatedAt = ordered.length ? ordered[ordered.length - 1].created_at : null;
+    return ordered.map((point) => ({
+      name:
+        latestCreatedAt && point.created_at === latestCreatedAt
+          ? 'Today'
+          : new Date(point.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      score: point.repository_health,
+    }));
   }, [history]);
 
   async function handleRunAnalysis() {
