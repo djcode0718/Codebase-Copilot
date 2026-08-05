@@ -595,11 +595,12 @@ class TestStreamMessage:
         
         # Read the response SSE stream lines
         chunks = [(line.decode("utf-8") if isinstance(line, bytes) else line) for line in resp.iter_lines() if line]
-        assert len(chunks) == 2
+        assert len(chunks) == 3  # token + error + done
         assert "token" in chunks[0]
         assert "error" in chunks[1]
         assert "internal error" in chunks[1].lower()
         assert "Mid-stream connection error" not in chunks[1]
+        assert "done" in chunks[2]
 
     def test_stream_schema_cache_error_is_sanitized(self, client, mock_supabase, fake_chat, fake_chat_id, monkeypatch):
         chat_chain = MagicMock()
@@ -641,8 +642,9 @@ class TestStreamMessage:
         assert resp.status_code == 200
 
         chunks = [(line.decode("utf-8") if isinstance(line, bytes) else line) for line in resp.iter_lines() if line]
-        assert len(chunks) == 2
+        assert len(chunks) == 3  # token + error + done
         assert "error" in chunks[1]
         assert "repository memory issue" in chunks[1].lower()
         assert "conversation_tags" not in chunks[1]
+        assert "done" in chunks[2]
 

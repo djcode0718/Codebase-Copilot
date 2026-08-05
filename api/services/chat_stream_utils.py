@@ -58,7 +58,7 @@ def safe_chat_error_message(err: Exception, *, include_rate_limit: bool = True) 
 
 
 def to_sse_data(event: Dict[str, Any]) -> str:
-    return f"data: {json.dumps(event)}\\n\\n"
+    return f"data: {json.dumps(event)}\n\n"
 
 
 def parse_sse_data_line(sse_line: str) -> Optional[Dict[str, Any]]:

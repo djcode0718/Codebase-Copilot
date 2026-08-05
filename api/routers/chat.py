@@ -254,6 +254,8 @@ async def stream_message(
         """
         full_response = ""
         metadata_event = None
+        token_count = 0
+        event_types_seen: list = []
 
         try:
             async for sse_line in stream_chat_response(query, index_name, repo_id, chat_id, memory_context=memory_context):
@@ -261,10 +263,22 @@ async def stream_message(
 
                 # Parse events to collect full response and metadata
                 event = parse_sse_data_line(sse_line)
-                if event and event.get("type") == "token":
-                    full_response += event.get("content", "")
-                elif event and event.get("type") == "metadata":
-                    metadata_event = event
+                if event:
+                    evt_type = event.get("type", "unknown")
+                    if evt_type not in event_types_seen:
+                        event_types_seen.append(evt_type)
+                    if evt_type == "token":
+                        token_count += 1
+                        full_response += event.get("content", "")
+                    elif evt_type == "metadata":
+                        metadata_event = event
+                else:
+                    # Unparseable SSE line — log for debugging
+                    if sse_line.strip():
+                        logger.debug(
+                            "SSE line could not be parsed (first 120 chars): %r",
+                            sse_line[:120],
+                        )
         except Exception as e:
             safe_msg = safe_chat_error_message(e, include_rate_limit=False)
             logger.error(f"Error during SSE chat stream: {safe_msg}")
@@ -272,6 +286,11 @@ async def stream_message(
             # Always send `done` so the client SSE reader receives a clean
             # termination and can return partial content instead of null.
             yield to_sse_data({'type': 'done'})
+
+        logger.info(
+            "event_generator done: chat_id=%s token_events=%d response_len=%d event_types=%s",
+            chat_id, token_count, len(full_response), event_types_seen,
+        )
 
         # After stream: persist assistant message to DB
         if full_response:

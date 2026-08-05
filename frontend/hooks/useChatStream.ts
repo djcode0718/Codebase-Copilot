@@ -29,8 +29,9 @@ function parseSseEvents(chunk: string, flush = false): { events: ChatEvent[]; re
 
     try {
       events.push(JSON.parse(payload) as ChatEvent);
-    } catch {
+    } catch (e) {
       // Skip malformed SSE payloads and keep processing the stream.
+      console.debug('[useChatStream] Failed to parse SSE payload:', payload?.slice(0, 80), e);
     }
   }
 
@@ -139,6 +140,7 @@ export function useChatStream(): UseChatStreamResult {
               streamedTextRef.current += event.content;
               setStreamedText((prev) => prev + event.content);
             } else if (event.type === 'metadata') {
+              console.debug('[useChatStream] metadata received, query_mode=', event.query_mode, 'files=', event.retrieved_files?.length ?? 0);
               metadata = {
                 queryMode: event.query_mode,
                 retrievedFiles: event.retrieved_files,
@@ -164,6 +166,7 @@ export function useChatStream(): UseChatStreamResult {
               }
               // Don't break – wait for the `done` event so the stream is consumed cleanly.
             } else if (event.type === 'done') {
+              console.debug('[useChatStream] done received, fullText length=', fullText.length);
               shouldStop = true;
               break;
             }
