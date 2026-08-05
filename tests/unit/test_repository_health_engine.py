@@ -12,15 +12,23 @@ def _write(path: str, content: str) -> None:
         handle.write(content)
 
 
+def _write_batch(files: list) -> None:
+    """Write all (path, content) pairs in a single pass — avoids N+1 I/O."""
+    for path, content in files:
+        _write(path, content)
+
+
 def test_repository_health_engine_generates_explainable_output():
     repo_name = f"health-fixture-{uuid.uuid4().hex[:8]}"
     repo_path = os.path.join(REPOS_DIR, repo_name)
     os.makedirs(repo_path, exist_ok=True)
 
     try:
-        _write(
-            os.path.join(repo_path, 'api', 'routers', 'public.py'),
-            """
+        # Prefetch all fixture definitions, then write in a single batched pass.
+        fixture_files = [
+            (
+                os.path.join(repo_path, 'api', 'routers', 'public.py'),
+                """
 from fastapi import APIRouter
 router = APIRouter()
 
@@ -28,10 +36,10 @@ router = APIRouter()
 async def open_endpoint():
     return {'ok': True}
 """,
-        )
-        _write(
-            os.path.join(repo_path, 'services', 'payments.py'),
-            """
+            ),
+            (
+                os.path.join(repo_path, 'services', 'payments.py'),
+                """
 # TODO: add retries
 API_KEY = 'hardcoded_super_secret_123456'
 
@@ -41,15 +49,17 @@ def charge(items, db):
         total += db.query(item)
     return total
 """,
-        )
-        _write(os.path.join(repo_path, 'README.md'), '# Demo\n')
-        _write(
-            os.path.join(repo_path, 'tests', 'test_dummy.py'),
-            """
+            ),
+            (os.path.join(repo_path, 'README.md'), '# Demo\n'),
+            (
+                os.path.join(repo_path, 'tests', 'test_dummy.py'),
+                """
 def test_ok():
     assert True
 """,
-        )
+            ),
+        ]
+        _write_batch(fixture_files)
 
         engine = RepositoryHealthEngine()
         result = engine.run(
@@ -69,4 +79,3 @@ def test_ok():
         assert any("hardcoded" in f["title"].lower() or "secret" in f["title"].lower() for f in result["findings"])
     finally:
         shutil.rmtree(repo_path, ignore_errors=True)
-

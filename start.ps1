@@ -40,6 +40,10 @@ function Apply-StartupProfile {
             Set-EnvIfMissing -Name "BACKEND_RELOAD" -Value "true"
             Set-EnvIfMissing -Name "STARTUP_REQUIRE_HTTP_READY" -Value "true"
             Set-EnvIfMissing -Name "LLAMAINDEX_PREWARM_ON_STARTUP" -Value "true"
+            # Delay (seconds) before the prewarm task starts.  Ensures the server
+            # is already responding to health checks before any blocking LLM init.
+            # api/main.py enforces a minimum of 5 s even when this is 0.
+            Set-EnvIfMissing -Name "LLAMAINDEX_PREWARM_DELAY_SECONDS" -Value "5"
             Set-EnvIfMissing -Name "STARTUP_TIMEOUT_SECONDS" -Value "90"
         }
         default {

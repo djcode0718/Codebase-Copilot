@@ -167,6 +167,19 @@ app.include_router(reviews.router,     prefix="/api/reviews", tags=["Engineering
 async def startup_event():
     """
     Force-configure LlamaIndex to use Groq + Ollama embeddings when available.
+
+    ROOT-CAUSE FIX (startup failure):
+    configure_llamaindex_settings() makes synchronous HTTP calls to initialise
+    LLM provider clients (e.g. Gemini API validation).  Running this directly
+    in the async task without an executor blocks the entire asyncio event loop,
+    which prevents uvicorn from printing "Application startup complete" and from
+    responding to health-check probes.  The fix is two-fold:
+
+    1. A minimum 5-second delay ensures the server is fully bound and serving
+       before the prewarm task wakes up, so Wait-ForPortsReady in start.ps1
+       can confirm readiness immediately.
+    2. configure_llamaindex_settings() is offloaded to a thread-pool executor
+       via loop.run_in_executor() so it never blocks the event loop.
     """
     try:
         from app.config import LLAMAINDEX_PREWARM_ON_STARTUP, LLAMAINDEX_PREWARM_DELAY_SECONDS
@@ -174,11 +187,16 @@ async def startup_event():
             return
 
         async def _prewarm_llamaindex() -> None:
-            if LLAMAINDEX_PREWARM_DELAY_SECONDS > 0:
-                await asyncio.sleep(LLAMAINDEX_PREWARM_DELAY_SECONDS)
+            # Guarantee a minimum 5-second head-start so the server is already
+            # accepting connections before any blocking LLM init begins.
+            delay = max(float(LLAMAINDEX_PREWARM_DELAY_SECONDS), 5.0)
+            await asyncio.sleep(delay)
             try:
                 from app.llm.llm_client import configure_llamaindex_settings
-                configure_llamaindex_settings()
+                loop = asyncio.get_running_loop()
+                # Run synchronous (possibly network-bound) LLM init in a
+                # thread-pool executor so it never stalls the event loop.
+                await loop.run_in_executor(None, configure_llamaindex_settings)
             except ModuleNotFoundError:
                 pass
             except Exception as prewarm_err:

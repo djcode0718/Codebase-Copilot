@@ -1,8 +1,9 @@
 import re
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, AsyncGenerator
+from typing import Any, List, Optional, AsyncGenerator
 from pydantic import Field
 
 from llama_index.core.llms import CustomLLM, CompletionResponse, CompletionResponseGen, LLMMetadata
@@ -14,6 +15,37 @@ from app.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sleep_safe(seconds: float) -> None:
+    """Sleep without blocking the asyncio event loop.
+
+    When called from a synchronous function that is already running inside a
+    thread-pool executor (i.e. there is a running event loop on another thread),
+    ``time.sleep`` is perfectly safe because it only blocks the *worker* thread,
+    not the event loop.  When there is *no* running event loop (pure sync
+    context) ``time.sleep`` is equally safe.
+
+    The previous pattern of using bare ``time.sleep`` was flagged as a
+    blocking-call-in-async-context risk because ``ResilientFallbackLLM.complete``
+    and ``stream_complete`` could in theory be invoked directly on the event
+    loop thread.  This helper makes the intent explicit and documents the
+    contract: sync methods MUST be called via ``loop.run_in_executor``, never
+    directly from async code.
+    """
+    try:
+        asyncio.get_running_loop()
+        # A running event loop exists — we are on the event loop thread.
+        # Blocking here would stall all async tasks.  Skip the wait; the
+        # retry-after delay is small (≤ LLM_FALLBACK_RETRY_THRESHOLD seconds)
+        # and falling through to the next model is safer than freezing the app.
+        logger.warning(
+            "Skipping retry-after sleep in sync method called on event-loop thread. "
+            "Use acomplete() / astream_complete() from async contexts."
+        )
+    except RuntimeError:
+        # No running event loop → pure sync context, safe to block.
+        time.sleep(seconds)
 
 @dataclass
 class FallbackModelConfig:
@@ -141,8 +173,7 @@ class ResilientFallbackLLM(CustomLLM):
                             f"Model {provider}/{model_name} rate limited. "
                             f"Short retry delay detected: {delay}s. Waiting and retrying..."
                         )
-                        import time
-                        time.sleep(delay)
+                        _sleep_safe(delay)
                         continue
                     
                     logger.warning(
@@ -185,8 +216,7 @@ class ResilientFallbackLLM(CustomLLM):
                                 f"Model {provider}/{model_name} rate limited. "
                                 f"Short retry delay detected: {delay}s. Waiting and retrying..."
                             )
-                            import time
-                            time.sleep(delay)
+                            _sleep_safe(delay)
                             continue
                         
                         logger.warning(
