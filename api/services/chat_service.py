@@ -36,6 +36,8 @@ from app.config import (
     OPENAI_API_KEY,
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
+    STREAM_FIRST_TOKEN_TIMEOUT_SECONDS,
+    STREAM_FIRST_TOKEN_FALLBACK_TEXT,
 )
 from app.utils.logger import get_logger
 from api.services.chat_stream_utils import to_sse_data, safe_chat_error_message
@@ -272,6 +274,42 @@ def _provider_unavailable_response() -> str:
         "rate-limited or unavailable. Please retry in a moment, or ask a narrower question about "
         "a specific file, function, class, or module."
     )
+
+
+class StreamFirstTokenTimeoutError(TimeoutError):
+    """Raised when streaming never produces a first token within guard time."""
+
+
+def _first_token_fallback_response() -> str:
+    if STREAM_FIRST_TOKEN_FALLBACK_TEXT:
+        return STREAM_FIRST_TOKEN_FALLBACK_TEXT
+    return _provider_unavailable_response()
+
+
+async def _stream_llm_response_with_guard(
+    full_prompt: str,
+    timeout_seconds: Optional[float] = None,
+) -> AsyncGenerator[str, None]:
+    """Yield tokens from LLM stream with a bounded first-token wait."""
+    timeout = STREAM_FIRST_TOKEN_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    timeout = max(float(timeout), 0.1)
+
+    stream = _stream_llm_response(full_prompt)
+    try:
+        try:
+            first_delta = await asyncio.wait_for(stream.__anext__(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise StreamFirstTokenTimeoutError(
+                f"First token timeout after {timeout:.2f}s"
+            ) from exc
+        except StopAsyncIteration:
+            return
+
+        yield first_delta
+        async for delta in stream:
+            yield delta
+    finally:
+        await stream.aclose()
 
 
 async def _resolve_query_mode(query: str, memory, classify_query):
@@ -546,15 +584,25 @@ async def stream_chat_response(
         try:
             from app.services.llm_fallback import get_last_llm_usage, reset_last_llm_usage
             reset_last_llm_usage()
-            async for delta in _stream_llm_response(full_prompt):
+            async for delta in _stream_llm_response_with_guard(full_prompt):
                 full_response += delta
                 yield to_sse_data({'type': 'token', 'content': delta})
+
+            # Guarantee the UI receives at least one token event.
+            if not full_response.strip():
+                full_response = _first_token_fallback_response()
+                yield to_sse_data({'type': 'token', 'content': full_response})
+
             usage = get_last_llm_usage()
             llm_provider = usage.get("provider")
             llm_model = usage.get("model")
+        except StreamFirstTokenTimeoutError as timeout_err:
+            logger.warning(f"LLM stream startup timeout; sending fallback token: {timeout_err}")
+            full_response = _first_token_fallback_response()
+            yield to_sse_data({'type': 'token', 'content': full_response})
         except Exception as llm_err:
             logger.warning(f"LLM streaming failed; falling back to safe assistant response: {llm_err}")
-            full_response = _provider_unavailable_response()
+            full_response = _first_token_fallback_response()
             yield to_sse_data({'type': 'token', 'content': full_response})
 
         t_llm_ms = int((time.time() - t_llm_start) * 1000)

@@ -90,6 +90,13 @@ LLM_FALLBACK_CHAIN_STR = os.getenv(
     "groq:llama-3.3-70b-versatile"
 )
 
+# ─── Streaming Guard Configuration ───────────────────────────────────────────
+# Maximum time to wait for the first streamed token before returning a
+# guaranteed fallback response so the UI does not stay pending.
+STREAM_FIRST_TOKEN_TIMEOUT_SECONDS = float(os.getenv("STREAM_FIRST_TOKEN_TIMEOUT_SECONDS", "8"))
+# Optional override for the startup-time fallback text.
+STREAM_FIRST_TOKEN_FALLBACK_TEXT = os.getenv("STREAM_FIRST_TOKEN_FALLBACK_TEXT", "").strip()
+
 # -- Startup prewarm controls -------------------------------------------------
 # Disable by default to keep API startup fast in local dev.
 LLAMAINDEX_PREWARM_ON_STARTUP = os.getenv("LLAMAINDEX_PREWARM_ON_STARTUP", "false").lower() == "true"

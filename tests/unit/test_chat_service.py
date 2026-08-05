@@ -13,6 +13,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from unittest.mock import MagicMock, patch
 import pytest
@@ -193,3 +194,29 @@ def test_build_fallback_llms_returns_list():
         candidates = chat_service._build_fallback_llms()
         assert isinstance(candidates, list)
 
+
+@pytest.mark.asyncio
+async def test_stream_guard_yields_tokens_when_first_token_arrives_in_time():
+    async def fake_stream(_prompt):
+        await asyncio.sleep(0.01)
+        yield "hello"
+        yield " world"
+
+    with patch.object(chat_service, "_stream_llm_response", side_effect=fake_stream):
+        chunks = []
+        async for delta in chat_service._stream_llm_response_with_guard("prompt", timeout_seconds=0.2):
+            chunks.append(delta)
+
+    assert chunks == ["hello", " world"]
+
+
+@pytest.mark.asyncio
+async def test_stream_guard_raises_on_first_token_timeout():
+    async def slow_stream(_prompt):
+        await asyncio.sleep(0.2)
+        yield "late"
+
+    with patch.object(chat_service, "_stream_llm_response", side_effect=slow_stream):
+        with pytest.raises(chat_service.StreamFirstTokenTimeoutError):
+            async for _delta in chat_service._stream_llm_response_with_guard("prompt", timeout_seconds=0.01):
+                pass
