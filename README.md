@@ -1,11 +1,11 @@
 # 🚀 Codebase Copilot
 
-> An **Enterprise Repository Intelligence Platform** — your AI-powered Digital Twin and Knowledge Authority for any software repository. Combines hybrid RAG retrieval, architecture discovery, Mermaid diagram generation, security intelligence, health scoring, live visualization, and 18 intelligence capabilities into a unified workspace.
+> An **Enterprise Repository Intelligence Platform** — your AI-powered Digital Twin and Knowledge Authority for any software repository. Combines hybrid RAG retrieval, architecture discovery, Mermaid diagram generation, security intelligence, health scoring, live visualization, AI engineering reviews, and 18+ intelligence capabilities into a unified workspace.
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white">
-  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white">
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white">
   <img alt="Supabase" src="https://img.shields.io/badge/Supabase-Auth%20%2B%20DB-3ECF8E?logo=supabase&logoColor=white">
   <img alt="Tests" src="https://img.shields.io/badge/Tests-238%20passing-brightgreen?logo=pytest&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/License-MIT-lightgrey">
@@ -16,6 +16,17 @@
 ## 📌 Overview
 
 **Codebase Copilot** is a modular, enterprise-grade Repository Intelligence Platform built on Retrieval-Augmented Generation (RAG). It acts as your permanent **Repository Digital Twin** — an AI system that understands, analyzes, visualizes, and continuously learns from software repositories.
+
+### 🆕 What's new in v2.0
+
+| Area | Change |
+|---|---|
+| **Landing page** | Full redesign — animated stats bar, gradient headline, live demo chat, tech badges, 12-feature grid, workflow steps, and CTA banner |
+| **Chat input** | Fixed caret colour (no more bright green cursor), added `autoCorrect="off"` so typed text renders correctly |
+| **Chat history** | Clicking an old session now immediately clears the chat pane and shows a loading spinner; errors no longer leave the UI stuck |
+| **AI Review — Generate Fix** | Fixed 404 caused by stale schema-availability cache; added inline finding fallback so fixes work even when DB record is temporarily unavailable |
+| **Review UX** | Per-finding loading state, active selection highlight, branded fix output, toast feedback for all actions |
+| **Backend resilience** | `get_repository_review_by_id` and `insert_repository_review` now bypass the stale schema cache and update it on success |
 
 The system combines:
 

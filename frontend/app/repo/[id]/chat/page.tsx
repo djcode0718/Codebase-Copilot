@@ -637,7 +637,10 @@ function ChatComposer({
           placeholder={sessionReady ? 'Ask anything about this codebase… (Enter to send)' : 'Initialising session…'}
           disabled={!sessionReady || streaming}
           rows={1}
-          className="min-h-[52px] max-h-[180px] flex-1 resize-none border-0 bg-transparent p-0 text-sm shadow-none outline-none focus-visible:ring-0"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          className="min-h-[52px] max-h-[180px] flex-1 resize-none border-0 bg-background/80 px-2 py-1.5 text-sm shadow-none outline-none focus-visible:ring-0 [caret-color:var(--foreground)] placeholder:text-muted-foreground/60"
           aria-label="Chat input"
         />
         <Button
