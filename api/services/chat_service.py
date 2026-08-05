@@ -255,6 +255,27 @@ def _first_token_fallback_response() -> str:
     return _provider_unavailable_response()
 
 
+async def _recover_from_stream_failure(full_prompt: str, llm_err: Exception) -> str:
+    """Try non-stream generation when streaming startup fails before first token."""
+    from app.services.llm_fallback import generate_with_fallback
+
+    try:
+        # Keep recovery bounded so UI does not look stuck on fallback path.
+        recovered = await asyncio.wait_for(generate_with_fallback(full_prompt), timeout=20)
+        recovered_text = (recovered or "").strip()
+        if recovered_text:
+            logger.info("Recovered answer via non-stream fallback after streaming failure.")
+            return recovered_text
+    except Exception as recover_err:
+        logger.warning(
+            "Non-stream recovery failed after streaming failure (%s): %s",
+            llm_err,
+            recover_err,
+        )
+
+    return _first_token_fallback_response()
+
+
 async def _stream_llm_response_with_guard(
     full_prompt: str,
     timeout_seconds: Optional[float] = None,
@@ -570,8 +591,8 @@ async def stream_chat_response(
             full_response = _first_token_fallback_response()
             yield to_sse_data({'type': 'token', 'content': full_response})
         except Exception as llm_err:
-            logger.warning(f"LLM streaming failed; falling back to safe assistant response: {llm_err}")
-            full_response = _first_token_fallback_response()
+            logger.warning(f"LLM streaming failed; attempting non-stream recovery: {llm_err}")
+            full_response = await _recover_from_stream_failure(full_prompt, llm_err)
             yield to_sse_data({'type': 'token', 'content': full_response})
 
         t_llm_ms = int((time.time() - t_llm_start) * 1000)

@@ -105,6 +105,7 @@ Make sure you're running from the project root (codebase-copilot/):
 import sys
 import os
 import asyncio
+from contextlib import asynccontextmanager
 
 # Ensure project root is on the path so 'app' module is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -114,11 +115,52 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import repo, chat, eval, suggestions, health, reviews
 
+
+async def _schedule_llamaindex_prewarm() -> None:
+    """Schedule optional LlamaIndex prewarm without blocking startup."""
+    try:
+        from app.config import LLAMAINDEX_PREWARM_ON_STARTUP, LLAMAINDEX_PREWARM_DELAY_SECONDS
+        if not LLAMAINDEX_PREWARM_ON_STARTUP:
+            return
+
+        async def _prewarm_llamaindex() -> None:
+            # Guarantee a minimum 5-second head-start so the server is already
+            # accepting connections before any blocking LLM init begins.
+            delay = max(float(LLAMAINDEX_PREWARM_DELAY_SECONDS), 5.0)
+            await asyncio.sleep(delay)
+            try:
+                from app.llm.llm_client import configure_llamaindex_settings
+                loop = asyncio.get_running_loop()
+                # Run synchronous (possibly network-bound) LLM init in a
+                # thread-pool executor so it never stalls the event loop.
+                await loop.run_in_executor(None, configure_llamaindex_settings)
+            except ModuleNotFoundError:
+                pass
+            except Exception as prewarm_err:
+                print(f"[startup] LlamaIndex prewarm warning: {prewarm_err}")
+
+        # Non-blocking prewarm keeps API startup quick while still allowing optional warmup.
+        asyncio.create_task(_prewarm_llamaindex())
+    except ModuleNotFoundError:
+        # Optional dependency is not installed in minimal backend setups.
+        # Startup should stay clean and allow non-AI endpoints to run.
+        pass
+    except Exception as e:
+        # Don't crash startup — Ollama or provider credentials may be unavailable.
+        print(f"[startup] LlamaIndex config warning: {e}")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await _schedule_llamaindex_prewarm()
+    yield
+
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Codebase Copilot API",
     description="AI-powered codebase intelligence — hybrid retrieval, reranking, dual-mode routing.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
@@ -161,56 +203,6 @@ app.include_router(suggestions.router, prefix="/api/repo",  tags=["Suggestions"]
 app.include_router(health.router,      prefix="/api/repo",  tags=["Repository Health"])
 app.include_router(reviews.router,     prefix="/api/reviews", tags=["Engineering Review"])
 
-
-# ── Startup ───────────────────────────────────────────────────────────────────
-@app.on_event("startup")
-async def startup_event():
-    """
-    Force-configure LlamaIndex to use Groq + Ollama embeddings when available.
-
-    ROOT-CAUSE FIX (startup failure):
-    configure_llamaindex_settings() makes synchronous HTTP calls to initialise
-    LLM provider clients (e.g. Gemini API validation).  Running this directly
-    in the async task without an executor blocks the entire asyncio event loop,
-    which prevents uvicorn from printing "Application startup complete" and from
-    responding to health-check probes.  The fix is two-fold:
-
-    1. A minimum 5-second delay ensures the server is fully bound and serving
-       before the prewarm task wakes up, so Wait-ForPortsReady in start.ps1
-       can confirm readiness immediately.
-    2. configure_llamaindex_settings() is offloaded to a thread-pool executor
-       via loop.run_in_executor() so it never blocks the event loop.
-    """
-    try:
-        from app.config import LLAMAINDEX_PREWARM_ON_STARTUP, LLAMAINDEX_PREWARM_DELAY_SECONDS
-        if not LLAMAINDEX_PREWARM_ON_STARTUP:
-            return
-
-        async def _prewarm_llamaindex() -> None:
-            # Guarantee a minimum 5-second head-start so the server is already
-            # accepting connections before any blocking LLM init begins.
-            delay = max(float(LLAMAINDEX_PREWARM_DELAY_SECONDS), 5.0)
-            await asyncio.sleep(delay)
-            try:
-                from app.llm.llm_client import configure_llamaindex_settings
-                loop = asyncio.get_running_loop()
-                # Run synchronous (possibly network-bound) LLM init in a
-                # thread-pool executor so it never stalls the event loop.
-                await loop.run_in_executor(None, configure_llamaindex_settings)
-            except ModuleNotFoundError:
-                pass
-            except Exception as prewarm_err:
-                print(f"[startup] LlamaIndex prewarm warning: {prewarm_err}")
-
-        # Non-blocking prewarm keeps API startup quick while still allowing optional warmup.
-        asyncio.create_task(_prewarm_llamaindex())
-    except ModuleNotFoundError:
-        # Optional dependency is not installed in minimal backend setups.
-        # Startup should stay clean and allow non-AI endpoints to run.
-        pass
-    except Exception as e:
-        # Don't crash startup — Ollama or provider credentials may be unavailable.
-        print(f"[startup] LlamaIndex config warning: {e}")
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

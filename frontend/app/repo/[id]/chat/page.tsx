@@ -743,7 +743,28 @@ function useMessageMutationHandlers({
         // If recovery fails, keep the current error flow below.
       }
 
-      toast.error('No answer content received. Please retry.');
+      const fallbackAssistantMsg: Message = {
+        id: `a-fallback-${Date.now()}`,
+        chat_id: chatId,
+        role: 'assistant',
+        content:
+          'I could not stream a full answer just now. Please retry, or ask a narrower repository-specific question (file, function, class, or module).',
+        query_mode: pendingMetadata?.queryMode ?? undefined,
+        retrieved_files: pendingMetadata?.retrievedFiles ?? [],
+        latency_ms: pendingMetadata?.latencyTotalMs ?? undefined,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, fallbackAssistantMsg]);
+      setInspectedIndex(messages.length + 1);
+      setInspectorData({
+        content: fallbackAssistantMsg.content,
+        queryMode: pendingMetadata?.queryMode ?? null,
+        retrievedFiles: pendingMetadata?.retrievedFiles ?? [],
+        latencyRetrievalMs: pendingMetadata?.latencyRetrievalMs ?? null,
+        latencyLlmMs: pendingMetadata?.latencyLlmMs ?? null,
+        latencyTotalMs: pendingMetadata?.latencyTotalMs ?? null,
+      });
+      toast.error('Recovered with a safe fallback answer due to empty stream content.');
       return;
     }
     const assistantMsg: Message = {

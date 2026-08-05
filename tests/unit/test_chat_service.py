@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
@@ -223,3 +223,20 @@ async def test_stream_guard_raises_on_first_token_timeout():
         with pytest.raises(chat_service.StreamFirstTokenTimeoutError):
             async for _delta in chat_service._stream_llm_response_with_guard("prompt", timeout_seconds=0.01):
                 pass
+
+
+@pytest.mark.asyncio
+async def test_recover_from_stream_failure_uses_non_stream_generation_when_available():
+    fallback_mod = MagicMock(generate_with_fallback=AsyncMock(return_value=" recovered answer "))
+    with patch.dict(sys.modules, {"app.services.llm_fallback": fallback_mod}):
+        result = await chat_service._recover_from_stream_failure("prompt", Exception("stream fail"))
+    assert result == "recovered answer"
+
+
+@pytest.mark.asyncio
+async def test_recover_from_stream_failure_falls_back_to_safe_message_on_error():
+    fallback_mod = MagicMock(generate_with_fallback=AsyncMock(side_effect=RuntimeError("boom")))
+    with patch.dict(sys.modules, {"app.services.llm_fallback": fallback_mod}), \
+         patch.object(chat_service, "_first_token_fallback_response", return_value="safe fallback"):
+        result = await chat_service._recover_from_stream_failure("prompt", Exception("stream fail"))
+    assert result == "safe fallback"
