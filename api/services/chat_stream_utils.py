@@ -14,6 +14,12 @@ _MEMORY_SCHEMA_ERROR_TOKENS = (
     "conversation_tags",
 )
 
+_PROVIDER_BOOTSTRAP_ERROR_TOKENS = (
+    "could not load",
+    "no api key found",
+    "api-keys",
+)
+
 
 def is_rate_limit_error(err: Exception) -> bool:
     msg = str(err).lower()
@@ -37,6 +43,12 @@ def safe_chat_error_message(err: Exception, *, include_rate_limit: bool = True) 
         return (
             "I hit a temporary repository memory issue. "
             "Please ask a repository-specific question about a file, function, class, or module."
+        )
+
+    if any(token in msg_l for token in _PROVIDER_BOOTSTRAP_ERROR_TOKENS):
+        return (
+            "I hit a temporary model provider initialization issue. "
+            "Please retry in a moment."
         )
 
     return (

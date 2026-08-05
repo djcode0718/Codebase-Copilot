@@ -24,7 +24,7 @@ from typing import AsyncGenerator, Optional, Tuple, List
 from llama_index.core import Settings
 from llama_index.core.memory import ChatMemoryBuffer
 
-from app.llm.llm_client import get_llm, get_embed_model
+from app.llm.llm_client import configure_llamaindex_settings
 from app.retrieval.query_router import QueryMode
 from app.config import (
     USE_COLBERT,
@@ -56,10 +56,9 @@ def _save_session(repo_id: str, chat_id: str, engine, memory, mode):
 
 
 def _ensure_llamaindex():
-    if Settings.llm is None:
-        Settings.llm = get_llm()
-    if Settings.embed_model is None:
-        Settings.embed_model = get_embed_model()
+    # Force app-configured providers every request path to avoid fallback to
+    # library defaults (e.g., OpenAI) when Settings are pre-populated.
+    configure_llamaindex_settings()
 
 
 def _build_fallback_llms() -> List[Tuple[str, object]]:
@@ -255,17 +254,17 @@ def _first_token_fallback_response() -> str:
     return _provider_unavailable_response()
 
 
-async def _recover_from_stream_failure(full_prompt: str, llm_err: Exception) -> str:
+async def _recover_from_stream_failure(full_prompt: str, llm_err: Exception) -> Tuple[str, str]:
     """Try non-stream generation when streaming startup fails before first token."""
-    from app.services.llm_fallback import generate_with_fallback
+    from app.services.llm_fallback import generate_with_fallback, get_resilient_llm
 
     try:
-        # Keep recovery bounded so UI does not look stuck on fallback path.
-        recovered = await asyncio.wait_for(generate_with_fallback(full_prompt), timeout=20)
+        # Fast async recovery first.
+        recovered = await asyncio.wait_for(generate_with_fallback(full_prompt), timeout=15)
         recovered_text = (recovered or "").strip()
         if recovered_text:
             logger.info("Recovered answer via non-stream fallback after streaming failure.")
-            return recovered_text
+            return recovered_text, "non_stream_recovery"
     except Exception as recover_err:
         logger.warning(
             "Non-stream recovery failed after streaming failure (%s): %s",
@@ -273,7 +272,27 @@ async def _recover_from_stream_failure(full_prompt: str, llm_err: Exception) -> 
             recover_err,
         )
 
-    return _first_token_fallback_response()
+    try:
+        # Some providers fail only on async paths; run sync completion in executor as backup.
+        loop = asyncio.get_running_loop()
+
+        def _sync_complete() -> str:
+            llm = get_resilient_llm()
+            result = llm.complete(full_prompt)
+            return str(result).strip()
+
+        recovered_sync = await asyncio.wait_for(loop.run_in_executor(None, _sync_complete), timeout=35)
+        if recovered_sync:
+            logger.info("Recovered answer via sync non-stream fallback after streaming failure.")
+            return recovered_sync, "non_stream_recovery"
+    except Exception as sync_recover_err:
+        logger.warning(
+            "Sync non-stream recovery failed after streaming failure (%s): %s",
+            llm_err,
+            sync_recover_err,
+        )
+
+    return _first_token_fallback_response(), "safe_fallback"
 
 
 async def _stream_llm_response_with_guard(
@@ -304,15 +323,24 @@ async def _stream_llm_response_with_guard(
 
 async def _resolve_query_mode(query: str, memory, classify_query):
     from app.services.qa_service import resolve_ambiguous_query
+    from app.llm.llm_client import configure_llamaindex_settings
+
+    def _resolve_query_with_settings():
+        configure_llamaindex_settings()
+        return resolve_ambiguous_query(query, memory)
+
+    def _classify_query_with_settings(resolved: str):
+        configure_llamaindex_settings()
+        return classify_query(resolved)
 
     resolved_query = await asyncio.get_event_loop().run_in_executor(
-        None, resolve_ambiguous_query, query, memory
+        None, _resolve_query_with_settings
     )
     if resolved_query != query:
         logger.info(f"Resolved context-aware streaming query: '{resolved_query}'")
 
     query_mode = await asyncio.get_event_loop().run_in_executor(
-        None, classify_query, resolved_query
+        None, _classify_query_with_settings, resolved_query
     )
     return resolved_query, query_mode
 
@@ -538,6 +566,7 @@ async def stream_chat_response(
     t_llm_ms = 0
     llm_provider = None
     llm_model = None
+    response_path = "safe_fallback"
 
     try:
         prep = await _prepare_stream_prompt(
@@ -581,21 +610,31 @@ async def stream_chat_response(
             # Guarantee the UI receives at least one token event.
             if not full_response.strip():
                 full_response = _first_token_fallback_response()
+                response_path = "safe_fallback"
                 yield to_sse_data({'type': 'token', 'content': full_response})
+            else:
+                response_path = "stream"
 
             usage = get_last_llm_usage()
             llm_provider = usage.get("provider")
             llm_model = usage.get("model")
         except StreamFirstTokenTimeoutError as timeout_err:
-            logger.warning(f"LLM stream startup timeout; sending fallback token: {timeout_err}")
-            full_response = _first_token_fallback_response()
+            logger.warning(f"LLM stream startup timeout; attempting non-stream recovery: {timeout_err}")
+            full_response, response_path = await _recover_from_stream_failure(full_prompt, timeout_err)
             yield to_sse_data({'type': 'token', 'content': full_response})
         except Exception as llm_err:
             logger.warning(f"LLM streaming failed; attempting non-stream recovery: {llm_err}")
-            full_response = await _recover_from_stream_failure(full_prompt, llm_err)
+            full_response, response_path = await _recover_from_stream_failure(full_prompt, llm_err)
             yield to_sse_data({'type': 'token', 'content': full_response})
 
         t_llm_ms = int((time.time() - t_llm_start) * 1000)
+        logger.info(
+            "chat_response_path=%s repo_id=%s chat_id=%s query_mode=%s",
+            response_path,
+            repo_id,
+            chat_id,
+            query_mode_value,
+        )
 
         # ── Update memory ──────────────────────────────────────────────────
         try:
@@ -621,8 +660,9 @@ async def stream_chat_response(
             yield suggestions_event
 
     except Exception as e:
-        logger.error(f"Streaming chat error: {e}", exc_info=True)
-        yield to_sse_data({'type': 'error', 'message': safe_chat_error_message(e, include_rate_limit=True)})
+        safe_msg = safe_chat_error_message(e, include_rate_limit=True)
+        logger.error(f"Streaming chat error: {safe_msg}", exc_info=True)
+        yield to_sse_data({'type': 'error', 'message': safe_msg})
 
     finally:
         yield to_sse_data({'type': 'done'})

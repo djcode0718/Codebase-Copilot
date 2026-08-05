@@ -37,7 +37,7 @@ from app.retrieval.query_router import classify_query, QueryMode
 from app.retrieval.reranker import rerank_with_colbert
 from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
 from app.ingestion.file_filter import filter_files
-from app.llm.llm_client import get_llm, get_embed_model
+from app.llm.llm_client import configure_llamaindex_settings
 from app.config import INDEX_DIR, REPOS_DIR, TOP_K_CHUNKS, TOP_K_RERANK
 from app.utils.logger import get_logger
 
@@ -239,10 +239,8 @@ def handle_user_query(
     logger.info(f"Query [{index_name}]: {query}")
 
     # ── Ensure LlamaIndex settings ─────────────────────────────────────────
-    if Settings.llm is None:
-        Settings.llm = get_llm()
-    if Settings.embed_model is None:
-        Settings.embed_model = get_embed_model()
+    # Force configured providers to avoid any default-provider drift.
+    configure_llamaindex_settings()
 
     # ── Load indexes ───────────────────────────────────────────────────────
     vector_index, bm25_retriever = _get_indexes(index_name)

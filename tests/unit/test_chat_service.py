@@ -102,6 +102,12 @@ def test_save_session_overwrites_existing():
     assert result[2] == "architectural"
 
 
+def test_ensure_llamaindex_forces_configure_settings():
+    with patch.object(chat_service, "configure_llamaindex_settings") as cfg:
+        chat_service._ensure_llamaindex()
+    cfg.assert_called_once()
+
+
 # ─── _is_no_match_code_lookup_response ───────────────────────────────────────
 
 def test_is_no_match_response_matches_sentinel():
@@ -229,14 +235,36 @@ async def test_stream_guard_raises_on_first_token_timeout():
 async def test_recover_from_stream_failure_uses_non_stream_generation_when_available():
     fallback_mod = MagicMock(generate_with_fallback=AsyncMock(return_value=" recovered answer "))
     with patch.dict(sys.modules, {"app.services.llm_fallback": fallback_mod}):
-        result = await chat_service._recover_from_stream_failure("prompt", Exception("stream fail"))
-    assert result == "recovered answer"
+        text, path = await chat_service._recover_from_stream_failure("prompt", Exception("stream fail"))
+    assert text == "recovered answer"
+    assert path == "non_stream_recovery"
 
 
 @pytest.mark.asyncio
 async def test_recover_from_stream_failure_falls_back_to_safe_message_on_error():
-    fallback_mod = MagicMock(generate_with_fallback=AsyncMock(side_effect=RuntimeError("boom")))
+    fallback_mod = MagicMock(
+        generate_with_fallback=AsyncMock(side_effect=RuntimeError("boom")),
+        get_resilient_llm=MagicMock(side_effect=RuntimeError("sync boom")),
+    )
     with patch.dict(sys.modules, {"app.services.llm_fallback": fallback_mod}), \
          patch.object(chat_service, "_first_token_fallback_response", return_value="safe fallback"):
-        result = await chat_service._recover_from_stream_failure("prompt", Exception("stream fail"))
-    assert result == "safe fallback"
+        text, path = await chat_service._recover_from_stream_failure("prompt", Exception("stream fail"))
+    assert text == "safe fallback"
+    assert path == "safe_fallback"
+
+
+@pytest.mark.asyncio
+async def test_recover_from_stream_failure_uses_sync_complete_when_async_recovery_fails():
+    mock_llm = MagicMock()
+    mock_llm.complete.return_value = "sync recovered answer"
+    fallback_mod = MagicMock(
+        generate_with_fallback=AsyncMock(side_effect=RuntimeError("async fail")),
+        get_resilient_llm=MagicMock(return_value=mock_llm),
+    )
+    with patch.dict(sys.modules, {"app.services.llm_fallback": fallback_mod}):
+        text, path = await chat_service._recover_from_stream_failure("prompt", Exception("stream fail"))
+
+    assert text == "sync recovered answer"
+    assert path == "non_stream_recovery"
+    mock_llm.complete.assert_called_once()
+

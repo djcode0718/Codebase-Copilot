@@ -266,8 +266,9 @@ async def stream_message(
                 elif event and event.get("type") == "metadata":
                     metadata_event = event
         except Exception as e:
-            logger.error(f"Error during SSE chat stream: {e}")
-            yield to_sse_data({'type': 'error', 'message': safe_chat_error_message(e, include_rate_limit=False)})
+            safe_msg = safe_chat_error_message(e, include_rate_limit=False)
+            logger.error(f"Error during SSE chat stream: {safe_msg}")
+            yield to_sse_data({'type': 'error', 'message': safe_msg})
 
         # After stream: persist assistant message to DB
         if full_response:

@@ -4,6 +4,8 @@ import logging
 import time
 import threading
 import inspect
+from functools import partial
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Optional, AsyncGenerator
 from pydantic import Field
 
@@ -17,6 +19,8 @@ from app.services.model_manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+_STREAM_BRIDGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm-sync-stream")
 
 _last_llm_usage_lock = threading.Lock()
 _last_llm_usage: dict = {"provider": None, "model": None}
@@ -118,6 +122,34 @@ def _provider_and_model(llm: Any) -> tuple[str, str]:
     provider = getattr(llm, "_cb_provider", type(llm).__name__)
     model_name = getattr(llm, "_cb_model_name", getattr(llm, "model", getattr(llm, "model_name", "unknown")))
     return str(provider), str(model_name)
+
+
+_STREAM_END = object()
+
+
+def _next_chunk_or_end(stream_iter):
+    try:
+        return next(stream_iter)
+    except StopIteration:
+        return _STREAM_END
+
+
+async def _bridge_sync_stream_complete(llm: Any, prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
+    """Bridge sync stream_complete() to async iteration without blocking event loop."""
+    loop = asyncio.get_running_loop()
+    stream_iter = await loop.run_in_executor(
+        _STREAM_BRIDGE_EXECUTOR,
+        partial(llm.stream_complete, prompt, **kwargs),
+    )
+    try:
+        while True:
+            chunk = await loop.run_in_executor(_STREAM_BRIDGE_EXECUTOR, _next_chunk_or_end, stream_iter)
+            if chunk is _STREAM_END:
+                return
+            yield chunk
+    finally:
+        if hasattr(stream_iter, "close"):
+            await loop.run_in_executor(_STREAM_BRIDGE_EXECUTOR, stream_iter.close)
 
 class ResilientFallbackLLM(CustomLLM):
     """LlamaIndex-compliant LLM class supporting fallback chain across models and providers."""
@@ -274,14 +306,20 @@ class ResilientFallbackLLM(CustomLLM):
                 tokens_yielded = False
                 try:
                     logger.info(f"Attempting async streaming completion with {provider}/{model_name} (attempt {attempt + 1})...")
-                    stream_response = llm.astream_complete(prompt, **kwargs)
-                    if inspect.isawaitable(stream_response):
-                        stream_response = await stream_response
-                    if not hasattr(stream_response, "__aiter__"):
-                        raise TypeError(
-                            f"{provider}/{model_name} returned non-async stream: "
-                            f"{type(stream_response).__name__}"
-                        )
+                    if provider.lower() == "gemini":
+                        # Gemini async stream path can emit a startup validation error
+                        # (LLMCompletionEndEvent expecting CompletionResponse). Use
+                        # sync streaming bridged via executor for reliability.
+                        stream_response = _bridge_sync_stream_complete(llm, prompt, **kwargs)
+                    else:
+                        stream_response = llm.astream_complete(prompt, **kwargs)
+                        if inspect.isawaitable(stream_response):
+                            stream_response = await stream_response
+                        if not hasattr(stream_response, "__aiter__"):
+                            raise TypeError(
+                                f"{provider}/{model_name} returned non-async stream: "
+                                f"{type(stream_response).__name__}"
+                            )
 
                     async for chunk in stream_response:
                         if not tokens_yielded:
