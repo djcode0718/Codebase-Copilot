@@ -169,19 +169,36 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
   }, [run, selected]);
 
   const chartData = useMemo(() => {
-    if (!history) return [];
-    const ordered = [...history.points].sort(
-      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
-    const latestCreatedAt = ordered.length ? ordered[ordered.length - 1].created_at : null;
-    return ordered.map((point) => ({
+    const historyPoints = history
+      ? [...history.points].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        )
+      : [];
+
+    // Always include the current run as the latest point so the chart
+    // reflects the most-recent analysis even before DB propagation.
+    if (run) {
+      const alreadyPresent = historyPoints.some((p) => p.run_id === run.run_id);
+      if (!alreadyPresent) {
+        historyPoints.push({
+          run_id: run.run_id,
+          created_at: run.generated_at ?? new Date().toISOString(),
+          repository_health: run.top_level.repository_health,
+          grade: run.top_level.grade,
+          category_scores: {},
+        });
+      }
+    }
+
+    const latestCreatedAt = historyPoints.length ? historyPoints[historyPoints.length - 1].created_at : null;
+    return historyPoints.map((point) => ({
       name:
         latestCreatedAt && point.created_at === latestCreatedAt
           ? 'Today'
           : new Date(point.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
       score: point.repository_health,
     }));
-  }, [history]);
+  }, [history, run]);
 
   async function handleRunAnalysis() {
     if (!token || disabled || running) return;
@@ -290,7 +307,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                 <Tooltip />
-                <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: 'hsl(var(--primary))' }} activeDot={{ r: 5 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -404,4 +421,3 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     </section>
   );
 }
-

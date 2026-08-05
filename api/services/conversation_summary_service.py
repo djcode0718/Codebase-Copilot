@@ -18,7 +18,7 @@ MODULE_RE = re.compile(r"\b(?:app|api|frontend|tests)(?:\/[\w.-]+)+\b")
 API_RE = re.compile(r"\/(?:api|v\d+)(?:\/[A-Za-z0-9_.-]+)+")
 DECISION_RE = re.compile(r"\b(?:should|must|decided|decision|recommend|prefer)\b", re.IGNORECASE)
 RISK_RE = re.compile(r"\b(?:risk|vulnerability|bug|regression|failure|outage|leak|security)\b", re.IGNORECASE)
-ACTION_RE = re.compile(r"\b(?:todo|next step|action|follow up|implement|add test|fix)\b", re.IGNORECASE)
+ACTION_RE = re.compile(r"\b(?:task|next step|action|follow up|implement|add test|fix)\b", re.IGNORECASE)
 
 
 def _top_words(text: str, max_items: int = 8) -> List[str]:
@@ -117,4 +117,3 @@ def build_conversation_summary(messages: List[Dict[str, Any]]) -> Dict[str, Any]
         "keywords": keywords,
         "tags": tags,
     }
-

@@ -14,22 +14,22 @@ from pydantic import ValidationError
 
 from api.models.repo import IndexRepoRequest, IndexRepoResponse, RepoStatusResponse, IndexProgressEvent
 from api.models.chat import (
-    CreateSessionRequest,
-    CreateSessionResponse,
-    SendMessageRequest,
-    MessageResponse,
-    ChatListItem,
-    TokenEvent,
-    MetadataEvent,
-    DoneEvent,
-    ErrorEvent,
-    RetrievedFile,
-    ConversationSummaryResponse,
-    ExportResponse,
     AttachmentCreateRequest,
     AttachmentResponse,
+    ConversationSummaryResponse,
+    CreateSessionRequest,
+    CreateSessionResponse,
+    DoneEvent,
+    ErrorEvent,
+    ExportResponse,
+    ChatListItem,
+    MessageResponse,
+    RetrievedFile,
     SavedReportCreateRequest,
     SavedReportResponse,
+    SendMessageRequest,
+    TokenEvent,
+    MetadataEvent,
     format_repository_anchor,
     build_repository_memory_context,
 )
@@ -369,4 +369,3 @@ class TestEvalSummaryResponse:
         )
         assert r.id is None
         assert r.created_at is None
-

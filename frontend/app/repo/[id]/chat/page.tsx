@@ -216,6 +216,13 @@ function ConversationHistoryPanel({
     });
   }
 
+  function getSessionBadge(session: Chat): string {
+    if (session.is_pinned) return 'pinned';
+    if (session.is_favorite) return 'favorite';
+    if (session.is_archived) return 'archived';
+    return '';
+  }
+
   return (
     <aside className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:sticky xl:top-6 xl:max-h-[calc(100vh-10rem)]">
       <div className="border-b border-border p-4">
@@ -709,17 +716,19 @@ function ChatWorkspace({
   onCancel: () => void;
   sessionLoading?: boolean;
 }) {
-  const inspectorPayload = inspectedIndex !== null
-    ? inspectorData
-    : pendingMetadata
-    ? {
-        queryMode: pendingMetadata.queryMode,
-        retrievedFiles: pendingMetadata.retrievedFiles,
-        latencyRetrievalMs: pendingMetadata.latencyRetrievalMs,
-        latencyLlmMs: pendingMetadata.latencyLlmMs,
-        latencyTotalMs: pendingMetadata.latencyTotalMs,
-      }
-    : null;
+  function buildInspectorPayload() {
+    if (inspectedIndex !== null) return inspectorData;
+    if (!pendingMetadata) return null;
+    return {
+      queryMode: pendingMetadata.queryMode,
+      retrievedFiles: pendingMetadata.retrievedFiles,
+      latencyRetrievalMs: pendingMetadata.latencyRetrievalMs,
+      latencyLlmMs: pendingMetadata.latencyLlmMs,
+      latencyTotalMs: pendingMetadata.latencyTotalMs,
+    };
+  }
+
+  const inspectorPayload = buildInspectorPayload();
 
   return (
     <div className="grid min-h-[62vh] grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
@@ -1030,6 +1039,19 @@ function useMessageMutationHandlers({
   textareaRef: { current: HTMLTextAreaElement | null };
   onAfterMessagePersisted: () => Promise<void>;
 }) {
+  function buildFallbackAssistantMessage(content: string, meta: typeof pendingMetadata): Message {
+    return {
+      id: `fallback-${Date.now()}`,
+      chat_id: chatId ?? '',
+      role: 'assistant' as const,
+      content,
+      query_mode: meta?.queryMode ?? undefined,
+      retrieved_files: meta?.retrievedFiles ?? [],
+      latency_ms: meta?.latencyTotalMs ?? undefined,
+      created_at: new Date().toISOString(),
+    };
+  }
+
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     e.target.style.height = 'auto';
@@ -1273,6 +1295,17 @@ export default function ChatPage() {
     pendingAutoPromptRef,
     setAutoPromptTick,
   });
+
+  // Listen for sidebar chat-session switch events so the page updates without remount.
+  useEffect(() => {
+    function handleSwitchSession(e: Event) {
+      const { repoId: targetRepo, chatId: targetChat } = (e as CustomEvent<{ repoId: string; chatId: string }>).detail;
+      if (targetRepo !== repoId || !targetChat) return;
+      void handleOpenSession(targetChat);
+    }
+    window.addEventListener('codebase:switch-chat-session', handleSwitchSession);
+    return () => window.removeEventListener('codebase:switch-chat-session', handleSwitchSession);
+  }, [repoId, handleOpenSession]);
   const { routedMode, showEmptyState, handleInputChange, handleSend, handleKeyDown, handleInspect } =
     useChatInteractionHandlers({
       chatId,

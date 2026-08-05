@@ -114,6 +114,9 @@ function RepoHeaderSection({
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/70 px-3 py-1 text-xs text-muted-foreground">
             <Sparkles size={12} className="text-brand" />
             Repository workspace
+            {repo.file_count != null && (
+              <span className="border-l border-border/60 pl-2 font-medium text-brand">{repo.file_count.toLocaleString()} files</span>
+            )}
           </div>
           <div className="flex items-start gap-4">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-background/70">
@@ -294,8 +297,7 @@ function FastActionsPanel({
   );
 }
 
-
-export default function RepoOverviewPage() {
+function RepoOverviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
   const router = useRouter();
   const [repo, setRepo] = useState<Repo | null>(null);
@@ -403,3 +405,5 @@ export default function RepoOverviewPage() {
     </div>
   );
 }
+
+export default RepoOverviewPage;

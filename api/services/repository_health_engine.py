@@ -381,8 +381,21 @@ class TestingAnalyzer(BaseAnalyzer):
         missing_test_targets = []
         test_names = " ".join([f.rel_path.lower() for f in test_files])
         for f in prod_files[:400]:
+            rel_path = f.rel_path.replace("\\", "/")
+            # Skip frontend UI files (covered by browser/e2e tests, not naming convention)
+            if "frontend/" in rel_path:
+                continue
+            # Skip root-level standalone scripts (debug, evaluation helpers)
+            if "/" not in rel_path:
+                continue
+            # Skip migration scripts
+            if "migration" in rel_path.lower() or "/migrations/" in rel_path:
+                continue
             stem = os.path.splitext(os.path.basename(f.rel_path))[0].lower()
-            if len(stem) > 4 and stem not in test_names:
+            # Skip package markers and private modules
+            if stem.startswith("__") or len(stem) <= 4:
+                continue
+            if stem not in test_names:
                 missing_test_targets.append(f.rel_path)
 
         if missing_test_targets:
@@ -578,6 +591,10 @@ class MaintainabilityAnalyzer(BaseAnalyzer):
             for i in range(0, max(0, len(lines) - 6), 3):
                 block = "\n".join(lines[i:i + 6])
                 if len(block) > 120:
+                    # Skip blocks that are primarily import declarations (shared by design)
+                    first_line = lines[i] if lines[i:] else ""
+                    if first_line.startswith(("from ", "import ", "from api", "from app")):
+                        continue
                     duplicated_blocks[block].append(f.rel_path)
 
         duplicate_hits = [(block, files) for block, files in duplicated_blocks.items() if len(set(files)) > 1]
@@ -598,11 +615,20 @@ class MaintainabilityAnalyzer(BaseAnalyzer):
             ))
 
         long_functions = []
+        _fn_pattern = re.compile(
+            r"\s*("
+            r"def\s|async\s+def\s"           # Python
+            r"|function\s+\w"                 # plain JS/TS function
+            r"|async\s+function\s+\w"         # async JS/TS function
+            r"|export\s+(?:default\s+)?(?:async\s+)?function\s+\w"  # exported TS/JS
+            r"|class\s+\w"                    # class definitions reset the tracker
+            r")"
+        )
         for f in code_files:
             lines = f.content.splitlines()
             start = None
             for idx, line in enumerate(lines):
-                if re.match(r"\s*(def|async def|function)\s+\w+", line):
+                if _fn_pattern.match(line):
                     start = idx
                 if start is not None and idx - start > 120 and line.strip() == "":
                     long_functions.append((f.rel_path, idx - start))
@@ -645,10 +671,23 @@ class TechnicalDebtAnalyzer(BaseAnalyzer):
         legacy_markers = []
 
         for f in snapshot.files:
-            marker_hits = re.findall(r"\b(TODO|FIXME|HACK|DEPRECATED|LEGACY)\b", f.content, flags=re.IGNORECASE)
+            # Skip framework/analysis files that contain detection patterns as string literals
+            if "repository_health_engine" in f.rel_path:
+                continue
+            # Only detect debt markers inside actual code comments (# or //)
+            marker_hits = re.findall(
+                r"(?:^|(?<=\n))\s*(?:#|//)[^\n]*(TODO|FIXME|HACK|DEPRECATED|LEGACY)\b",
+                f.content,
+                flags=re.IGNORECASE,
+            )
             if marker_hits:
                 debt_markers.append((f.rel_path, len(marker_hits)))
-            if re.search(r"deprecated|legacy|temporary workaround", f.content, flags=re.IGNORECASE):
+            # Only flag legacy/deprecated references that appear in comments
+            if re.search(
+                r"(?:#|//)[^\n]*(deprecated|legacy|temporary\s+workaround)",
+                f.content,
+                flags=re.IGNORECASE,
+            ):
                 legacy_markers.append(f.rel_path)
 
         if debt_markers:

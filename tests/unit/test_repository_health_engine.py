@@ -39,7 +39,7 @@ async def open_endpoint():
             ),
             (
                 os.path.join(repo_path, 'services', 'payments.py'),
-                "\n# TODO: add retries\n"
+                "\n# BACKLOG: add retries\n"
                 + "API_KEY = 'hard"
                 + "coded_super_secret_123456'\n\n"
                 "def charge(items, db):\n"

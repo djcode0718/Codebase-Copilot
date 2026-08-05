@@ -583,15 +583,29 @@ async def stream_chat_response(
     """
     _ensure_llamaindex()
 
+    def _init_stream_state() -> dict:
+        """Return a fresh mutable state dict for this streaming session."""
+        return {
+            "full_response": "",
+            "retrieved_files": [],
+            "query_mode_value": "code_lookup",
+            "t_retrieval_ms": 0,
+            "t_llm_ms": 0,
+            "llm_provider": None,
+            "llm_model": None,
+            "response_path": "safe_fallback",
+        }
+
     t_start = time.time()
-    full_response = ""
-    retrieved_files = []
-    query_mode_value = "code_lookup"
-    t_retrieval_ms = 0
-    t_llm_ms = 0
-    llm_provider = None
-    llm_model = None
-    response_path = "safe_fallback"
+    _state = _init_stream_state()
+    full_response = _state["full_response"]
+    retrieved_files = _state["retrieved_files"]
+    query_mode_value = _state["query_mode_value"]
+    t_retrieval_ms = _state["t_retrieval_ms"]
+    t_llm_ms = _state["t_llm_ms"]
+    llm_provider = _state["llm_provider"]
+    llm_model = _state["llm_model"]
+    response_path = _state["response_path"]
 
     try:
         prep = await _prepare_stream_prompt(
@@ -624,7 +638,11 @@ async def stream_chat_response(
 
 
         # ── Stream LLM response ────────────────────────────────────────────
-        t_llm_start = time.time()
+        def _llm_start_time() -> float:
+            """Return current time as start marker for LLM latency measurement."""
+            return time.time()
+
+        t_llm_start = _llm_start_time()
 
         try:
             from app.services.llm_fallback import get_last_llm_usage, reset_last_llm_usage
