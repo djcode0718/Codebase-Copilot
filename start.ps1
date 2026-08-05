@@ -279,12 +279,14 @@ function Wait-ForPortsReady {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $backendDownChecks = 0
     $frontendDownChecks = 0
-    $maxStartupDownChecks = 80  # ~20 seconds with 250ms loop for slower dev laptops
+    # Keep early-exit guard aligned with overall timeout to avoid cold-start false negatives.
+    $maxStartupDownChecks = [Math]::Max(80, [int]($TimeoutSeconds * 4))
+    $script:lastStartupWaitReason = "waiting for listeners"
 
     function Test-HttpReady {
         param([string]$Url)
         try {
-            $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
             return ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500)
         } catch {
             return $false
@@ -304,16 +306,23 @@ function Wait-ForPortsReady {
         $backendPortUp = [bool](Get-PortPids -Port 8000)
         $frontendPortUp = [bool](Get-PortPids -Port 3000)
         $allReady = $backendPortUp -and $frontendPortUp
+        if (-not $backendPortUp -or -not $frontendPortUp) {
+            $script:lastStartupWaitReason = "waiting for ports (backend=$backendPortUp, frontend=$frontendPortUp)"
+        }
 
         if ($allReady -and $requireHttpReady) {
             $backendHttpReady = Test-HttpReady -Url "http://127.0.0.1:8000/api/health"
             $frontendHttpReady = Test-HttpReady -Url "http://127.0.0.1:3000/"
             $allReady = $backendHttpReady -and $frontendHttpReady
+            if (-not $allReady) {
+                $script:lastStartupWaitReason = "waiting for HTTP readiness (backend=$backendHttpReady, frontend=$frontendHttpReady)"
+            }
         }
 
         if ($allReady) { return $true }
 
         if ($backend.State -eq "Failed" -or $frontend.State -eq "Failed") {
+            $script:lastStartupWaitReason = "a startup job entered Failed state"
             return $false
         }
 
@@ -335,12 +344,14 @@ function Wait-ForPortsReady {
 
         if ($backendDownChecks -ge $maxStartupDownChecks -or
             $frontendDownChecks -ge $maxStartupDownChecks) {
+            $script:lastStartupWaitReason = "startup job stayed down before readiness was reached"
             return $false
         }
 
         Start-Sleep -Milliseconds 250
     }
 
+    $script:lastStartupWaitReason = "startup timeout (${TimeoutSeconds}s)"
     return $false
 }
 
@@ -359,6 +370,9 @@ if ($ready) {
     Write-Host ""
 } else {
     Write-Host "One or more servers exited before becoming ready." -ForegroundColor Red
+    if ($script:lastStartupWaitReason) {
+        Write-Host ("Startup failure detail: {0}" -f $script:lastStartupWaitReason) -ForegroundColor DarkRed
+    }
     Write-JobOutput -Job $backend -Prefix "backend" -Color "DarkCyan"
     Write-JobOutput -Job $frontend -Prefix "frontend" -Color "DarkYellow"
     $global:shutdownRequested = $true

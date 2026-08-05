@@ -198,22 +198,14 @@ async def startup_event():
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
-    from app.config import LLM_PROVIDER, USE_COLBERT, USE_FAST_LLM
-
-    embed_model_name = "not installed"
-    try:
-        from llama_index.core import Settings
-        embed_model_name = (
-            type(Settings.embed_model).__name__ if Settings.embed_model else "not set"
-        )
-    except ModuleNotFoundError:
-        embed_model_name = "not installed"
+    from app.config import LLM_PROVIDER, USE_COLBERT, USE_FAST_LLM, OLLAMA_EMBED_MODEL
 
     return {
         "status": "ok",
         "llm_provider": LLM_PROVIDER,
         "use_fast_llm": USE_FAST_LLM,
         "colbert_enabled": USE_COLBERT,
-        # Show what embed model is actually active — useful for debugging.
-        "embed_model": embed_model_name,
+        # Keep health checks fast and deterministic (no heavy optional imports).
+        "embed_model": OLLAMA_EMBED_MODEL,
     }
+
