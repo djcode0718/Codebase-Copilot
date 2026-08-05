@@ -3,6 +3,7 @@ import asyncio
 import logging
 import time
 import threading
+import inspect
 from dataclasses import dataclass
 from typing import Any, List, Optional, AsyncGenerator
 from pydantic import Field
@@ -298,53 +299,57 @@ class ResilientFallbackLLM(CustomLLM):
             errors=errors
         )
 
-    async def astream_complete(self, prompt: str, **kwargs: Any) -> Any:
-        async def gen():
-            errors = {}
-            for llm in self.fallback_chain:
-                provider = type(llm).__name__
-                model_name = getattr(llm, "model", getattr(llm, "model_name", "unknown"))
-                
-                retries = 1
-                for attempt in range(retries + 1):
-                    tokens_yielded = False
-                    try:
-                        logger.info(f"Attempting async streaming completion with {provider}/{model_name} (attempt {attempt + 1})...")
-                        stream_response = llm.astream_complete(prompt, **kwargs)
-                        
-                        async for chunk in stream_response:
-                            if not tokens_yielded:
-                                _record_llm_usage(provider, model_name)
-                            tokens_yielded = True
-                            yield chunk
-                        logger.info(f"Async streaming completion succeeded with {provider}/{model_name}.")
-                        return
-                    except Exception as e:
-                        if tokens_yielded or not is_rate_limit_or_quota_error(e):
-                            logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
-                            raise e
-                        
-                        delay = parse_retry_delay(e)
-                        if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
-                            logger.warning(
-                                f"Model {provider}/{model_name} rate limited. "
-                                f"Short retry delay detected: {delay}s. Waiting and retrying..."
-                            )
-                            await asyncio.sleep(delay)
-                            continue
-                        
-                        logger.warning(
-                            f"Model {provider}/{model_name} rate limited. Moving to fallback."
-                        )
-                        errors[f"{provider}/{model_name}"] = str(e)
-                        break
-            
-            raise AllModelsExhaustedError(
-                "All LLM models in the fallback chain were exhausted.",
-                errors=errors
-            )
+    async def astream_complete(self, prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        errors = {}
+        for llm in self.fallback_chain:
+            provider = type(llm).__name__
+            model_name = getattr(llm, "model", getattr(llm, "model_name", "unknown"))
 
-        return gen()
+            retries = 1
+            for attempt in range(retries + 1):
+                tokens_yielded = False
+                try:
+                    logger.info(f"Attempting async streaming completion with {provider}/{model_name} (attempt {attempt + 1})...")
+                    stream_response = llm.astream_complete(prompt, **kwargs)
+                    if inspect.isawaitable(stream_response):
+                        stream_response = await stream_response
+                    if not hasattr(stream_response, "__aiter__"):
+                        raise TypeError(
+                            f"{provider}/{model_name} returned non-async stream: "
+                            f"{type(stream_response).__name__}"
+                        )
+
+                    async for chunk in stream_response:
+                        if not tokens_yielded:
+                            _record_llm_usage(provider, model_name)
+                        tokens_yielded = True
+                        yield chunk
+                    logger.info(f"Async streaming completion succeeded with {provider}/{model_name}.")
+                    return
+                except Exception as e:
+                    if tokens_yielded or not is_rate_limit_or_quota_error(e):
+                        logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
+                        raise e
+
+                    delay = parse_retry_delay(e)
+                    if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
+                        logger.warning(
+                            f"Model {provider}/{model_name} rate limited. "
+                            f"Short retry delay detected: {delay}s. Waiting and retrying..."
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    logger.warning(
+                        f"Model {provider}/{model_name} rate limited. Moving to fallback."
+                    )
+                    errors[f"{provider}/{model_name}"] = str(e)
+                    break
+
+        raise AllModelsExhaustedError(
+            "All LLM models in the fallback chain were exhausted.",
+            errors=errors
+        )
 
 _resilient_llm_instance = None
 
@@ -374,6 +379,8 @@ async def generate_with_fallback(prompt: str, **kwargs: Any) -> str:
 async def stream_with_fallback(prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
     """Exposes a clean streaming function interface returning an async generator of completion chunks."""
     llm = get_resilient_llm()
-    stream_response = await llm.astream_complete(prompt, **kwargs)
+    stream_response = llm.astream_complete(prompt, **kwargs)
+    if inspect.isawaitable(stream_response):
+        stream_response = await stream_response
     async for chunk in stream_response:
         yield chunk

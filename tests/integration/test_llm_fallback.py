@@ -198,7 +198,7 @@ async def test_async_stream_fallback_before_yield():
     pipeline = ResilientFallbackLLM(fallback_chain=[llm1, llm2])
     
     chunks = []
-    stream_res = await pipeline.astream_complete("test prompt")
+    stream_res = pipeline.astream_complete("test prompt")
     async for chunk in stream_res:
         chunks.append(chunk.text)
         
@@ -223,7 +223,7 @@ async def test_async_stream_aborts_mid_stream():
     
     chunks = []
     with pytest.raises(Exception, match="Mid-stream quota limit reached"):
-        stream_res = await pipeline.astream_complete("test prompt")
+        stream_res = pipeline.astream_complete("test prompt")
         async for chunk in stream_res:
             chunks.append(chunk.text)
             
