@@ -13,9 +13,7 @@ it contains file summaries, tech stack, and function names, which lets the
 LLM produce highly specific questions rather than generic ones.
 """
 
-import asyncio
 import os
-from functools import lru_cache
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,19 +48,16 @@ Output exactly 6 questions, one per line, nothing else."""
 
 async def _generate_suggestions(context: str) -> List[str]:
     """Call the LLM to generate questions from the codebase context."""
-    from llama_index.core import Settings
-    from app.llm.llm_client import get_llm
+    from app.llm.llm_client import configure_llamaindex_settings
+    from app.services.llm_fallback import generate_with_fallback
 
-    if Settings.llm is None:
-        Settings.llm = get_llm()
+    # Never touch Settings.llm lazily; force app-configured providers first.
+    configure_llamaindex_settings()
 
     prompt = _SUGGESTION_PROMPT.format(context=context[:3000])  # cap context size
 
     try:
-        response = await asyncio.get_event_loop().run_in_executor(
-            None, Settings.llm.complete, prompt
-        )
-        raw = str(response).strip()
+        raw = (await generate_with_fallback(prompt)).strip()
         questions = [q.strip() for q in raw.split("\n") if q.strip()]
         # Filter out any lines that look like preamble
         questions = [q for q in questions if q.endswith("?")][:6]

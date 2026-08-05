@@ -52,6 +52,7 @@ export interface StreamedResponse {
 interface UseChatStreamResult {
   streaming: boolean;
   streamedText: string;
+  streamedTextRef: React.MutableRefObject<string>;
   pendingMetadata: Omit<StreamedResponse, 'content'> | null;
   error: string | null;
   sendMessage: (chatId: string, query: string, token: string) => Promise<StreamedResponse | null>;
@@ -61,6 +62,7 @@ interface UseChatStreamResult {
 export function useChatStream(): UseChatStreamResult {
   const [streaming, setStreaming] = useState(false);
   const [streamedText, setStreamedText] = useState('');
+  const streamedTextRef = useRef('');        // always holds latest value (no stale closure)
   const [pendingMetadata, setPendingMetadata] = useState<Omit<StreamedResponse, 'content'> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -80,10 +82,12 @@ export function useChatStream(): UseChatStreamResult {
 
       setStreaming(true);
       setStreamedText('');
+      streamedTextRef.current = '';
       setPendingMetadata(null);
       setError(null);
 
       let fullText = '';
+      let receivedErrorEvent = false;
       let metadata: Omit<StreamedResponse, 'content'> = {
         queryMode: null,
         retrievedFiles: [],
@@ -132,6 +136,7 @@ export function useChatStream(): UseChatStreamResult {
 
             if (event.type === 'token') {
               fullText += event.content;
+              streamedTextRef.current += event.content;
               setStreamedText((prev) => prev + event.content);
             } else if (event.type === 'metadata') {
               metadata = {
@@ -147,7 +152,17 @@ export function useChatStream(): UseChatStreamResult {
             } else if (event.type === 'suggestions') {
               metadata.suggestions = event.questions;
             } else if (event.type === 'error') {
-              throw new Error(event.message);
+              // Do NOT throw immediately – that would discard any tokens already
+              // accumulated in fullText and cause the hard-coded frontend fallback
+              // to show. Instead, treat the error message as content when no real
+              // tokens have been received yet, so the UI always renders something.
+              receivedErrorEvent = true;
+              if (!fullText) {
+                const errMsg = event.message || 'An error occurred. Please retry.';
+                fullText += errMsg;
+                setStreamedText((prev) => prev + errMsg);
+              }
+              // Don't break – wait for the `done` event so the stream is consumed cleanly.
             } else if (event.type === 'done') {
               shouldStop = true;
               break;
@@ -165,16 +180,24 @@ export function useChatStream(): UseChatStreamResult {
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           setStreaming(false);
+          // Return partial content if any tokens arrived before abort.
+          if (streamedTextRef.current) {
+            return { content: streamedTextRef.current, ...metadata };
+          }
           return null;
         }
         const msg = err instanceof Error ? err.message : 'Unknown error';
         setError(msg);
         setStreaming(false);
+        // Return partial content if any tokens arrived before the error.
+        if (streamedTextRef.current) {
+          return { content: streamedTextRef.current, ...metadata };
+        }
         return null;
       }
     },
     [apiBase]
   );
 
-  return { streaming, streamedText, pendingMetadata, error, sendMessage, cancelStream };
+  return { streaming, streamedText, streamedTextRef, pendingMetadata, error, sendMessage, cancelStream };
 }

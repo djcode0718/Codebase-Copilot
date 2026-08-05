@@ -66,14 +66,9 @@ async def run_evaluation(
             yield f"data: {json.dumps({'type': 'progress', 'message': 'Initialising evaluation suite...'})}\n\n"
 
             # Run evaluation in executor (blocking)
-            from llama_index.core import Settings
-            from llama_index.core.evaluation import FaithfulnessEvaluator, RelevancyEvaluator
-            from app.llm.llm_client import get_llm, get_embed_model
+            from app.llm.llm_client import configure_llamaindex_settings
 
-            if Settings.llm is None:
-                Settings.llm = get_llm()
-            if Settings.embed_model is None:
-                Settings.embed_model = get_embed_model()
+            configure_llamaindex_settings()
 
             yield f"data: {json.dumps({'type': 'progress', 'message': 'LLM and evaluators loaded. Running queries...'})}\n\n"
 

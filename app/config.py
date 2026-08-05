@@ -96,7 +96,7 @@ LLM_FALLBACK_CHAIN_STR = os.getenv(
 # ─── Streaming Guard Configuration ───────────────────────────────────────────
 # Maximum time to wait for the first streamed token before returning a
 # guaranteed fallback response so the UI does not stay pending.
-STREAM_FIRST_TOKEN_TIMEOUT_SECONDS = float(os.getenv("STREAM_FIRST_TOKEN_TIMEOUT_SECONDS", "8"))
+STREAM_FIRST_TOKEN_TIMEOUT_SECONDS = float(os.getenv("STREAM_FIRST_TOKEN_TIMEOUT_SECONDS", "25"))
 # Optional override for the startup-time fallback text.
 STREAM_FIRST_TOKEN_FALLBACK_TEXT = os.getenv("STREAM_FIRST_TOKEN_FALLBACK_TEXT", "").strip()
 

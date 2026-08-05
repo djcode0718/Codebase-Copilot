@@ -57,7 +57,7 @@ def _save_session(repo_id: str, chat_id: str, engine, memory, mode):
 
 def _ensure_llamaindex():
     # Force app-configured providers every request path to avoid fallback to
-    # library defaults (e.g., OpenAI) when Settings are pre-populated.
+    # unintended library defaults when Settings are pre-populated.
     configure_llamaindex_settings()
 
 

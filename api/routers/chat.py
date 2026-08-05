@@ -269,6 +269,9 @@ async def stream_message(
             safe_msg = safe_chat_error_message(e, include_rate_limit=False)
             logger.error(f"Error during SSE chat stream: {safe_msg}")
             yield to_sse_data({'type': 'error', 'message': safe_msg})
+            # Always send `done` so the client SSE reader receives a clean
+            # termination and can return partial content instead of null.
+            yield to_sse_data({'type': 'done'})
 
         # After stream: persist assistant message to DB
         if full_response:

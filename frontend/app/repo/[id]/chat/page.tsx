@@ -558,6 +558,7 @@ function useChatInteractionHandlers({
   sendMessage,
   messages,
   streamedText,
+  streamedTextRef,
   pendingMetadata,
   suggestions,
   setMessages,
@@ -577,6 +578,7 @@ function useChatInteractionHandlers({
   sendMessage: (chatId: string, query: string, token: string) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedText: string;
+  streamedTextRef: React.MutableRefObject<string>;
   pendingMetadata: Omit<StreamedResponse, 'content'> | null;
   suggestions: string[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
@@ -616,6 +618,7 @@ function useChatInteractionHandlers({
     sendMessage,
     messages,
     streamedText,
+    streamedTextRef,
     pendingMetadata,
     setMessages,
     setSuggestions,
@@ -649,6 +652,7 @@ function useMessageMutationHandlers({
   sendMessage,
   messages,
   streamedText,
+  streamedTextRef,
   pendingMetadata,
   setMessages,
   setSuggestions,
@@ -666,6 +670,7 @@ function useMessageMutationHandlers({
   sendMessage: (chatId: string, query: string, token: string) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedText: string;
+  streamedTextRef: React.MutableRefObject<string>;
   pendingMetadata: Omit<StreamedResponse, 'content'> | null;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   setSuggestions: React.Dispatch<React.SetStateAction<string[]>>;
@@ -693,13 +698,16 @@ function useMessageMutationHandlers({
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const result = await sendMessage(chatId, modelQuery, token);
+    // Use ref (non-stale) for partial recovery — the state closure captured
+    // the empty value from before sendMessage started.
+    const latestStreamedText = streamedTextRef.current;
     if (!result || !result.content.trim()) {
-      if (streamedText.trim()) {
+      if (latestStreamedText.trim()) {
         const partialAssistantMsg: Message = {
           id: `a-partial-${Date.now()}`,
           chat_id: chatId,
           role: 'assistant',
-          content: streamedText,
+          content: latestStreamedText,
           query_mode: pendingMetadata?.queryMode ?? undefined,
           retrieved_files: pendingMetadata?.retrievedFiles ?? [],
           latency_ms: pendingMetadata?.latencyTotalMs ?? undefined,
@@ -708,7 +716,7 @@ function useMessageMutationHandlers({
         setMessages((prev) => [...prev, partialAssistantMsg]);
         setInspectedIndex(messages.length + 1);
         setInspectorData({
-          content: streamedText,
+          content: latestStreamedText,
           queryMode: pendingMetadata?.queryMode ?? null,
           retrievedFiles: pendingMetadata?.retrievedFiles ?? [],
           latencyRetrievalMs: pendingMetadata?.latencyRetrievalMs ?? null,
@@ -787,7 +795,7 @@ function useMessageMutationHandlers({
     }
     setInspectorData(result);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
-  }, [chatId, token, streaming, sendMessage, messages.length, streamedText, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef]);
+  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef]);
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
@@ -835,7 +843,7 @@ export default function ChatPage() {
   const [autoPromptTick, setAutoPromptTick] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { streaming, streamedText, pendingMetadata, error, sendMessage, cancelStream } =
+  const { streaming, streamedText, streamedTextRef, pendingMetadata, error, sendMessage, cancelStream } =
     useChatStream();
 
   const loadSession = useCallback(async (t: string, targetChatId: string) => {
@@ -895,6 +903,7 @@ export default function ChatPage() {
       sendMessage,
       messages,
       streamedText,
+      streamedTextRef,
       pendingMetadata,
       suggestions,
       setMessages,
