@@ -1306,6 +1306,17 @@ export default function ChatPage() {
     window.addEventListener('codebase:switch-chat-session', handleSwitchSession);
     return () => window.removeEventListener('codebase:switch-chat-session', handleSwitchSession);
   }, [repoId, handleOpenSession]);
+
+  // Listen for sidebar "New Chat" event so clicking New Chat works when already on this page.
+  useEffect(() => {
+    function handleNewChat(e: Event) {
+      const { repoId: targetRepo } = (e as CustomEvent<{ repoId: string }>).detail;
+      if (targetRepo !== repoId) return;
+      void handleCreateQuickAsk();
+    }
+    window.addEventListener('codebase:new-chat', handleNewChat);
+    return () => window.removeEventListener('codebase:new-chat', handleNewChat);
+  }, [repoId, handleCreateQuickAsk]);
   const { routedMode, showEmptyState, handleInputChange, handleSend, handleKeyDown, handleInspect } =
     useChatInteractionHandlers({
       chatId,
@@ -1346,18 +1357,8 @@ export default function ChatPage() {
         chatId={chatId}
       />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[20rem_minmax(0,1fr)] xl:items-start">
-        <ConversationHistoryPanel
-          token={token}
-          repoId={repoId}
-          sessions={sessions}
-          currentChatId={chatId}
-          streaming={streaming || sessionLoading}
-          onNewChat={handleCreateQuickAsk}
-          onOpenSession={handleOpenSession}
-          onSessionsChanged={handleSessionsChanged}
-        />
-
+      {/* ConversationHistoryPanel removed — chat history now lives in the sidebar */}
+      <div className="grid grid-cols-1 gap-6">
         <ChatWorkspace
           repoId={repoId}
           sessionReady={sessionReady && !sessionLoading}

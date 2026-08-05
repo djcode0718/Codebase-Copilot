@@ -117,6 +117,9 @@ function RepoHeaderSection({
             {repo.file_count != null && (
               <span className="border-l border-border/60 pl-2 font-medium text-brand">{repo.file_count.toLocaleString()} files</span>
             )}
+            {repo.node_count != null && (
+              <span className="border-l border-border/60 pl-2 font-medium text-brand/80">{repo.node_count.toLocaleString()} chunks</span>
+            )}
           </div>
           <div className="flex items-start gap-4">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-background/70">
