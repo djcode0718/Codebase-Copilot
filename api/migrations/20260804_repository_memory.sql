@@ -8,11 +8,24 @@ alter table if exists chats
   add column if not exists is_archived boolean default false,
   add column if not exists archived_at timestamptz,
   add column if not exists deleted_at timestamptz,
+  add column if not exists last_message_at timestamptz,
+  add column if not exists last_message_preview text,
+  add column if not exists message_count integer default 0,
   add column if not exists summary text;
+
+alter table if exists messages
+  add column if not exists token_count integer,
+  add column if not exists llm_provider text,
+  add column if not exists llm_model text,
+  add column if not exists metadata jsonb default '{}'::jsonb,
+  add column if not exists sequence integer;
 
 create index if not exists idx_chats_repo_updated on chats (repo_id, updated_at desc);
 create index if not exists idx_chats_repo_deleted on chats (repo_id, deleted_at);
 create index if not exists idx_chats_user_repo_type on chats (user_id, repo_id, session_type);
+create index if not exists idx_chats_repo_activity on chats (repo_id, deleted_at, is_pinned desc, last_message_at desc, updated_at desc);
+create index if not exists idx_messages_chat_created on messages (chat_id, created_at asc);
+create index if not exists idx_messages_chat_sequence on messages (chat_id, sequence asc);
 
 create table if not exists conversation_summaries (
   id uuid primary key,

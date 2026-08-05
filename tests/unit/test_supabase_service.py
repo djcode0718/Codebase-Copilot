@@ -273,6 +273,24 @@ class TestUpdateChatFields:
         mock.table.return_value.update.assert_called_once()
 
 
+class TestSoftDeleteChats:
+    def test_scopes_batch_delete_by_user_and_repo(self):
+        mock = MagicMock()
+        chain = MagicMock()
+        chain.eq.return_value = chain
+        chain.in_.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"id": "c1"}, {"id": "c2"}])
+        mock.table.return_value.update.return_value = chain
+
+        count = supabase_service.soft_delete_chats(mock, chat_ids=["c1", "c2"], user_id="u1", repo_id="r1")
+
+        assert count == 2
+        mock.table.assert_called_with("chats")
+        chain.eq.assert_any_call("user_id", "u1")
+        chain.in_.assert_called_once_with("id", ["c1", "c2"])
+        chain.eq.assert_any_call("repo_id", "r1")
+
+
 # â”€â”€ Messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestSaveMessage:
@@ -295,6 +313,43 @@ class TestSaveMessage:
             latency_ms=500,
         )
         assert result["query_mode"] == "code_lookup"
+
+    def test_saves_enriched_message_metadata(self):
+        mock = MagicMock()
+        select_chain = MagicMock()
+        select_chain.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+        count_chain = MagicMock()
+        count_chain.eq.return_value.execute.return_value = MagicMock(data=[{"id": "m1"}])
+        insert_chain = MagicMock()
+        insert_chain.execute.return_value = MagicMock(data=[])
+        update_chain = MagicMock()
+        update_chain.eq.return_value.execute.return_value = MagicMock(data=[])
+
+        def table_side_effect(name):
+            table = MagicMock()
+            if name == "messages":
+                table.select.side_effect = [select_chain, count_chain]
+                table.insert.return_value = insert_chain
+            else:
+                table.update.return_value = update_chain
+            return table
+
+        mock.table.side_effect = table_side_effect
+        result = supabase_service.save_message(
+            mock,
+            "chat-1",
+            "assistant",
+            "Answer",
+            token_count=12,
+            llm_provider="groq",
+            llm_model="llama",
+            metadata={"repo_id": "repo-1"},
+        )
+
+        inserted = insert_chain.execute.call_args_list
+        assert result["token_count"] == 12
+        assert result["llm_provider"] == "groq"
+        assert inserted is not None
 
     def test_fallback_when_no_data(self):
         mock = make_supabase_mock(return_data=[])

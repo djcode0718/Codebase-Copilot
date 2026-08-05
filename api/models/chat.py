@@ -35,11 +35,16 @@ class RetrievedFile(BaseModel):
 class MessageResponse(BaseModel):
     id: str
     chat_id: str
-    role: str                              # "user" | "assistant"
+    role: str                              # "system" | "user" | "assistant"
     content: str
     query_mode: Optional[str] = None       # "code_lookup" | "architectural"
     retrieved_files: Optional[List[RetrievedFile]] = None
     latency_ms: Optional[int] = None
+    token_count: Optional[int] = None
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    sequence: Optional[int] = None
     created_at: Optional[datetime] = None
 
 
@@ -53,6 +58,9 @@ class ChatListItem(BaseModel):
     is_favorite: bool = False
     is_archived: bool = False
     deleted_at: Optional[datetime] = None
+    last_message_at: Optional[datetime] = None
+    last_message_preview: Optional[str] = None
+    message_count: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -62,6 +70,22 @@ class UpdateChatRequest(BaseModel):
     is_pinned: Optional[bool] = None
     is_favorite: Optional[bool] = None
     is_archived: Optional[bool] = None
+
+
+class AddMessageRequest(BaseModel):
+    role: str = Field(pattern="^(system|user|assistant)$")
+    content: str
+    query_mode: Optional[str] = None
+    retrieved_files: Optional[List[RetrievedFile]] = None
+    latency_ms: Optional[int] = None
+    token_count: Optional[int] = None
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DeleteChatsRequest(BaseModel):
+    chat_ids: List[str] = Field(default_factory=list, min_length=1, max_length=100)
 
 
 class ChatSearchResultItem(BaseModel):

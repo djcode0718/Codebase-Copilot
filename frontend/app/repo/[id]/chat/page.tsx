@@ -4,10 +4,10 @@
  * Chat screen — 60/40 split: message thread | AI Inspector.
  * Creates a new chat session on mount and handles full SSE streaming.
  */
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus, Wrench } from 'lucide-react';
+import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus, Wrench, Search, Pin, PinOff, Trash2, Archive, Pencil, Check, X, Download, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -23,9 +23,14 @@ import {
   listChatSessions,
   getMessages,
   getRepo,
+  updateChatSession,
+  deleteChat,
+  deleteAllChats,
+  deleteSelectedChats,
+  exportRepositoryMemory,
 } from '@/lib/api';
 import { toast } from 'sonner';
-import type { Message, Repo, QueryMode } from '@/lib/types';
+import type { Chat, Message, Repo, QueryMode } from '@/lib/types';
 
 const ARCHITECTURE_QUERY_RE = /(architect|architecture|diagram|mermaid|service map|component relationships|data flow|executive summary)/i;
 
@@ -57,6 +62,321 @@ function collectReviewTargets(messages: Message[]): string[] {
     }
   }
   return orderedPaths;
+}
+
+type ConversationFilter = 'all' | 'pinned' | 'archived' | 'today' | 'week' | 'month';
+type ConversationSort = 'newest' | 'oldest' | 'active' | 'alpha' | 'pinned';
+
+function conversationTimestamp(chat: Chat): string {
+  return chat.last_message_at || chat.updated_at || chat.created_at || '';
+}
+
+function formatConversationDate(value?: string | null): string {
+  if (!value) return 'No activity yet';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'No activity yet';
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (diffMs < dayMs && date.toDateString() === now.toDateString()) return 'Today';
+  if (diffMs < 2 * dayMs) return 'Yesterday';
+  if (diffMs < 7 * dayMs) return `${Math.floor(diffMs / dayMs)} Days Ago`;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function conversationMatchesFilter(chat: Chat, filter: ConversationFilter): boolean {
+  const date = new Date(conversationTimestamp(chat));
+  const now = new Date();
+  if (filter === 'pinned') return Boolean(chat.is_pinned);
+  if (filter === 'archived') return Boolean(chat.is_archived);
+  if (filter === 'all') return true;
+  if (Number.isNaN(date.getTime())) return false;
+  if (filter === 'today') return date.toDateString() === now.toDateString();
+  const diffMs = now.getTime() - date.getTime();
+  if (filter === 'week') return diffMs <= 7 * 24 * 60 * 60 * 1000;
+  if (filter === 'month') return diffMs <= 31 * 24 * 60 * 60 * 1000;
+  return true;
+}
+
+function sortConversations(items: Chat[], sort: ConversationSort): Chat[] {
+  return [...items].sort((a, b) => {
+    if (sort === 'alpha') return (a.title || '').localeCompare(b.title || '');
+    if (sort === 'oldest') return conversationTimestamp(a).localeCompare(conversationTimestamp(b));
+    if (sort === 'active') return (b.message_count || 0) - (a.message_count || 0);
+    if (sort === 'pinned' && Boolean(a.is_pinned) !== Boolean(b.is_pinned)) return a.is_pinned ? -1 : 1;
+    if (Boolean(a.is_pinned) !== Boolean(b.is_pinned)) return a.is_pinned ? -1 : 1;
+    return conversationTimestamp(b).localeCompare(conversationTimestamp(a));
+  });
+}
+
+function downloadTextFile(filename: string, content: string, contentType: string) {
+  const blob = new Blob([content], { type: contentType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function ConversationHistoryPanel({
+  token,
+  repoId,
+  sessions,
+  currentChatId,
+  streaming,
+  onNewChat,
+  onOpenSession,
+  onSessionsChanged,
+}: {
+  token: string;
+  repoId: string;
+  sessions: Chat[];
+  currentChatId: string | null;
+  streaming: boolean;
+  onNewChat: () => Promise<void>;
+  onOpenSession: (chatId: string) => Promise<void>;
+  onSessionsChanged: () => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<ConversationFilter>('all');
+  const [sort, setSort] = useState<ConversationSort>('pinned');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const visibleSessions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = sessions.filter((session) => {
+      if (!conversationMatchesFilter(session, filter)) return false;
+      if (!q) return true;
+      return (
+        (session.title || '').toLowerCase().includes(q) ||
+        (session.last_message_preview || '').toLowerCase().includes(q)
+      );
+    });
+    return sortConversations(filtered, sort);
+  }, [filter, search, sessions, sort]);
+
+  async function refreshAfter(action: Promise<unknown>, success: string) {
+    try {
+      await action;
+      await onSessionsChanged();
+      toast.success(success);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Conversation action failed');
+    }
+  }
+
+  async function commitRename(chatId: string) {
+    const title = draftTitle.trim();
+    if (!title) return;
+    setEditingId(null);
+    await refreshAfter(updateChatSession(token, chatId, { title }), 'Conversation renamed');
+  }
+
+  async function handleDelete(chatId: string) {
+    if (!window.confirm('Delete this conversation? It can be restored by administrators from the database because deletion is soft.')) return;
+    await refreshAfter(deleteChat(token, chatId), 'Conversation deleted');
+  }
+
+  async function handleDeleteSelected() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} selected conversation${ids.length === 1 ? '' : 's'}?`)) return;
+    await refreshAfter(deleteSelectedChats(token, repoId, ids), 'Selected conversations deleted');
+    setSelectedIds(new Set());
+  }
+
+  async function handleDeleteAll() {
+    if (!window.confirm('Delete all conversations for this repository? This is a soft delete, but the list will be cleared for this workspace.')) return;
+    await refreshAfter(deleteAllChats(token, repoId), 'All repository conversations deleted');
+    setSelectedIds(new Set());
+  }
+
+  async function handleExport(chatId: string) {
+    try {
+      const payload = await exportRepositoryMemory(token, repoId, 'md', [chatId]);
+      downloadTextFile(payload.filename, payload.content, payload.content_type || 'text/markdown');
+      toast.success('Conversation exported');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to export conversation');
+    }
+  }
+
+  function toggleSelected(chatId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(chatId)) next.delete(chatId);
+      else next.add(chatId);
+      return next;
+    });
+  }
+
+  return (
+    <aside className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:sticky xl:top-6 xl:max-h-[calc(100vh-10rem)]">
+      <div className="border-b border-border p-4">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={expanded}
+        >
+          <span className="flex items-center gap-2 font-heading text-base font-semibold">
+            <MessageSquare size={16} className="text-brand" />
+            Chat History
+          </span>
+          <ChevronDown size={15} className={expanded ? 'transition-transform' : '-rotate-90 transition-transform'} />
+        </button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-4 w-full cursor-pointer border-border"
+          onClick={() => void onNewChat()}
+          disabled={!token || streaming}
+        >
+          <Plus size={13} className="mr-1.5" />
+          New Chat
+        </Button>
+      </div>
+
+      {expanded && (
+        <div className="space-y-3 p-4">
+          <div className="flex items-center gap-2 rounded-2xl border border-border bg-background/70 px-3 py-2">
+            <Search size={14} className="text-muted-foreground" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search conversations"
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              aria-label="Search conversations"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <select value={filter} onChange={(e) => setFilter(e.target.value as ConversationFilter)} className="rounded-xl border border-border bg-background px-2 py-2 text-xs">
+              <option value="all">All</option>
+              <option value="pinned">Pinned</option>
+              <option value="archived">Archived</option>
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+            </select>
+            <select value={sort} onChange={(e) => setSort(e.target.value as ConversationSort)} className="rounded-xl border border-border bg-background px-2 py-2 text-xs">
+              <option value="pinned">Pinned First</option>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="active">Most Active</option>
+              <option value="alpha">Alphabetical</option>
+            </select>
+          </div>
+
+          {selectedIds.size > 0 && (
+            <div className="flex items-center justify-between rounded-2xl border border-border bg-background/70 px-3 py-2 text-xs">
+              <span>{selectedIds.size} selected</span>
+              <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void handleDeleteSelected()}>
+                Delete
+              </Button>
+            </div>
+          )}
+
+          <div className="max-h-[48vh] space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+            {visibleSessions.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border bg-background/50 p-4 text-center text-sm text-muted-foreground">
+                No conversations found.
+              </div>
+            ) : (
+              visibleSessions.map((session) => {
+                const active = session.id === currentChatId;
+                const title = session.title || 'Repository Overview';
+                const isEditing = editingId === session.id;
+                return (
+                  <div key={session.id} className={active ? 'rounded-2xl border border-brand/30 bg-brand/5 p-3' : 'rounded-2xl border border-border bg-background/60 p-3'}>
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(session.id)}
+                        onChange={() => toggleSelected(session.id)}
+                        className="mt-1"
+                        aria-label={`Select ${title}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void onOpenSession(session.id)}
+                        disabled={streaming}
+                        className="min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isEditing ? (
+                          <input
+                            value={draftTitle}
+                            onChange={(e) => setDraftTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') void commitRename(session.id);
+                              if (e.key === 'Escape') setEditingId(null);
+                            }}
+                            autoFocus
+                            className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm font-medium outline-none"
+                          />
+                        ) : (
+                          <div className="truncate text-sm font-semibold text-foreground">{title}</div>
+                        )}
+                        <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                          {session.last_message_preview || 'Start a repository conversation.'}
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>{formatConversationDate(conversationTimestamp(session))}</span>
+                          <span>{session.message_count || 0} Messages</span>
+                          {session.is_archived && <span>Archived</span>}
+                        </div>
+                      </button>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                      {isEditing ? (
+                        <>
+                          <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void commitRename(session.id)} title="Save title">
+                            <Check size={12} />
+                          </Button>
+                          <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => setEditingId(null)} title="Cancel rename">
+                            <X size={12} />
+                          </Button>
+                        </>
+                      ) : (
+                        <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => { setEditingId(session.id); setDraftTitle(title); }} title="Rename conversation">
+                          <Pencil size={12} />
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void refreshAfter(updateChatSession(token, session.id, { is_pinned: !session.is_pinned }), session.is_pinned ? 'Conversation unpinned' : 'Conversation pinned')} title={session.is_pinned ? 'Unpin conversation' : 'Pin conversation'}>
+                        {session.is_pinned ? <PinOff size={12} /> : <Pin size={12} />}
+                      </Button>
+                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void refreshAfter(updateChatSession(token, session.id, { is_archived: !session.is_archived }), session.is_archived ? 'Conversation restored' : 'Conversation archived')} title={session.is_archived ? 'Unarchive conversation' : 'Archive conversation'}>
+                        <Archive size={12} />
+                      </Button>
+                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void handleExport(session.id)} title="Export conversation">
+                        <Download size={12} />
+                      </Button>
+                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2 text-destructive hover:text-destructive" onClick={() => void handleDelete(session.id)} title="Delete conversation">
+                        <Trash2 size={12} />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {sessions.length > 0 && (
+            <Button variant="outline" size="sm" className="w-full cursor-pointer border-border text-destructive hover:text-destructive" onClick={() => void handleDeleteAll()}>
+              Delete All Repository Conversations
+            </Button>
+          )}
+        </div>
+      )}
+    </aside>
+  );
 }
 
 function ChatHeaderSection({
@@ -485,9 +805,21 @@ function useChatBootstrapEffect({
       try {
         await createMainSession(t, repoId);
 
+        const openSessionKey = `codebase:open-chat-session:${repoId}`;
+        const newChatKey = `codebase:new-chat:${repoId}`;
+        const requestedChatId = sessionStorage.getItem(openSessionKey);
+        const forceNewChat = sessionStorage.getItem(newChatKey) === '1';
+        sessionStorage.removeItem(openSessionKey);
+        sessionStorage.removeItem(newChatKey);
+
         const existingSessions = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 100 });
-        const preferred = existingSessions.find((s) => (s.session_type || 'quick_ask') !== 'main') ?? existingSessions[0];
-        if (preferred?.id) {
+        const preferred = requestedChatId
+          ? existingSessions.find((s) => s.id === requestedChatId) ?? { id: requestedChatId }
+          : existingSessions.find((s) => (s.session_type || 'quick_ask') !== 'main') ?? existingSessions[0];
+        if (forceNewChat) {
+          const quickAsk = await createQuickAskSession(t, repoId);
+          activeChatId = quickAsk.chat_id;
+        } else if (preferred?.id) {
           activeChatId = preferred.id;
         } else {
           const quickAsk = await createQuickAskSession(t, repoId);
@@ -571,6 +903,7 @@ function useChatInteractionHandlers({
   autoPromptTick,
   messagesEndRef,
   textareaRef,
+  onAfterMessagePersisted,
 }: {
   chatId: string | null;
   token: string;
@@ -591,6 +924,7 @@ function useChatInteractionHandlers({
   autoPromptTick: number;
   messagesEndRef: { current: HTMLDivElement | null };
   textareaRef: { current: HTMLTextAreaElement | null };
+  onAfterMessagePersisted: () => Promise<void>;
 }) {
   useEffect(() => {
     if (chatId && suggestions.length > 0) {
@@ -617,7 +951,6 @@ function useChatInteractionHandlers({
     streaming,
     sendMessage,
     messages,
-    streamedText,
     streamedTextRef,
     pendingMetadata,
     setMessages,
@@ -629,6 +962,7 @@ function useChatInteractionHandlers({
     pendingAutoPromptRef,
     autoPromptTick,
     textareaRef,
+    onAfterMessagePersisted,
   });
 
   const lastAssistantMode = [...messages].reverse().find((m) => m.role === 'assistant' && m.query_mode)?.query_mode ?? null;
@@ -651,7 +985,6 @@ function useMessageMutationHandlers({
   streaming,
   sendMessage,
   messages,
-  streamedText,
   streamedTextRef,
   pendingMetadata,
   setMessages,
@@ -663,13 +996,13 @@ function useMessageMutationHandlers({
   pendingAutoPromptRef,
   autoPromptTick,
   textareaRef,
+  onAfterMessagePersisted,
 }: {
   chatId: string | null;
   token: string;
   streaming: boolean;
   sendMessage: (chatId: string, query: string, token: string) => Promise<StreamedResponse | null>;
   messages: Message[];
-  streamedText: string;
   streamedTextRef: React.MutableRefObject<string>;
   pendingMetadata: Omit<StreamedResponse, 'content'> | null;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
@@ -681,6 +1014,7 @@ function useMessageMutationHandlers({
   pendingAutoPromptRef: { current: string | null };
   autoPromptTick: number;
   textareaRef: { current: HTMLTextAreaElement | null };
+  onAfterMessagePersisted: () => Promise<void>;
 }) {
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -743,6 +1077,7 @@ function useMessageMutationHandlers({
               latencyLlmMs: null,
               latencyTotalMs: latestAssistant.latency_ms ?? null,
             });
+            void onAfterMessagePersisted();
             return;
           }
           await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
@@ -773,6 +1108,7 @@ function useMessageMutationHandlers({
         latencyTotalMs: pendingMetadata?.latencyTotalMs ?? null,
       });
       toast.error('Recovered with a safe fallback answer due to empty stream content.');
+      void onAfterMessagePersisted();
       return;
     }
     const assistantMsg: Message = {
@@ -795,7 +1131,8 @@ function useMessageMutationHandlers({
     }
     setInspectorData(result);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
-  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef]);
+    void onAfterMessagePersisted();
+  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef, onAfterMessagePersisted]);
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
@@ -833,6 +1170,7 @@ export default function ChatPage() {
   const [token, setToken] = useState('');
   const [chatId, setChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<Chat[]>([]);
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [inspectedIndex, setInspectedIndex] = useState<number | null>(null);
@@ -849,7 +1187,7 @@ export default function ChatPage() {
   const loadSession = useCallback(async (t: string, targetChatId: string) => {
     const history = await getMessages(t, targetChatId);
     setChatId(targetChatId);
-    setMessages(history);
+    setMessages(history.filter((msg) => msg.role !== 'system'));
     setInspectedIndex(null);
     setInspectorData(null);
     setSessionReady(true);
@@ -857,7 +1195,8 @@ export default function ChatPage() {
   }, []);
 
   const refreshSessions = useCallback(async (t: string) => {
-    await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 100 });
+    const latest = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 100 });
+    setSessions(latest);
   }, [repoId]);
   const handleCreateQuickAsk = useCallback(async () => {
     if (!token) return;
@@ -884,6 +1223,20 @@ export default function ChatPage() {
     }
     router.push(`/repo/${repoId}/review`);
   }, [messages, repoId, router]);
+  const handleOpenSession = useCallback(async (targetChatId: string) => {
+    if (!token || streaming || targetChatId === chatId) return;
+    try {
+      await loadSession(token, targetChatId);
+      const saved = localStorage.getItem(`chat_suggestions_${targetChatId}`);
+      setSuggestions(saved ? JSON.parse(saved) : []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to open conversation');
+    }
+  }, [chatId, loadSession, streaming, token]);
+  const handleSessionsChanged = useCallback(async () => {
+    if (!token) return;
+    await refreshSessions(token);
+  }, [refreshSessions, token]);
   useChatBootstrapEffect({
     repoId,
     loadSession,
@@ -916,6 +1269,7 @@ export default function ChatPage() {
       autoPromptTick,
       messagesEndRef,
       textareaRef,
+      onAfterMessagePersisted: handleSessionsChanged,
     });
   const isDev = process.env.NODE_ENV !== 'production';
   const displayThreadStats = buildThreadStats(messages, suggestions, inspectedIndex);
@@ -934,30 +1288,43 @@ export default function ChatPage() {
         chatId={chatId}
       />
 
-      <ChatWorkspace
-        repoId={repoId}
-        sessionReady={sessionReady}
-        showEmptyState={showEmptyState}
-        messages={messages}
-        inspectedIndex={inspectedIndex}
-        streaming={streaming}
-        streamedText={streamedText}
-        error={error}
-        suggestions={suggestions}
-        isDev={isDev}
-        routedMode={routedMode}
-        input={input}
-        textareaRef={textareaRef}
-        pendingMetadata={pendingMetadata}
-        inspectorData={inspectorData}
-        messagesEndRef={messagesEndRef}
-        onInspect={handleInspect}
-        onSuggestion={handleSend}
-        onInputChange={handleInputChange}
-        onKeyDown={(e) => handleKeyDown(e, input)}
-        onSubmit={() => handleSend(input)}
-        onCancel={cancelStream}
-      />
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[20rem_minmax(0,1fr)] xl:items-start">
+        <ConversationHistoryPanel
+          token={token}
+          repoId={repoId}
+          sessions={sessions}
+          currentChatId={chatId}
+          streaming={streaming}
+          onNewChat={handleCreateQuickAsk}
+          onOpenSession={handleOpenSession}
+          onSessionsChanged={handleSessionsChanged}
+        />
+
+        <ChatWorkspace
+          repoId={repoId}
+          sessionReady={sessionReady}
+          showEmptyState={showEmptyState}
+          messages={messages}
+          inspectedIndex={inspectedIndex}
+          streaming={streaming}
+          streamedText={streamedText}
+          error={error}
+          suggestions={suggestions}
+          isDev={isDev}
+          routedMode={routedMode}
+          input={input}
+          textareaRef={textareaRef}
+          pendingMetadata={pendingMetadata}
+          inspectorData={inspectorData}
+          messagesEndRef={messagesEndRef}
+          onInspect={handleInspect}
+          onSuggestion={handleSend}
+          onInputChange={handleInputChange}
+          onKeyDown={(e) => handleKeyDown(e, input)}
+          onSubmit={() => handleSend(input)}
+          onCancel={cancelStream}
+        />
+      </div>
     </div>
   );
 }

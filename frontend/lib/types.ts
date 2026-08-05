@@ -77,11 +77,16 @@ export type ChatEvent =
 export interface Message {
   id: string;
   chat_id: string;
-  role: 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant';
   content: string;
   query_mode?: QueryMode;          // assistant only
   retrieved_files?: RetrievedFile[]; // assistant only
   latency_ms?: number;             // maps to latency_total_ms from metadata
+  token_count?: number;
+  llm_provider?: string | null;
+  llm_model?: string | null;
+  metadata?: Record<string, unknown>;
+  sequence?: number;
   created_at: string;
 }
 
@@ -97,6 +102,9 @@ export interface Chat {
   is_favorite?: boolean;
   is_archived?: boolean;
   deleted_at?: string | null;
+  last_message_at?: string | null;
+  last_message_preview?: string | null;
+  message_count?: number;
   created_at: string;
   updated_at?: string;
 }

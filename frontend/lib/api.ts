@@ -270,6 +270,16 @@ export async function deleteAllChats(token: string, repoId: string): Promise<voi
   if (!res.ok) throw new Error('Failed to delete all chats');
 }
 
+export async function deleteSelectedChats(token: string, repoId: string, chatIds: string[]): Promise<void> {
+  const params = new URLSearchParams({ repo_id: repoId });
+  const res = await fetch(apiUrl(`/api/chat/batch?${params.toString()}`), {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    body: JSON.stringify({ chat_ids: chatIds }),
+  });
+  if (!res.ok) throw new Error('Failed to delete selected chats');
+}
+
 export async function searchChats(token: string, repoId: string, query: string): Promise<ChatSearchResponse> {
   const params = new URLSearchParams({ repo_id: repoId, q: query });
   const res = await fetch(apiUrl(`/api/chat/search?${params.toString()}`), {
@@ -314,8 +324,12 @@ export async function exportRepositoryMemory(
 }
 
 /** GET /api/chat/{chat_id}/messages — full message history */
-export async function getMessages(token: string, chatId: string): Promise<Message[]> {
-  const res = await fetch(apiUrl(`/api/chat/${chatId}/messages`), {
+export async function getMessages(token: string, chatId: string, opts?: { limit?: number; offset?: number }): Promise<Message[]> {
+  const params = new URLSearchParams();
+  if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+  if (opts?.offset !== undefined) params.set('offset', String(opts.offset));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(apiUrl(`/api/chat/${chatId}/messages${suffix}`), {
     headers: authHeaders(token),
     cache: 'no-store',
   });

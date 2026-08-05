@@ -5,7 +5,7 @@
  */
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   GitBranch,
   LayoutDashboard,
@@ -18,11 +18,14 @@ import {
   Sparkles,
   Terminal,
   Clock3,
+  MessageSquare,
+  ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
-import type { Repo } from '@/lib/types';
+import { listChatSessions } from '@/lib/api';
+import type { Chat, Repo } from '@/lib/types';
 
 const NAV = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -51,6 +54,9 @@ export default function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
+  const [expandedRepoId, setExpandedRepoId] = useState<string | null>(null);
+  const [repoChats, setRepoChats] = useState<Record<string, Chat[]>>({});
+  const [loadingChatRepoId, setLoadingChatRepoId] = useState<string | null>(null);
   const isHydrated = useSyncExternalStore(
     () => () => {},
     () => true,
@@ -114,6 +120,29 @@ export default function Sidebar({
     router.push('/auth/sign-in');
     router.refresh();
     toast.success('Signed out');
+  }
+
+  async function toggleRepoChatHistory(repo: Repo) {
+    if (expandedRepoId === repo.id) {
+      setExpandedRepoId(null);
+      return;
+    }
+
+    setExpandedRepoId(repo.id);
+    if (repoChats[repo.id]) return;
+
+    setLoadingChatRepoId(repo.id);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token ?? '';
+      if (!token) return;
+      const sessions = await listChatSessions(token, repo.id, { includeArchived: true, includeDeleted: false, limit: 8 });
+      setRepoChats((prev) => ({ ...prev, [repo.id]: sessions }));
+    } catch {
+      setRepoChats((prev) => ({ ...prev, [repo.id]: [] }));
+    } finally {
+      setLoadingChatRepoId(null);
+    }
   }
 
   return (
@@ -272,28 +301,89 @@ export default function Sidebar({
               {recentRepos.map((repo) => {
                 const isActive = pathname.startsWith(`/repo/${repo.id}`);
                 const href = repo.status === 'ready' ? `/repo/${repo.id}` : `/repo/${repo.id}/indexing`;
+                const historyExpanded = expandedRepoId === repo.id;
+                const chats = repoChats[repo.id] ?? [];
                 return (
-                  <Link
-                    key={repo.id}
-                    href={href}
-                    onClick={closeMobileIfOpen}
-                    className={cn(
-                      'flex items-center gap-2 rounded-2xl px-3 py-2.5 text-sm transition-all duration-150 group',
-                      collapsed && 'justify-center px-0',
-                      isActive
-                        ? 'bg-sidebar-accent text-foreground border border-sidebar-border'
-                        : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-foreground'
-                    )}
-                    title={repo.name}
-                  >
-                    <GitBranch size={14} className="flex-shrink-0" />
-                    {!collapsed && (
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{repo.name}</div>
-                        <div className="truncate text-[11px] text-sidebar-foreground/55">{repo.index_name}</div>
+                  <div key={repo.id}>
+                    <Link
+                      href={href}
+                      onClick={closeMobileIfOpen}
+                      className={cn(
+                        'flex items-center gap-2 rounded-2xl px-3 py-2.5 text-sm transition-all duration-150 group',
+                        collapsed && 'justify-center px-0',
+                        isActive
+                          ? 'bg-sidebar-accent text-foreground border border-sidebar-border'
+                          : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-foreground'
+                      )}
+                      title={repo.name}
+                    >
+                      <GitBranch size={14} className="flex-shrink-0" />
+                      {!collapsed && (
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium">{repo.name}</div>
+                          <div className="truncate text-[11px] text-sidebar-foreground/55">{repo.index_name}</div>
+                        </div>
+                      )}
+                    </Link>
+
+                    {!collapsed && repo.status === 'ready' && (
+                      <div className="ml-5 mt-1 space-y-1 border-l border-sidebar-border/70 pl-2">
+                        <button
+                          type="button"
+                          onClick={() => void toggleRepoChatHistory(repo)}
+                          className="flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-left text-xs text-sidebar-foreground/65 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                          aria-expanded={historyExpanded}
+                        >
+                          <ChevronDown size={12} className={cn('transition-transform', !historyExpanded && '-rotate-90')} />
+                          <MessageSquare size={12} />
+                          <span className="truncate">Chat History</span>
+                        </button>
+                        {historyExpanded && (
+                          <div className="space-y-1 pb-1">
+                            {loadingChatRepoId === repo.id ? (
+                              <div className="px-2 py-1 text-[11px] text-sidebar-foreground/50">Loading…</div>
+                            ) : chats.length === 0 ? (
+                              <div className="px-2 py-1 text-[11px] text-sidebar-foreground/50">No conversations yet</div>
+                            ) : (
+                              chats.slice(0, 6).map((chat) => (
+                                <Link
+                                  key={chat.id}
+                                  href={`/repo/${repo.id}/chat`}
+                                  onClick={() => {
+                                    try {
+                                      sessionStorage.setItem(`codebase:open-chat-session:${repo.id}`, chat.id);
+                                    } catch {
+                                      // Ignore storage errors and still navigate.
+                                    }
+                                    closeMobileIfOpen();
+                                  }}
+                                  className="block truncate rounded-xl px-2 py-1.5 text-xs text-sidebar-foreground/65 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                  title={chat.title || 'Repository Overview'}
+                                >
+                                  {chat.is_pinned ? '★ ' : ''}{chat.title || 'Repository Overview'}
+                                </Link>
+                              ))
+                            )}
+                            <Link
+                              href={`/repo/${repo.id}/chat`}
+                              onClick={() => {
+                                try {
+                                  sessionStorage.setItem(`codebase:new-chat:${repo.id}`, '1');
+                                } catch {
+                                  // Ignore storage errors and still navigate.
+                                }
+                                closeMobileIfOpen();
+                              }}
+                              className="flex items-center gap-1.5 rounded-xl px-2 py-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand/10"
+                            >
+                              <Plus size={11} />
+                              New Chat
+                            </Link>
+                          </div>
+                        )}
                       </div>
                     )}
-                  </Link>
+                  </div>
                 );
               })}
             </div>

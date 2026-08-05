@@ -19,7 +19,7 @@ Note on streaming:
 
 import asyncio
 import time
-from typing import AsyncGenerator, Optional, Tuple, List
+from typing import AsyncGenerator, Optional, Tuple, List, Dict, Any
 
 from llama_index.core import Settings
 from llama_index.core.memory import ChatMemoryBuffer
@@ -189,7 +189,7 @@ def _build_history_str(memory) -> str:
     try:
         history_msgs = memory.get()
         history_str = ""
-        for msg in history_msgs[-6:]:  # last 3 turns
+        for msg in history_msgs[-40:]:
             role = msg.get("role", "")
             content = msg.get("content", "")
             if role and content:
@@ -441,10 +441,33 @@ async def _load_indexes(index_name: str):
     return await asyncio.get_event_loop().run_in_executor(None, _get_indexes, index_name)
 
 
-def _get_or_create_memory(repo_id: str, chat_id: str):
+def _hydrate_memory(memory, persisted_history: Optional[List[Dict[str, Any]]]) -> bool:
+    if not persisted_history:
+        return False
+
+    try:
+        from llama_index.core.base.llms.types import ChatMessage
+
+        hydrated = False
+        for item in persisted_history:
+            role = (item.get("role") or "").lower()
+            content = (item.get("content") or "").strip()
+            if role not in {"system", "user", "assistant"} or not content:
+                continue
+            memory.put(ChatMessage(role=role, content=content))
+            hydrated = True
+        return hydrated
+    except Exception as e:
+        logger.warning(f"Failed to hydrate chat memory from persisted history: {e}")
+        return False
+
+
+def _get_or_create_memory(repo_id: str, chat_id: str, persisted_history: Optional[List[Dict[str, Any]]] = None):
     _chat_engine, memory, _last_mode = _get_or_init_session(repo_id, chat_id)
     if memory is None:
         memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
+        if _hydrate_memory(memory, persisted_history):
+            _save_session(repo_id, chat_id, None, memory, _last_mode)
     return memory
 
 
@@ -468,12 +491,13 @@ async def _prepare_stream_prompt(
     repo_id: str,
     chat_id: str,
     memory_context: Optional[str],
+    persisted_history: Optional[List[Dict[str, Any]]] = None,
 ):
     from app.retrieval.query_router import classify_query
     from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
 
     vector_index, bm25_retriever = await _load_indexes(index_name)
-    memory = _get_or_create_memory(repo_id, chat_id)
+    memory = _get_or_create_memory(repo_id, chat_id, persisted_history)
 
     resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
     reranked_nodes, t_retrieval_ms = await _retrieve_ranked_nodes(
@@ -543,6 +567,7 @@ async def stream_chat_response(
     repo_id: str,
     chat_id: str,
     memory_context: Optional[str] = None,
+    persisted_history: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     SSE generator for /chat/{chat_id}/message/stream.
@@ -575,6 +600,7 @@ async def stream_chat_response(
             repo_id=repo_id,
             chat_id=chat_id,
             memory_context=memory_context,
+            persisted_history=persisted_history,
         )
         memory = prep["memory"]
         resolved_query = prep["resolved_query"]

@@ -2,6 +2,7 @@
 
 import sys
 import os
+import pytest
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -48,6 +49,34 @@ def test_update_session_flags_sets_title_and_archive(monkeypatch):
     assert captured["is_favorite"] is False
     assert captured["is_archived"] is True
     assert "archived_at" in captured
+
+
+def test_update_session_flags_blank_title_uses_repository_overview(monkeypatch):
+    captured = {}
+
+    def fake_update(_supabase, _chat_id, fields):
+        captured.update(fields)
+
+    monkeypatch.setattr("api.services.supabase_service.update_chat_fields", fake_update)
+    chat_session_service.update_session_flags(MagicMock(), "c1", title="   ")
+    assert captured["title"] == "Repository Overview"
+
+
+@pytest.mark.asyncio
+async def test_generate_conversation_title_uses_non_generic_fallback(monkeypatch):
+    async def fake_generate(_prompt):
+        raise RuntimeError("provider unavailable")
+
+    import types
+    fake_module = types.SimpleNamespace(generate_with_fallback=fake_generate)
+    monkeypatch.setitem(sys.modules, "app.services.llm_fallback", fake_module)
+
+    title = await chat_session_service.generate_conversation_title([
+        "Can you review the authentication flow and JWT refresh handling?"
+    ])
+    assert title != "New Chat"
+    assert len(title.split()) <= 5
+    assert "Authentication" in title
 
 
 def test_soft_delete_and_restore(monkeypatch):

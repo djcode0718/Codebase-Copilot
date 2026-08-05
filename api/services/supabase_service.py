@@ -281,6 +281,9 @@ def create_chat(
         "is_favorite": False,
         "is_archived": False,
         "deleted_at": None,
+        "last_message_at": None,
+        "last_message_preview": None,
+        "message_count": 0,
     }
     try:
         result = supabase.table("chats").insert(record).execute()
@@ -288,7 +291,17 @@ def create_chat(
     except Exception as e:
         if not _is_missing_column_error(
             e,
-            ["session_type", "is_pinned", "is_favorite", "is_archived", "deleted_at", "archived_at"],
+            [
+                "session_type",
+                "is_pinned",
+                "is_favorite",
+                "is_archived",
+                "deleted_at",
+                "archived_at",
+                "last_message_at",
+                "last_message_preview",
+                "message_count",
+            ],
         ):
             raise
         # Legacy chats schema fallback: keep only stable columns.
@@ -443,6 +456,23 @@ def delete_all_chats_for_repo(supabase: Client, repo_id: str, user_id: str) -> N
         supabase.table("chats").delete().eq("repo_id", repo_id).eq("user_id", user_id).execute()
 
 
+def soft_delete_chats(supabase: Client, *, chat_ids: List[str], user_id: str, repo_id: Optional[str] = None) -> int:
+    ids = [cid for cid in chat_ids if cid]
+    if not ids:
+        return 0
+
+    payload = {
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    query = supabase.table("chats").update(payload).eq("user_id", user_id).in_("id", ids)
+    if repo_id:
+        query = query.eq("repo_id", repo_id)
+    result = query.execute()
+    data = getattr(result, "data", None)
+    return len(data) if isinstance(data, list) else len(ids)
+
+
 # ── Messages ──────────────────────────────────────────────────────────────────
 
 def save_message(
@@ -453,12 +483,18 @@ def save_message(
     query_mode: Optional[str] = None,
     retrieved_files: Optional[List[Dict[str, Any]]] = None,
     latency_ms: Optional[int] = None,
+    token_count: Optional[int] = None,
+    llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    next_sequence = _next_message_sequence(supabase, chat_id)
     record: Dict[str, Any] = {
         "id": str(uuid.uuid4()),
         "chat_id": chat_id,
         "role": role,
         "content": content,
+        "sequence": next_sequence,
     }
     if query_mode is not None:
         record["query_mode"] = query_mode
@@ -466,20 +502,111 @@ def save_message(
         record["retrieved_files"] = retrieved_files
     if latency_ms is not None:
         record["latency_ms"] = latency_ms
+    if token_count is not None:
+        record["token_count"] = token_count
+    if llm_provider is not None:
+        record["llm_provider"] = llm_provider
+    if llm_model is not None:
+        record["llm_model"] = llm_model
+    if metadata:
+        record["metadata"] = metadata
 
-    result = supabase.table("messages").insert(record).execute()
-    return result.data[0] if result.data else record
+    try:
+        result = supabase.table("messages").insert(record).execute()
+    except Exception as e:
+        if not _is_missing_column_error(e, ["token_count", "llm_provider", "llm_model", "metadata", "sequence"]):
+            raise
+        legacy_record = {k: v for k, v in record.items() if k in {"id", "chat_id", "role", "content", "query_mode", "retrieved_files", "latency_ms"}}
+        result = supabase.table("messages").insert(legacy_record).execute()
+        record = legacy_record
+
+    saved = result.data[0] if result.data else record
+    _touch_chat_after_message(supabase, chat_id, saved)
+    return saved
 
 
-def get_messages_for_chat(supabase: Client, chat_id: str) -> List[Dict[str, Any]]:
-    result = (
-        supabase.table("messages")
-        .select("*")
-        .eq("chat_id", chat_id)
-        .order("created_at", desc=False)
-        .execute()
-    )
-    return result.data or []
+def _next_message_sequence(supabase: Client, chat_id: str) -> int:
+    try:
+        result = (
+            supabase.table("messages")
+            .select("sequence")
+            .eq("chat_id", chat_id)
+            .order("sequence", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(result, "data", None) or []
+        current = rows[0].get("sequence") if rows else None
+        return int(current or 0) + 1
+    except Exception:
+        return 1
+
+
+def _touch_chat_after_message(supabase: Client, chat_id: str, message: Dict[str, Any]) -> None:
+    now = message.get("created_at") or datetime.now(timezone.utc).isoformat()
+    preview = (message.get("content") or "").strip().replace("\n", " ")[:240]
+    payload: Dict[str, Any] = {
+        "updated_at": now,
+        "last_message_at": now,
+        "last_message_preview": preview,
+    }
+    try:
+        payload["message_count"] = count_messages_for_chat(supabase, chat_id)
+        supabase.table("chats").update(payload).eq("id", chat_id).execute()
+    except Exception as e:
+        if not _is_missing_column_error(e, ["last_message_at", "last_message_preview", "message_count"]):
+            logger.warning(f"Failed to update chat message metadata for chat_id='{chat_id}': {e}")
+        try:
+            supabase.table("chats").update({"updated_at": now}).eq("id", chat_id).execute()
+        except Exception:
+            pass
+
+
+def count_messages_for_chat(supabase: Client, chat_id: str) -> int:
+    try:
+        result = supabase.table("messages").select("id").eq("chat_id", chat_id).execute()
+        data = getattr(result, "data", None)
+        if isinstance(data, list):
+            return len(data)
+    except Exception:
+        pass
+    try:
+        return len(get_messages_for_chat(supabase, chat_id))
+    except Exception:
+        return 0
+
+
+def get_messages_for_chat(
+    supabase: Client,
+    chat_id: str,
+    *,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    try:
+        query = (
+            supabase.table("messages")
+            .select("*")
+            .eq("chat_id", chat_id)
+            .order("created_at", desc=False)
+        )
+        if limit is not None:
+            query = query.range(offset, offset + max(1, limit) - 1)
+        result = query.execute()
+        return result.data or []
+    except Exception as e:
+        if not _is_missing_column_error(e, ["sequence"]):
+            raise
+        query = (
+            supabase.table("messages")
+            .select("*")
+            .eq("chat_id", chat_id)
+            .order("created_at", desc=False)
+        )
+        if limit is not None:
+            query = query.range(offset, offset + max(1, limit) - 1)
+        result = query.execute()
+        return result.data or []
 
 
 def get_recent_messages_for_repo(

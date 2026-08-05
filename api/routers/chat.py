@@ -24,6 +24,8 @@ from api.models.chat import (
     MessageResponse,
     ChatListItem,
     UpdateChatRequest,
+    AddMessageRequest,
+    DeleteChatsRequest,
     ChatSearchResponse,
     ChatSearchResultItem,
     ConversationSummaryResponse,
@@ -43,6 +45,7 @@ from api.services.chat_session_service import (
     update_session_flags,
     soft_delete_session,
     restore_session,
+    generate_conversation_title,
 )
 from api.services.chat_search_service import search_repository_conversations
 from api.services.chat_history_service import get_chat_history
@@ -116,11 +119,11 @@ def _persist_user_message(supabase: Client, chat_id: str, query: str):
         logger.warning(f"Failed to persist user message: {e}")
 
 
-def _maybe_update_first_message_title(supabase: Client, chat_id: str, query: str):
+async def _maybe_update_first_message_title(supabase: Client, chat_id: str, prompts: List[str]):
     try:
         existing_messages = supabase_service.get_messages_for_chat(supabase, chat_id)
         if len(existing_messages) <= 1:  # only the user msg we just saved
-            title = query[:60] + ("..." if len(query) > 60 else "")
+            title = await generate_conversation_title(prompts)
             supabase_service.update_chat_title(supabase, chat_id, title)
     except Exception:
         pass
@@ -226,6 +229,7 @@ async def stream_message(
         chat_id=chat_id,
         max_items=3,
     )
+    persisted_history = get_chat_history(supabase, chat_id)
     current_context = _build_current_conversation_context(supabase, chat_id)
     memory_context = _build_memory_context(memory_hits, current_context)
 
@@ -246,7 +250,7 @@ async def stream_message(
     _persist_user_message(supabase, chat_id, query)
 
     # Update chat title on first message
-    _maybe_update_first_message_title(supabase, chat_id, query)
+    await _maybe_update_first_message_title(supabase, chat_id, [m.get("content", "") for m in persisted_history if m.get("role") == "user"] + [query])
 
     async def event_generator():
         """
@@ -258,7 +262,14 @@ async def stream_message(
         event_types_seen: list = []
 
         try:
-            async for sse_line in stream_chat_response(query, index_name, repo_id, chat_id, memory_context=memory_context):
+            async for sse_line in stream_chat_response(
+                query,
+                index_name,
+                repo_id,
+                chat_id,
+                memory_context=memory_context,
+                persisted_history=persisted_history,
+            ):
                 yield sse_line
 
                 # Parse events to collect full response and metadata
@@ -303,6 +314,15 @@ async def stream_message(
                     query_mode=metadata_event.get("query_mode") if metadata_event else None,
                     retrieved_files=metadata_event.get("retrieved_files") if metadata_event else None,
                     latency_ms=metadata_event.get("latency_total_ms") if metadata_event else None,
+                    token_count=token_count,
+                    llm_provider=metadata_event.get("llm_provider") if metadata_event else None,
+                    llm_model=metadata_event.get("llm_model") if metadata_event else None,
+                    metadata={
+                        "repo_id": repo_id,
+                        "chat_id": chat_id,
+                        "latency_retrieval_ms": metadata_event.get("latency_retrieval_ms") if metadata_event else None,
+                        "latency_llm_ms": metadata_event.get("latency_llm_ms") if metadata_event else None,
+                    },
                 )
 
                 llm_provider = None
@@ -406,6 +426,8 @@ async def search_chats(
 @router.get("/{chat_id}/messages", response_model=List[MessageResponse])
 async def get_messages(
     chat_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
@@ -415,8 +437,33 @@ async def get_messages(
     """
     _ensure_chat_access(supabase, user_id, chat_id)
 
-    messages = supabase_service.get_messages_for_chat(supabase, chat_id)
+    messages = supabase_service.get_messages_for_chat(supabase, chat_id, limit=limit, offset=offset)
     return [MessageResponse(**m) for m in messages]
+
+
+@router.post("/{chat_id}/messages", response_model=MessageResponse)
+async def add_message(
+    chat_id: str,
+    body: AddMessageRequest,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Persist a message for a chat session after enforcing conversation ownership."""
+    _ensure_chat_access(supabase, user_id, chat_id)
+    saved = supabase_service.save_message(
+        supabase,
+        chat_id,
+        role=body.role,
+        content=body.content,
+        query_mode=body.query_mode,
+        retrieved_files=[r.model_dump() for r in (body.retrieved_files or [])] if body.retrieved_files else None,
+        latency_ms=body.latency_ms,
+        token_count=body.token_count,
+        llm_provider=body.llm_provider,
+        llm_model=body.llm_model,
+        metadata=body.metadata,
+    )
+    return MessageResponse(**saved)
 
 
 @router.patch("/{chat_id}", response_model=ChatListItem)
@@ -673,6 +720,18 @@ async def delete_saved_report(
     return {"message": "Report deleted."}
 
 
+@router.delete("/batch")
+async def delete_multiple_chats(
+    body: DeleteChatsRequest,
+    repo_id: str = Query(..., description="Repository ID"),
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    _ensure_repo_access(supabase, user_id, repo_id)
+    deleted_count = supabase_service.soft_delete_chats(supabase, chat_ids=body.chat_ids, user_id=user_id, repo_id=repo_id)
+    return {"message": "Chats moved to deleted state.", "deleted_count": deleted_count}
+
+
 @router.delete("/{chat_id}")
 async def delete_chat(
     chat_id: str,
@@ -687,6 +746,7 @@ async def delete_chat(
         return {"message": "Chat permanently deleted."}
     soft_delete_session(supabase, chat_id)
     return {"message": "Chat moved to deleted state."}
+
 
 
 @router.post("/{chat_id}/restore")
