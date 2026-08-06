@@ -190,14 +190,73 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       }
     }
 
-    const latestCreatedAt = historyPoints.length ? historyPoints[historyPoints.length - 1].created_at : null;
-    return historyPoints.map((point) => ({
-      name:
-        latestCreatedAt && point.created_at === latestCreatedAt
-          ? 'Today'
-          : new Date(point.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      score: point.repository_health,
-    }));
+    if (historyPoints.length === 0) return [];
+
+    // Build a 30-day daily timeline by carrying forward the most recent score
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
+
+    // Map each history point to its date key (YYYY-MM-DD)
+    const dateToScore = new Map<string, number>();
+    for (const point of historyPoints) {
+      const dateKey = new Date(point.created_at).toISOString().slice(0, 10);
+      dateToScore.set(dateKey, point.repository_health);
+    }
+
+    const dailyPoints: { name: string; score: number }[] = [];
+    // Start with earliest known score as carry-forward seed
+    let lastScore = historyPoints[0].repository_health;
+
+    for (let d = new Date(thirtyDaysAgo); d <= now; d.setDate(d.getDate() + 1)) {
+      const dateKey = d.toISOString().slice(0, 10);
+      const todayKey = now.toISOString().slice(0, 10);
+
+      if (dateToScore.has(dateKey)) {
+        lastScore = dateToScore.get(dateKey)!;
+      }
+
+      // Only include points from the first actual data point onward
+      const firstDataDate = new Date(historyPoints[0].created_at).toISOString().slice(0, 10);
+      if (dateKey < firstDataDate) continue;
+
+      const label = dateKey === todayKey
+        ? 'Today'
+        : new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+      dailyPoints.push({ name: label, score: lastScore });
+    }
+
+    return dailyPoints;
+  }, [history, run]);
+
+  // Compute effective trend: use backend trend if non-zero, otherwise derive from chart history
+  const effectiveTrend = useMemo(() => {
+    if (run && run.top_level.trend !== 0) return run.top_level.trend;
+    if (chartData.length >= 2) {
+      return chartData[chartData.length - 1].score - chartData[0].score;
+    }
+    return 0;
+  }, [run, chartData]);
+
+  // Compute per-category effective trends from history
+  const categoryEffectiveTrends = useMemo(() => {
+    const trends = new Map<string, number>();
+    if (!history || history.points.length < 2 || !run) return trends;
+    const sorted = [...history.points].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    const earliest = sorted[0];
+    const latest = sorted[sorted.length - 1];
+    if (!earliest.category_scores || !latest.category_scores) return trends;
+    for (const cat of CATEGORY_ORDER) {
+      const oldScore = earliest.category_scores[cat];
+      const newScore = latest.category_scores[cat];
+      if (oldScore != null && newScore != null) {
+        trends.set(cat, newScore - oldScore);
+      }
+    }
+    return trends;
   }, [history, run]);
 
   async function handleRunAnalysis() {
@@ -268,9 +327,9 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1"><Clock3 size={12} /> {run.top_level.status}</span>
-              <span className={cn('inline-flex items-center gap-1', trendTone(run.top_level.trend))}>
-                {run.top_level.trend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                {run.top_level.trend >= 0 ? '+' : ''}{run.top_level.trend}
+              <span className={cn('inline-flex items-center gap-1', trendTone(effectiveTrend))}>
+                {effectiveTrend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                {effectiveTrend >= 0 ? '+' : ''}{effectiveTrend}
               </span>
               <span>Size: {run.top_level.repository_size}</span>
               <span>Lang: {run.top_level.language_detection.join(', ') || 'Auto'}</span>
@@ -304,7 +363,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
             <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">Health Trend (30 days)</p>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 10, left: -18, bottom: 0 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+                <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" interval={Math.max(0, Math.floor(chartData.length / 5) - 1)} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                 <Tooltip />
                 <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: 'hsl(var(--primary))' }} activeDot={{ r: 5 }} />
@@ -333,10 +392,15 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                   <span className={cn('rounded-full border px-2 py-0.5 text-xs', severityBadge(cat.score))}>{cat.score}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{cat.explanation}</p>
-                <div className={cn('mt-2 text-xs inline-flex items-center gap-1', trendTone(cat.trend))}>
-                  {cat.trend >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                  {cat.trend >= 0 ? '+' : ''}{cat.trend}
-                </div>
+                {(() => {
+                  const t = cat.trend !== 0 ? cat.trend : (categoryEffectiveTrends.get(cat.category) ?? 0);
+                  return (
+                    <div className={cn('mt-2 text-xs inline-flex items-center gap-1', trendTone(t))}>
+                      {t >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                      {t >= 0 ? '+' : ''}{t}
+                    </div>
+                  );
+                })()}
               </button>
             ))}
           </div>
