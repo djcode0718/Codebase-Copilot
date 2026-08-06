@@ -57,8 +57,140 @@ function EvalEmptyState({ onRun, running }: { onRun: () => void; running: boolea
   );
 }
 
-export default function EvalPage() {
-  const { id: repoId } = useParams<{ id: string }>();
+function EvalRunLog({ runLog }: { runLog: string[] }) {
+  if (runLog.length === 0) return null;
+  return (
+    <div className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5">
+      <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+        <Sparkles size={11} className="text-brand" />
+        Run log
+      </div>
+      <div className="space-y-1">
+        {runLog.map((msg, i) => (
+          <p key={i} className="text-xs font-code text-muted-foreground">{msg}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EvalLoadingSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+      {[...Array(5)].map((_, i) => (
+        <div key={i} className="h-24 rounded-[1.25rem] border border-border bg-card/60 animate-pulse" />
+      ))}
+    </div>
+  );
+}
+
+function EvalBadges({ evalData }: { evalData: EvalSummary }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
+        <CheckCircle2 size={12} className="text-brand" />
+        {evalData.total_queries ?? '—'} test queries
+      </span>
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
+        <Zap size={12} className={evalData.colbert_enabled ? 'text-brand' : 'text-muted-foreground'} />
+        ColBERT reranking: {evalData.colbert_enabled ? 'enabled' : 'disabled'}
+      </span>
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
+        <Clock3 size={12} />
+        {new Date(evalData.created_at).toLocaleString()}
+      </span>
+    </div>
+  );
+}
+
+function QualityMetrics({ evalData }: { evalData: EvalSummary }) {
+  return (
+    <div className="space-y-3">
+      <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+        Quality metrics
+      </h2>
+      <div className="grid grid-cols-1 gap-3">
+        {METRIC_CARDS.map((m) => {
+          const value = evalData[m.key as keyof EvalSummary] as number;
+          return (
+            <div key={m.key} className="rounded-[1.25rem] border border-border bg-card/80 px-4 py-3 flex items-center justify-between shadow-sm shadow-black/5">
+              <div>
+                <p className="text-xs text-muted-foreground">{m.label}</p>
+                <p className="text-xs text-muted-foreground/60 mt-0.5">{m.desc}</p>
+              </div>
+              <span className={cn('font-heading font-bold text-xl', m.color)}>
+                {m.fmt(value ?? 0)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function QualityRadar({ radarData }: { radarData: { metric: string; value: number }[] }) {
+  return (
+    <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5">
+      <div className="mb-4 flex items-center gap-2">
+        <Sparkles size={15} className="text-brand" />
+        <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Quality radar</h2>
+      </div>
+      <ResponsiveContainer width="100%" height={320}>
+        <RadarChart data={radarData}>
+          <PolarGrid stroke="#334155" />
+          <PolarAngleAxis
+            dataKey="metric"
+            tick={{ fill: 'currentColor', fontSize: 11, fontFamily: 'IBM Plex Sans' }}
+          />
+          <Radar
+            dataKey="value"
+            stroke="#22C55E"
+            fill="#22C55E"
+            fillOpacity={0.16}
+            strokeWidth={2}
+          />
+          <Tooltip
+            contentStyle={{
+              background: 'var(--popover)',
+              border: '1px solid var(--border)',
+              borderRadius: '14px',
+              fontSize: '12px',
+              color: 'var(--popover-foreground)',
+            }}
+            formatter={(value: unknown) => [`${Number(value || 0).toFixed(1)}%`, 'Score']}
+          />
+        </RadarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function LatencySection({ evalData }: { evalData: EvalSummary }) {
+  return (
+    <div>
+      <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-3">
+        Average latency
+      </h2>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {LATENCY_CARDS.map((lc) => {
+          const value = evalData[lc.key as keyof EvalSummary] as number;
+          return (
+            <div key={lc.key} className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5">
+              <div className="flex items-center gap-2 mb-2">
+                <span className={cn('w-2 h-2 rounded-full', lc.color)} />
+                <span className="text-xs text-muted-foreground">{lc.label}</span>
+              </div>
+              <p className="font-heading font-bold text-lg">{ms(value ?? 0)}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function useEvalData(repoId: string) {
   const [token, setToken] = useState('');
   const [evalData, setEvalData] = useState<EvalSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -121,18 +253,24 @@ export default function EvalPage() {
     setRunLog([]);
   }
 
-  function buildRadarData() {
-    if (!evalData) return [];
-    return [
-      { metric: 'Hit Rate',    value: evalData.hit_rate * 100 },
-      { metric: 'MRR',         value: evalData.mrr * 100 },
-      { metric: 'Faithfulness',value: evalData.avg_faithfulness * 100 },
-      { metric: 'Relevancy',   value: evalData.avg_relevancy * 100 },
-      { metric: 'Mode Acc.',   value: evalData.mode_accuracy * 100 },
-    ];
-  }
+  return { token, evalData, loading, running, runLog, runEval };
+}
 
-  const radarData = buildRadarData();
+function buildRadarData(evalData: EvalSummary | null) {
+  if (!evalData) return [];
+  return [
+    { metric: 'Hit Rate',    value: evalData.hit_rate * 100 },
+    { metric: 'MRR',         value: evalData.mrr * 100 },
+    { metric: 'Faithfulness',value: evalData.avg_faithfulness * 100 },
+    { metric: 'Relevancy',   value: evalData.avg_relevancy * 100 },
+    { metric: 'Mode Acc.',   value: evalData.mode_accuracy * 100 },
+  ];
+}
+
+export default function EvalPage() {
+  const { id: repoId } = useParams<{ id: string }>();
+  const { evalData, loading, running, runLog, runEval } = useEvalData(repoId);
+  const radarData = buildRadarData(evalData);
 
   return (
     <div className="space-y-6">
@@ -171,27 +309,9 @@ export default function EvalPage() {
         </div>
       </motion.section>
 
-      {runLog.length > 0 && (
-        <div className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5">
-          <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            <Sparkles size={11} className="text-brand" />
-            Run log
-          </div>
-          <div className="space-y-1">
-            {runLog.map((msg, i) => (
-              <p key={i} className="text-xs font-code text-muted-foreground">{msg}</p>
-            ))}
-          </div>
-        </div>
-      )}
+      <EvalRunLog runLog={runLog} />
 
-      {loading && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-24 rounded-[1.25rem] border border-border bg-card/60 animate-pulse" />
-          ))}
-        </div>
-      )}
+      {loading && <EvalLoadingSkeleton />}
 
       {!loading && !evalData && (
         <EvalEmptyState onRun={runEval} running={running} />
@@ -203,99 +323,12 @@ export default function EvalPage() {
           animate={{ opacity: 1 }}
           className="space-y-6"
         >
-
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
-              <CheckCircle2 size={12} className="text-brand" />
-              {evalData.total_queries ?? '—'} test queries
-            </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
-              <Zap size={12} className={evalData.colbert_enabled ? 'text-brand' : 'text-muted-foreground'} />
-              ColBERT reranking: {evalData.colbert_enabled ? 'enabled' : 'disabled'}
-            </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
-              <Clock3 size={12} />
-              {new Date(evalData.created_at).toLocaleString()}
-            </span>
-          </div>
-
+          <EvalBadges evalData={evalData} />
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_0.95fr]">
-            <div className="space-y-3">
-              <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Quality metrics
-              </h2>
-              <div className="grid grid-cols-1 gap-3">
-                {METRIC_CARDS.map((m) => {
-                  const value = evalData[m.key as keyof EvalSummary] as number;
-                  return (
-                    <div key={m.key} className="rounded-[1.25rem] border border-border bg-card/80 px-4 py-3 flex items-center justify-between shadow-sm shadow-black/5">
-                      <div>
-                        <p className="text-xs text-muted-foreground">{m.label}</p>
-                        <p className="text-xs text-muted-foreground/60 mt-0.5">{m.desc}</p>
-                      </div>
-                      <span className={cn('font-heading font-bold text-xl', m.color)}>
-                        {m.fmt(value ?? 0)}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5">
-              <div className="mb-4 flex items-center gap-2">
-                <Sparkles size={15} className="text-brand" />
-                <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">Quality radar</h2>
-              </div>
-              <ResponsiveContainer width="100%" height={320}>
-                <RadarChart data={radarData}>
-                  <PolarGrid stroke="#334155" />
-                  <PolarAngleAxis
-                    dataKey="metric"
-                    tick={{ fill: 'currentColor', fontSize: 11, fontFamily: 'IBM Plex Sans' }}
-                  />
-                  <Radar
-                    dataKey="value"
-                    stroke="#22C55E"
-                    fill="#22C55E"
-                    fillOpacity={0.16}
-                    strokeWidth={2}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: 'var(--popover)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '14px',
-                      fontSize: '12px',
-                      color: 'var(--popover-foreground)',
-                    }}
-                    formatter={(value: unknown) => [`${Number(value || 0).toFixed(1)}%`, 'Score']}
-                  />
-                </RadarChart>
-              </ResponsiveContainer>
-            </div>
+            <QualityMetrics evalData={evalData} />
+            <QualityRadar radarData={radarData} />
           </div>
-
-          <div>
-            <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-3">
-              Average latency
-            </h2>
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              {LATENCY_CARDS.map((lc) => {
-                const value = evalData[lc.key as keyof EvalSummary] as number;
-                return (
-                  <div key={lc.key} className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-sm shadow-black/5">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={cn('w-2 h-2 rounded-full', lc.color)} />
-                      <span className="text-xs text-muted-foreground">{lc.label}</span>
-                    </div>
-                    <p className="font-heading font-bold text-lg">{ms(value ?? 0)}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <LatencySection evalData={evalData} />
         </motion.div>
       )}
     </div>

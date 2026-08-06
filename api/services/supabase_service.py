@@ -16,19 +16,13 @@ from supabase import Client
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
-_HEALTH_SCHEMA_AVAILABLE: Optional[bool] = None
-_HEALTH_SCHEMA_LAST_CHECKED_AT: Optional[datetime] = None
 _HEALTH_SCHEMA_CHECK_TTL_SECONDS = 60
-_HEALTH_SCHEMA_WARNED = False
-_MISSING_REPO_MEMORY_TABLE_WARNED: Set[str] = set()
-_REVIEW_SCHEMA_AVAILABLE: Optional[bool] = None
-_REVIEW_SCHEMA_LAST_CHECKED_AT: Optional[datetime] = None
 _REVIEW_SCHEMA_CHECK_TTL_SECONDS = 60
-_REVIEW_SCHEMA_WARNED = False
+_MISSING_REPO_MEMORY_TABLE_WARNED: Set[str] = set()
 
 
 def _is_missing_column_error(err: Exception, columns: List[str]) -> bool:
-    """Detect PostgREST/Supabase missing-column errors for legacy schemas."""
+    """Detect PostgREST/Supabase missing-column errors for older schemas."""
     msg = str(err)
     lowered = msg.lower()
     if "column" not in lowered:
@@ -67,84 +61,76 @@ def _warn_missing_repo_memory_table_once(table_name: str) -> None:
     _MISSING_REPO_MEMORY_TABLE_WARNED.add(table_name)
 
 
-def is_repository_health_schema_available(
-    supabase: Client,
-    *,
-    force_refresh: bool = False,
-) -> bool:
-    global _HEALTH_SCHEMA_AVAILABLE, _HEALTH_SCHEMA_LAST_CHECKED_AT, _HEALTH_SCHEMA_WARNED
+class _SchemaAvailabilityChecker:
+    """Reusable cached schema availability check to eliminate duplicate logic."""
 
-    now = datetime.now(timezone.utc)
-    if (
-        not force_refresh
-        and _HEALTH_SCHEMA_LAST_CHECKED_AT is not None
-        and (now - _HEALTH_SCHEMA_LAST_CHECKED_AT).total_seconds() < _HEALTH_SCHEMA_CHECK_TTL_SECONDS
-        and _HEALTH_SCHEMA_AVAILABLE is not None
-    ):
-        return bool(_HEALTH_SCHEMA_AVAILABLE)
+    def __init__(
+        self,
+        table_name: str,
+        missing_error_detector: Any,
+        ttl_seconds: int,
+        warning_message: str,
+    ) -> None:
+        self._table_name = table_name
+        self._missing_error_detector = missing_error_detector
+        self._ttl_seconds = ttl_seconds
+        self._warning_message = warning_message
+        self._available: Optional[bool] = None
+        self._last_checked_at: Optional[datetime] = None
+        self._warned = False
 
-    try:
-        (
-            supabase.table("repository_health_runs")
-            .select("id")
-            .limit(1)
-            .execute()
-        )
-        _HEALTH_SCHEMA_AVAILABLE = True
-        _HEALTH_SCHEMA_LAST_CHECKED_AT = now
-        return True
-    except Exception as e:
-        _HEALTH_SCHEMA_AVAILABLE = False
-        _HEALTH_SCHEMA_LAST_CHECKED_AT = now
-        if _is_missing_health_table_error(e):
-            if not _HEALTH_SCHEMA_WARNED:
-                logger.warning(
-                    "Repository health schema is missing. Apply migration before enabling persisted health runs."
-                )
-                _HEALTH_SCHEMA_WARNED = True
+    def is_available(self, supabase: Client, *, force_refresh: bool = False) -> bool:
+        now = datetime.now(timezone.utc)
+        if (
+            not force_refresh
+            and self._last_checked_at is not None
+            and (now - self._last_checked_at).total_seconds() < self._ttl_seconds
+            and self._available is not None
+        ):
+            return bool(self._available)
+
+        try:
+            supabase.table(self._table_name).select("id").limit(1).execute()
+            self._available = True
+            self._last_checked_at = now
+            return True
+        except Exception as e:
+            self._available = False
+            self._last_checked_at = now
+            if self._missing_error_detector(e):
+                if not self._warned:
+                    logger.warning(self._warning_message)
+                    self._warned = True
+                return False
+            logger.warning(f"{self._table_name} schema availability check failed: {e}")
             return False
-        logger.warning(f"Health schema availability check failed: {e}")
-        return False
+
+
+_health_checker = _SchemaAvailabilityChecker(
+    table_name="repository_health_runs",
+    missing_error_detector=_is_missing_health_table_error,
+    ttl_seconds=_HEALTH_SCHEMA_CHECK_TTL_SECONDS,
+    warning_message="Repository health schema is missing. Apply migration before enabling persisted health runs.",
+)
+
+_review_checker = _SchemaAvailabilityChecker(
+    table_name="repository_reviews",
+    missing_error_detector=_is_missing_review_table_error,
+    ttl_seconds=_REVIEW_SCHEMA_CHECK_TTL_SECONDS,
+    warning_message="Repository review schema is missing. Apply migration before enabling persisted review runs.",
+)
+
+
+def is_repository_health_schema_available(
+    supabase: Client, *, force_refresh: bool = False,
+) -> bool:
+    return _health_checker.is_available(supabase, force_refresh=force_refresh)
 
 
 def is_repository_review_schema_available(
-    supabase: Client,
-    *,
-    force_refresh: bool = False,
+    supabase: Client, *, force_refresh: bool = False,
 ) -> bool:
-    global _REVIEW_SCHEMA_AVAILABLE, _REVIEW_SCHEMA_LAST_CHECKED_AT, _REVIEW_SCHEMA_WARNED
-
-    now = datetime.now(timezone.utc)
-    if (
-        not force_refresh
-        and _REVIEW_SCHEMA_LAST_CHECKED_AT is not None
-        and (now - _REVIEW_SCHEMA_LAST_CHECKED_AT).total_seconds() < _REVIEW_SCHEMA_CHECK_TTL_SECONDS
-        and _REVIEW_SCHEMA_AVAILABLE is not None
-    ):
-        return bool(_REVIEW_SCHEMA_AVAILABLE)
-
-    try:
-        (
-            supabase.table("repository_reviews")
-            .select("id")
-            .limit(1)
-            .execute()
-        )
-        _REVIEW_SCHEMA_AVAILABLE = True
-        _REVIEW_SCHEMA_LAST_CHECKED_AT = now
-        return True
-    except Exception as e:
-        _REVIEW_SCHEMA_AVAILABLE = False
-        _REVIEW_SCHEMA_LAST_CHECKED_AT = now
-        if _is_missing_review_table_error(e):
-            if not _REVIEW_SCHEMA_WARNED:
-                logger.warning(
-                    "Repository review schema is missing. Apply migration before enabling persisted review runs."
-                )
-                _REVIEW_SCHEMA_WARNED = True
-            return False
-        logger.warning(f"Review schema availability check failed: {e}")
-        return False
+    return _review_checker.is_available(supabase, force_refresh=force_refresh)
 
 
 # ── Repositories ──────────────────────────────────────────────────────────────
@@ -304,7 +290,7 @@ def create_chat(
             ],
         ):
             raise
-        # Chats schema backward-compat fallback: keep only stable columns.
+        # Chats schema graceful fallback: keep only stable columns.
         legacy_record = {
             "id": record["id"],
             "user_id": user_id,
@@ -339,7 +325,7 @@ def get_chats_for_repo(
         if isinstance(data, list):
             return data
 
-        # Backward-compatible fallback for minimal/mocked adapters without .is_/.range.
+        # Simplified fallback for minimal/mocked adapters without .is_/.range.
         fallback = (
             supabase.table("chats")
             .select("*")

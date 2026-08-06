@@ -175,125 +175,80 @@ export default function RepositoryReviewPage() {
     return 74;
   }, [selectedFile]);
 
-  async function runRibbonReview(type: string) {
-    if (!token || !selectedFilePath) return;
+  async function runRibbonAction<T>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> {
+    if (!token || !selectedFilePath) return undefined;
     try {
-      setRibbonAction(type);
-      const result = await runExplorerFileReview(token, repoId, { path: selectedFilePath, review_type: type });
-      setRibbonReview(result);
-      toast.success(`${type.replace('_', ' ')} complete`);
+      setRibbonAction(actionName);
+      const result = await fn();
+      if (successMsg) toast.success(successMsg);
+      return result;
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Action failed');
+      toast.error(err instanceof Error ? err.message : `${actionName.replace('_', ' ')} failed`);
+      return undefined;
     } finally {
       setRibbonAction(null);
     }
+  }
+
+  async function runRibbonReview(type: string) {
+    const result = await runRibbonAction(type, () =>
+      runExplorerFileReview(token, repoId, { path: selectedFilePath, review_type: type }),
+      `${type.replace('_', ' ')} complete`
+    );
+    if (result) setRibbonReview(result);
   }
 
   async function runRibbonGenerateTests() {
-    if (!token || !selectedFilePath) return;
-    try {
-      setRibbonAction('generate_tests');
+    await runRibbonAction('generate_tests', async () => {
       const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
       setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
-      toast.success('Generated test candidates');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Generate tests failed');
-    } finally {
-      setRibbonAction(null);
-    }
+    }, 'Generated test candidates');
   }
 
   async function runRibbonTests() {
-    if (!token || !selectedFilePath) return;
-    try {
-      setRibbonAction('run_tests');
+    await runRibbonAction('run_tests', async () => {
       const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
       const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
       setRibbonTests(run);
       toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Run tests failed');
-    } finally {
-      setRibbonAction(null);
-    }
+    });
   }
 
   async function runRibbonGenerateFix() {
-    if (!token || !selectedFilePath) return;
     const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
     const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
-    try {
-      setRibbonAction('generate_fix');
-      const fix = await generateExplorerFix(token, repoId, { path: selectedFilePath, finding, recommendation });
-      setRibbonFix(fix);
-      setShowRibbonDiff(true);
-      toast.success('Fix generated');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Generate fix failed');
-    } finally {
-      setRibbonAction(null);
-    }
+    const fix = await runRibbonAction('generate_fix', () =>
+      generateExplorerFix(token, repoId, { path: selectedFilePath, finding, recommendation }),
+      'Fix generated'
+    );
+    if (fix) { setRibbonFix(fix); setShowRibbonDiff(true); }
   }
 
   async function runRibbonApplyFix() {
-    if (!token || !selectedFilePath || !ribbonFix) return;
+    if (!ribbonFix) return;
     if (!window.confirm('Apply this fix? Validation checks will run before acceptance.')) return;
-    try {
-      setRibbonAction('apply_fix');
-      await applyExplorerFix(token, repoId, {
-        fix_id: ribbonFix.fix_id,
-        expected_sha256: selectedFile?.sha256,
-        run_validation: true,
-      });
+    await runRibbonAction('apply_fix', async () => {
+      await applyExplorerFix(token, repoId, { fix_id: ribbonFix.fix_id, expected_sha256: selectedFile?.sha256, run_validation: true });
       const refreshed = await getExplorerFile(token, repoId, selectedFilePath);
       setSelectedFile(refreshed);
-      toast.success('Fix applied');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Apply fix failed');
-    } finally {
-      setRibbonAction(null);
-    }
+    }, 'Fix applied');
   }
 
   async function runRibbonHistory() {
-    if (!token || !selectedFilePath) return;
-    try {
-      setRibbonAction('history');
-      const history = await getExplorerHistory(token, repoId, selectedFilePath);
+    await runRibbonAction('history', async () => {
+      const h = await getExplorerHistory(token, repoId, selectedFilePath);
       setRibbonHistory(
-        [
-          `Reviews: ${history.reviews.length}`,
-          `Fixes: ${history.fixes.length}`,
-          `Applied: ${history.applied_fixes.length}`,
-          `Rejected: ${history.rejected_fixes.length}`,
-          `Tests: ${history.test_runs.length}`,
-          `Conversations: ${history.conversations.length}`,
-        ].join(' | ')
+        [`Reviews: ${h.reviews.length}`, `Fixes: ${h.fixes.length}`, `Applied: ${h.applied_fixes.length}`,
+         `Rejected: ${h.rejected_fixes.length}`, `Tests: ${h.test_runs.length}`, `Conversations: ${h.conversations.length}`].join(' | ')
       );
-      toast.success('History loaded');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'History load failed');
-    } finally {
-      setRibbonAction(null);
-    }
+    }, 'History loaded');
   }
 
   async function runRibbonAskAi() {
-    if (!token || !selectedFilePath) return;
-    try {
-      setRibbonAction('ask_ai');
-      await addExplorerConversationEntry(token, repoId, {
-        path: selectedFilePath,
-        role: 'user',
-        content: `Open AI conversation for ${selectedFilePath}`,
-      });
+    await runRibbonAction('ask_ai', async () => {
+      await addExplorerConversationEntry(token, repoId, { path: selectedFilePath, role: 'user', content: `Open AI conversation for ${selectedFilePath}` });
       window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
-      toast.success('AI chat context queued');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Ask AI failed');
-    } finally {
-      setRibbonAction(null);
-    }
+    }, 'AI chat context queued');
   }
 
   useEffect(() => {

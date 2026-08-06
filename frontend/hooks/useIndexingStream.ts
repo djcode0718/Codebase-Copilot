@@ -72,6 +72,58 @@ export function useIndexingStream(
     );
   }, []);
 
+  const handleIndexingEvent = useCallback((
+    event: IndexingEvent,
+    handlers: {
+      onError: (message: string) => void;
+      onDone: (event: IndexingEvent) => void;
+      onStep: (stepId: IndexingStepName, message: string) => void;
+    },
+  ) => {
+    const { step, message, progress: prog } = event;
+    setProgress(typeof prog === 'number' ? prog : step === 'error' ? 100 : 0);
+
+    if (step === 'error') {
+      setSteps((prev) => {
+        const activeIdx = prev.findIndex((s) => s.status === 'active');
+        const targetIdx = activeIdx >= 0 ? activeIdx : prev.findIndex((s) => s.status === 'pending');
+        return prev.map((s, i) => {
+          if (i === targetIdx) return { ...s, status: 'error', message };
+          if (i > targetIdx) return { ...s, status: 'pending' };
+          return s;
+        });
+      });
+      handlers.onError(message);
+      return 'stop' as const;
+    }
+
+    if (step === 'done') {
+      const elapsed = Date.now() - (stepStartRef.current['summary'] ?? Date.now());
+      updateStep('summary', { status: 'done', elapsedMs: elapsed });
+      updateStep('done', { status: 'done', message });
+      handlers.onDone(event);
+      return 'stop' as const;
+    }
+
+    // Regular step transition
+    const stepId = step as IndexingStepName;
+    const now = Date.now();
+    setSteps((prev) => {
+      const prevActive = prev.find((s) => s.status === 'active');
+      if (prevActive && prevActive.id !== stepId) {
+        const elapsed = now - (stepStartRef.current[prevActive.id] ?? now);
+        return prev.map((s) =>
+          s.id === prevActive.id ? { ...s, status: 'done', elapsedMs: elapsed }
+            : s.id === stepId ? { ...s, status: 'active', message }
+            : s
+        );
+      }
+      return prev.map((s) => s.id === stepId ? { ...s, status: 'active', message } : s);
+    });
+    stepStartRef.current[stepId] = now;
+    return 'continue' as const;
+  }, [updateStep]);
+
   useEffect(() => {
     if (!enabled || !repoId || !token) return;
 
@@ -174,64 +226,22 @@ export function useIndexingStream(
               continue;
             }
 
-            const { step, message, progress: prog } = event;
-            setProgress(typeof prog === 'number' ? prog : step === 'error' ? 100 : 0);
-
-            if (step === 'error') {
-              // Mark active step (or first pending) as error
-              setSteps((prev) => {
-                const activeIdx = prev.findIndex(
-                  (s) => s.status === 'active'
-                );
-                const targetIdx = activeIdx >= 0
-                  ? activeIdx
-                  : prev.findIndex((s) => s.status === 'pending');
-                return prev.map((s, i) => {
-                  if (i === targetIdx) return { ...s, status: 'error', message };
-                  if (i > targetIdx) return { ...s, status: 'pending' };
-                  return s;
-                });
-              });
-              setHasError(true);
-              setErrorMessage(message);
-              if (timerRef.current) clearInterval(timerRef.current);
-              return;
-            }
-
-            if (step === 'done') {
-              const elapsed = Date.now() - (stepStartRef.current['summary'] ?? Date.now());
-              updateStep('summary', { status: 'done', elapsedMs: elapsed });
-              updateStep('done', { status: 'done', message });
-              setFileCount(event.file_count ?? null);
-              setNodeCount(event.node_count ?? null);
-              setIndexName(event.index_name ?? null);
-              setIsComplete(true);
-              if (timerRef.current) clearInterval(timerRef.current);
-              return;
-            }
-
-            // Regular step
-            const stepId = step as IndexingStepName;
-            const now = Date.now();
-
-            // Close previous active step
-            setSteps((prev) => {
-              const prevActive = prev.find((s) => s.status === 'active');
-              if (prevActive && prevActive.id !== stepId) {
-                const elapsed = now - (stepStartRef.current[prevActive.id] ?? now);
-                return prev.map((s) =>
-                  s.id === prevActive.id
-                    ? { ...s, status: 'done', elapsedMs: elapsed }
-                    : s.id === stepId
-                    ? { ...s, status: 'active', message }
-                    : s
-                );
-              }
-              return prev.map((s) =>
-                s.id === stepId ? { ...s, status: 'active', message } : s
-              );
+            const action = handleIndexingEvent(event, {
+              onError: (msg) => {
+                setHasError(true);
+                setErrorMessage(msg);
+                if (timerRef.current) clearInterval(timerRef.current);
+              },
+              onDone: (ev) => {
+                setFileCount(ev.file_count ?? null);
+                setNodeCount(ev.node_count ?? null);
+                setIndexName(ev.index_name ?? null);
+                setIsComplete(true);
+                if (timerRef.current) clearInterval(timerRef.current);
+              },
+              onStep: () => {},
             });
-            stepStartRef.current[stepId] = now;
+            if (action === 'stop') return;
           }
         }
       } catch (err) {
@@ -250,7 +260,7 @@ export function useIndexingStream(
         clearInterval(timerRef.current);
       }
     };
-  }, [repoId, token, enabled, apiBase, updateStep]);
+  }, [repoId, token, enabled, apiBase, updateStep, handleIndexingEvent]);
 
   return {
     steps,
