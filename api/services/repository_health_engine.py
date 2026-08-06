@@ -11,6 +11,7 @@ recommendations.
 from __future__ import annotations
 
 import json
+import ast
 import math
 import os
 import re
@@ -20,6 +21,11 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from app.utils.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def _resolve_repos_dir() -> str:
@@ -380,6 +386,36 @@ class TestingAnalyzer(BaseAnalyzer):
 
         missing_test_targets = []
         test_names = " ".join([f.rel_path.lower() for f in test_files])
+        test_content_signals = " ".join((f.content.lower()[:10_000] for f in test_files))
+        test_signals = f"{test_names} {test_content_signals}"
+        generic_tokens = {
+            "api",
+            "app",
+            "services",
+            "service",
+            "routers",
+            "router",
+            "models",
+            "utils",
+            "common",
+        }
+
+        def _is_module_mapped(rel_path: str, stem: str) -> bool:
+            if stem in test_signals:
+                return True
+
+            tokens: List[str] = []
+            cleaned_stem = stem.replace("_service", "")
+            if cleaned_stem and cleaned_stem != stem:
+                tokens.append(cleaned_stem)
+            tokens.extend([p for p in cleaned_stem.split("_") if len(p) >= 5])
+
+            parts = [p for p in rel_path.lower().split("/") if p]
+            tokens.extend([p for p in parts if len(p) >= 5 and p not in generic_tokens])
+
+            deduped = sorted(set(t for t in tokens if t not in generic_tokens))
+            return any(token in test_signals for token in deduped)
+
         for f in prod_files[:400]:
             rel_path = f.rel_path.replace("\\", "/")
             # Skip frontend UI files (covered by browser/e2e tests, not naming convention)
@@ -395,7 +431,7 @@ class TestingAnalyzer(BaseAnalyzer):
             # Skip package markers and private modules
             if stem.startswith("__") or len(stem) <= 4:
                 continue
-            if stem not in test_names:
+            if not _is_module_mapped(rel_path, stem):
                 missing_test_targets.append(f.rel_path)
 
         if missing_test_targets:
@@ -431,6 +467,14 @@ class TestingAnalyzer(BaseAnalyzer):
 
         signal_count = len(prod_files) + len(test_files)
         score = self._score_from_findings(findings, signal_count)
+        logger.info(
+            "TestingAnalyzer score=%s prod_files=%s test_files=%s missing_targets=%s negative_tests=%s",
+            score,
+            len(prod_files),
+            len(test_files),
+            len(missing_test_targets),
+            negative_signal,
+        )
         explanation = "Testing score estimates structural test coverage and resilience checks using repository test artifacts."
         return CategoryResult(
             category=self.category,
@@ -535,14 +579,18 @@ class PerformanceAnalyzer(BaseAnalyzer):
                     affected_modules=[f.rel_path.split('/')[0]],
                     expected_score_gain=5,
                 ))
-            if "async def" in f.content and re.search(r"\btime\.sleep\(|requests\.(get|post|put|delete)\(", f.content):
+            blocking_hits = self._detect_blocking_calls_in_async_scope(f)
+            if blocking_hits:
                 findings.append(Finding(
                     id=str(uuid.uuid4()),
                     category=self.category,
                     finding_type="problem",
                     severity="medium",
                     title="Blocking call in async context",
-                    details=f"Blocking I/O pattern detected in async flow in {f.rel_path}.",
+                    details=(
+                        f"Blocking I/O pattern detected in async flow in {f.rel_path}: "
+                        f"{', '.join(blocking_hits[:3])}."
+                    ),
                     recommendation="Replace blocking calls with non-blocking alternatives and async clients.",
                     affected_files=[f.rel_path],
                     affected_modules=[f.rel_path.split('/')[0]],
@@ -566,6 +614,12 @@ class PerformanceAnalyzer(BaseAnalyzer):
 
         signal_count = len(snapshot.files) + caching_signals
         score = self._score_from_findings(findings, signal_count)
+        logger.info(
+            "PerformanceAnalyzer score=%s findings=%s caching_signals=%s",
+            score,
+            len(findings),
+            caching_signals,
+        )
         explanation = "Performance score checks for N+1 risk patterns, blocking async calls, and caching signals."
         return CategoryResult(
             category=self.category,
@@ -576,6 +630,31 @@ class PerformanceAnalyzer(BaseAnalyzer):
             affected_modules=sorted({m for f in findings for m in f.affected_modules})[:20],
             confidence=min(1.0, math.log1p(signal_count) / 6.0),
         )
+
+    def _detect_blocking_calls_in_async_scope(self, repo_file: RepoFile) -> List[str]:
+        if repo_file.ext != ".py" or "async def" not in repo_file.content:
+            return []
+
+        try:
+            tree = ast.parse(repo_file.content)
+        except Exception:
+            return []
+
+        hits: List[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            for sub_node in ast.walk(node):
+                if not isinstance(sub_node, ast.Call):
+                    continue
+                func = sub_node.func
+                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                    qualifier = f"{func.value.id}.{func.attr}"
+                    if qualifier == "time.sleep":
+                        hits.append(f"{node.name}:time.sleep")
+                    elif func.value.id == "requests" and func.attr in {"get", "post", "put", "delete"}:
+                        hits.append(f"{node.name}:requests.{func.attr}")
+        return sorted(set(hits))
 
 
 class MaintainabilityAnalyzer(BaseAnalyzer):

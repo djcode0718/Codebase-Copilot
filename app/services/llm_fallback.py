@@ -73,8 +73,8 @@ def _sleep_safe(seconds: float) -> None:
             "Use acomplete() / astream_complete() from async contexts."
         )
     except RuntimeError:
-        # No running event loop → pure sync context, safe to block.
-        time.sleep(seconds)
+        # No running event loop -> pure sync context, safe to block.
+        time.sleep(max(0.0, float(seconds)))
 
 class AllModelsExhaustedError(Exception):
     """Exception raised when all fallback LLMs in the chain fail."""
@@ -160,6 +160,7 @@ class ResilientFallbackLLM(CustomLLM):
         return self.fallback_chain[0].metadata
 
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+        logger.info("Fallback complete() started.")
         errors = {}
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
@@ -168,7 +169,10 @@ class ResilientFallbackLLM(CustomLLM):
             retries = 1
             for attempt in range(retries + 1):
                 try:
-                    logger.info(f"Attempting completion with {provider}/{model_name} (attempt {attempt + 1})...")
+                    logger.info(
+                        f"Attempting completion with {provider}/{model_name} "
+                        f"(attempt {attempt + 1})."
+                    )
                     response = llm.complete(prompt, **kwargs)
                     _record_llm_usage(provider, model_name)
                     logger.info(f"Completion succeeded with {provider}/{model_name}.")
@@ -185,7 +189,7 @@ class ResilientFallbackLLM(CustomLLM):
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                         logger.warning(
                             f"Model {provider}/{model_name} rate limited. "
-                            f"Short retry delay detected: {delay}s. Waiting and retrying..."
+                            f"Short retry delay={delay}s. Retrying."
                         )
                         _sleep_safe(delay)
                         continue
@@ -202,6 +206,7 @@ class ResilientFallbackLLM(CustomLLM):
         )
 
     def stream_complete(self, prompt: str, **kwargs: Any) -> CompletionResponseGen:
+        logger.info("Fallback stream_complete() started.")
         def gen():
             errors = {}
             for llm in self.fallback_chain:
@@ -211,7 +216,10 @@ class ResilientFallbackLLM(CustomLLM):
                 for attempt in range(retries + 1):
                     tokens_yielded = False
                     try:
-                        logger.info(f"Attempting streaming completion with {provider}/{model_name} (attempt {attempt + 1})...")
+                        logger.info(
+                            f"Attempting streaming completion with {provider}/{model_name} "
+                            f"(attempt {attempt + 1})."
+                        )
                         stream_response = llm.stream_complete(prompt, **kwargs)
                         for chunk in stream_response:
                             if not tokens_yielded:
@@ -237,7 +245,7 @@ class ResilientFallbackLLM(CustomLLM):
                         if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                             logger.warning(
                                 f"Model {provider}/{model_name} rate limited. "
-                                f"Short retry delay detected: {delay}s. Waiting and retrying..."
+                                f"Short retry delay={delay}s. Retrying."
                             )
                             _sleep_safe(delay)
                             continue
@@ -256,6 +264,7 @@ class ResilientFallbackLLM(CustomLLM):
         return gen()
 
     async def acomplete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
+        logger.info("Fallback acomplete() started.")
         errors = {}
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
@@ -263,7 +272,10 @@ class ResilientFallbackLLM(CustomLLM):
             retries = 1
             for attempt in range(retries + 1):
                 try:
-                    logger.info(f"Attempting async completion with {provider}/{model_name} (attempt {attempt + 1})...")
+                    logger.info(
+                        f"Attempting async completion with {provider}/{model_name} "
+                        f"(attempt {attempt + 1})."
+                    )
                     response = await llm.acomplete(prompt, **kwargs)
                     _record_llm_usage(provider, model_name)
                     logger.info(f"Async completion succeeded with {provider}/{model_name}.")
@@ -280,7 +292,7 @@ class ResilientFallbackLLM(CustomLLM):
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                         logger.warning(
                             f"Model {provider}/{model_name} rate limited. "
-                            f"Short retry delay detected: {delay}s. Waiting and retrying..."
+                            f"Short retry delay={delay}s. Retrying."
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -297,6 +309,7 @@ class ResilientFallbackLLM(CustomLLM):
         )
 
     async def astream_complete(self, prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        logger.info("Fallback astream_complete() started.")
         errors = {}
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
@@ -305,7 +318,10 @@ class ResilientFallbackLLM(CustomLLM):
             for attempt in range(retries + 1):
                 tokens_yielded = False
                 try:
-                    logger.info(f"Attempting async streaming completion with {provider}/{model_name} (attempt {attempt + 1})...")
+                    logger.info(
+                        f"Attempting async streaming completion with {provider}/{model_name} "
+                        f"(attempt {attempt + 1})."
+                    )
                     if provider.lower() == "gemini":
                         # Gemini async stream path can emit a startup validation error
                         # (LLMCompletionEndEvent expecting CompletionResponse). Use
@@ -345,7 +361,7 @@ class ResilientFallbackLLM(CustomLLM):
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                         logger.warning(
                             f"Model {provider}/{model_name} rate limited. "
-                            f"Short retry delay detected: {delay}s. Waiting and retrying..."
+                            f"Short retry delay={delay}s. Retrying."
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -367,27 +383,33 @@ def get_resilient_llm() -> ResilientFallbackLLM:
     """Build or retrieve singleton ResilientFallbackLLM instance."""
     global _resilient_llm_instance
     if _resilient_llm_instance is None:
+        logger.info("Initializing resilient fallback LLM chain.")
         chain = []
         for spec in get_available_model_specs():
             try:
                 llm = create_llm_client(spec)
                 chain.append(llm)
+                logger.info(f"Added fallback model: {spec.provider}/{spec.model_name}")
             except Exception as e:
                 logger.warning(f"Could not pre-initialize {spec.provider}/{spec.model_name}: {e}")
         
         if not chain:
             raise RuntimeError("No fallback LLM clients could be initialized.")
         _resilient_llm_instance = ResilientFallbackLLM(fallback_chain=chain)
+        logger.info(f"Fallback chain initialized with {len(chain)} model(s).")
     return _resilient_llm_instance
 
 async def generate_with_fallback(prompt: str, **kwargs: Any) -> str:
     """Exposes a clean async function interface to perform LLM generation with fallbacks."""
+    logger.info("generate_with_fallback started.")
     llm = get_resilient_llm()
     response = await llm.acomplete(prompt, **kwargs)
+    logger.info("generate_with_fallback completed.")
     return str(response).strip()
 
 async def stream_with_fallback(prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
     """Exposes a clean streaming function interface returning an async generator of completion chunks."""
+    logger.info("stream_with_fallback started.")
     llm = get_resilient_llm()
     stream_response = llm.astream_complete(prompt, **kwargs)
     if inspect.isawaitable(stream_response):

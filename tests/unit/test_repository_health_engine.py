@@ -77,3 +77,64 @@ def test_ok():
         assert any("hardcoded" in f["title"].lower() or "secret" in f["title"].lower() for f in result["findings"])
     finally:
         shutil.rmtree(repo_path, ignore_errors=True)
+
+
+def test_testing_analyzer_maps_explorer_service_with_integration_tests():
+    repo_name = f"health-testing-map-{uuid.uuid4().hex[:8]}"
+    repo_path = os.path.join(REPOS_DIR, repo_name)
+    os.makedirs(repo_path, exist_ok=True)
+
+    try:
+        fixture_files = [
+            (
+                os.path.join(repo_path, "api", "services", "repository_explorer_service.py"),
+                "def list_directory_tree():\n    return []\n",
+            ),
+            (
+                os.path.join(repo_path, "tests", "integration", "test_router_explorer.py"),
+                "def test_explorer_route():\n    assert 'explorer'\n",
+            ),
+        ]
+        _write_batch(fixture_files)
+
+        engine = RepositoryHealthEngine()
+        result = engine.run(repo={"id": "repo-2", "name": repo_name, "index_name": repo_name})
+        testing = next(c for c in result["categories"] if c["category"] == "Testing")
+
+        assert "Production modules without mapped tests" not in testing["detected_problems"]
+        assert "api/services/repository_explorer_service.py" not in testing["affected_files"]
+    finally:
+        shutil.rmtree(repo_path, ignore_errors=True)
+
+
+def test_performance_analyzer_ignores_non_blocking_async_retry_helpers():
+    repo_name = f"health-perf-map-{uuid.uuid4().hex[:8]}"
+    repo_path = os.path.join(REPOS_DIR, repo_name)
+    os.makedirs(repo_path, exist_ok=True)
+
+    try:
+        fixture_files = [
+            (
+                os.path.join(repo_path, "app", "services", "llm_fallback.py"),
+                "import threading\n"
+                "_EVENT = threading.Event()\n"
+                "def wait_retry(seconds: float):\n"
+                "    _EVENT.wait(timeout=max(0.0, float(seconds)))\n"
+                "async def generate():\n"
+                "    return 'ok'\n",
+            ),
+            (
+                os.path.join(repo_path, "tests", "unit", "test_llm_fallback.py"),
+                "def test_generate():\n    assert True\n",
+            ),
+        ]
+        _write_batch(fixture_files)
+
+        engine = RepositoryHealthEngine()
+        result = engine.run(repo={"id": "repo-3", "name": repo_name, "index_name": repo_name})
+        performance = next(c for c in result["categories"] if c["category"] == "Performance")
+
+        assert "Blocking call in async context" not in performance["detected_problems"]
+    finally:
+        shutil.rmtree(repo_path, ignore_errors=True)
+

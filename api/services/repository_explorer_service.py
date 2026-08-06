@@ -153,10 +153,18 @@ def list_directory_tree(
     include_hidden: bool = False,
     limit: int = 200,
 ) -> Dict[str, Any]:
+    logger.info(
+        "Explorer list_directory_tree started: repo_id=%s path='%s' hidden=%s limit=%s",
+        repo.get("id"),
+        relative_path,
+        include_hidden,
+        limit,
+    )
     repo_root = _repo_root_for(repo)
     rel = _normalize_rel_path(relative_path)
 
     if not os.path.isdir(repo_root):
+        logger.warning("Explorer repo root missing: %s", repo_root)
         return {
             "repo_root": repo_root,
             "path": rel,
@@ -167,6 +175,7 @@ def list_directory_tree(
 
     target_dir = _safe_join(repo_root, rel) if rel else repo_root
     if not os.path.isdir(target_dir):
+        logger.warning("Explorer target directory missing: %s", target_dir)
         raise FileNotFoundError("Directory not found")
 
     effective_limit = max(1, min(limit, _MAX_TREE_ITEMS))
@@ -180,7 +189,12 @@ def list_directory_tree(
                 continue
             entries.append(entry)
 
-    entries.sort(key=lambda item: (not item.is_dir(follow_symlinks=False), item.name.lower()))
+    entries.sort(
+        key=lambda item: (
+            not item.is_dir(follow_symlinks=False),
+            item.name.lower(),
+        )
+    )
 
     nodes: List[Dict[str, Any]] = []
     for entry in entries[:effective_limit]:
@@ -206,7 +220,11 @@ def list_directory_tree(
                 "type": "folder" if is_dir else "file",
                 "has_children": bool(is_dir and _folder_has_children(full_path, include_hidden=include_hidden)),
                 "size": size,
-                "modified_at": datetime.fromtimestamp(modified_at, tz=timezone.utc).isoformat() if modified_at else None,
+                "modified_at": (
+                    datetime.fromtimestamp(modified_at, tz=timezone.utc).isoformat()
+                    if modified_at
+                    else None
+                ),
                 "language": language,
                 "health": _health_indicator(rel_path, language, size),
                 "ai_indicator": _ai_indicator(modified_at),
@@ -215,13 +233,20 @@ def list_directory_tree(
             }
         )
 
-    return {
+    result = {
         "repo_root": repo_root,
         "path": rel,
         "nodes": nodes,
         "truncated": len(entries) > effective_limit,
         "count": len(nodes),
     }
+    logger.info(
+        "Explorer list_directory_tree completed: repo_id=%s nodes=%s truncated=%s",
+        repo.get("id"),
+        result["count"],
+        result["truncated"],
+    )
+    return result
 
 
 def _folder_has_children(folder_path: str, *, include_hidden: bool) -> bool:
@@ -279,6 +304,11 @@ def _python_structure(content: str) -> Dict[str, Any]:
 
 
 def get_file_details(repo: Dict[str, Any], *, relative_path: str) -> Dict[str, Any]:
+    logger.info(
+        "Explorer get_file_details started: repo_id=%s path='%s'",
+        repo.get("id"),
+        relative_path,
+    )
     repo_root = _repo_root_for(repo)
     rel = _normalize_rel_path(relative_path)
     if not rel:
@@ -302,7 +332,7 @@ def get_file_details(repo: Dict[str, Any], *, relative_path: str) -> Dict[str, A
     summary = _build_file_summary(rel, language, lines, structure)
     digest = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
 
-    return {
+    result = {
         "path": rel,
         "language": language,
         "content": content,
@@ -322,6 +352,13 @@ def get_file_details(repo: Dict[str, Any], *, relative_path: str) -> Dict[str, A
         "line_count": len(lines),
         "size": len(content),
     }
+    logger.info(
+        "Explorer get_file_details completed: path='%s' language=%s lines=%s",
+        rel,
+        language,
+        len(lines),
+    )
+    return result
 
 
 def _heuristic_imports(content: str) -> List[str]:
@@ -353,6 +390,11 @@ def _build_file_summary(path: str, language: str, lines: List[str], structure: D
 
 
 def review_single_file(repo: Dict[str, Any], *, relative_path: str, prompt: str = "") -> Dict[str, Any]:
+    logger.info(
+        "Explorer review_single_file started: repo_id=%s path='%s'",
+        repo.get("id"),
+        relative_path,
+    )
     review = _run_review(repo, [relative_path], prompt=prompt)
     result = {
         "review_id": f"explorer-{int(time.time() * 1000)}",
@@ -365,10 +407,21 @@ def review_single_file(repo: Dict[str, Any], *, relative_path: str, prompt: str 
         "generated_at": _now_iso(),
     }
     _record_history(str(repo.get("id") or ""), relative_path, "reviews", result)
+    logger.info(
+        "Explorer review_single_file completed: path='%s' findings=%s score=%s",
+        relative_path,
+        len(result.get("findings") or []),
+        result.get("overall_score"),
+    )
     return result
 
 
 def review_multiple_files(repo: Dict[str, Any], *, relative_paths: List[str], prompt: str = "") -> Dict[str, Any]:
+    logger.info(
+        "Explorer review_multiple_files started: repo_id=%s file_count=%s",
+        repo.get("id"),
+        len(relative_paths),
+    )
     review = _run_review(repo, relative_paths, prompt=prompt)
     result = {
         "review_id": f"explorer-batch-{int(time.time() * 1000)}",
@@ -382,6 +435,11 @@ def review_multiple_files(repo: Dict[str, Any], *, relative_paths: List[str], pr
     }
     for rel in relative_paths:
         _record_history(str(repo.get("id") or ""), rel, "reviews", result)
+    logger.info(
+        "Explorer review_multiple_files completed: findings=%s score=%s",
+        len(result.get("findings") or []),
+        result.get("overall_score"),
+    )
     return result
 
 
@@ -392,6 +450,7 @@ def _run_review(repo: Dict[str, Any], relative_paths: List[str], prompt: str) ->
     async def _inner() -> Dict[str, Any]:
         return await review_files(repo=repo, file_paths=relative_paths, prompt=prompt)
 
+    logger.info("Explorer _run_review invoking async review_files for %s path(s)", len(relative_paths))
     return asyncio.run(_inner())
 
 
@@ -430,6 +489,11 @@ def generate_fix_proposal(
     finding: str,
     recommendation: str = "",
 ) -> Dict[str, Any]:
+    logger.info(
+        "Explorer generate_fix_proposal started: repo_id=%s path='%s'",
+        repo.get("id"),
+        relative_path,
+    )
     details = get_file_details(repo, relative_path=relative_path)
     current = details["content"]
 
@@ -474,6 +538,7 @@ def generate_fix_proposal(
     }
     _FIX_PROPOSALS[fix_id] = payload
     _record_history(str(repo.get("id") or ""), relative_path, "fixes", payload)
+    logger.info("Explorer generate_fix_proposal completed: fix_id=%s", fix_id)
     return payload
 
 
@@ -484,6 +549,12 @@ def apply_fix_proposal(
     expected_sha256: Optional[str] = None,
     run_validation: bool = True,
 ) -> Dict[str, Any]:
+    logger.info(
+        "Explorer apply_fix_proposal started: repo_id=%s fix_id=%s validate=%s",
+        repo.get("id"),
+        fix_id,
+        run_validation,
+    )
     proposal = _FIX_PROPOSALS.get(fix_id)
     if not proposal:
         raise FileNotFoundError("Fix proposal not found")
@@ -505,7 +576,12 @@ def apply_fix_proposal(
     with open(abs_path, "w", encoding="utf-8") as f:
         f.write(suggested)
 
-    validation = {"formatter": "skipped", "linter": "skipped", "static_analysis": "skipped", "tests": "skipped"}
+    validation = {
+        "formatter": "skipped",
+        "linter": "skipped",
+        "static_analysis": "skipped",
+        "tests": "skipped",
+    }
     try:
         if run_validation:
             validation = _validate_change(repo_root, path)
@@ -514,7 +590,12 @@ def apply_fix_proposal(
     except Exception as err:
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(original)
-        _record_history(str(repo.get("id") or ""), path, "rejected_fixes", {"fix_id": fix_id, "reason": str(err), "at": _now_iso()})
+        _record_history(
+            str(repo.get("id") or ""),
+            path,
+            "rejected_fixes",
+            {"fix_id": fix_id, "reason": str(err), "at": _now_iso()},
+        )
         raise ValueError(f"Fix rejected: {err}") from err
 
     applied = {
@@ -525,10 +606,12 @@ def apply_fix_proposal(
         "applied_at": _now_iso(),
     }
     _record_history(str(repo.get("id") or ""), path, "applied_fixes", applied)
+    logger.info("Explorer apply_fix_proposal completed: fix_id=%s path='%s'", fix_id, path)
     return applied
 
 
 def _validate_change(repo_root: str, relative_path: str) -> Dict[str, str]:
+    logger.info("Explorer _validate_change started: path='%s'", relative_path)
     target_abs = _safe_join(repo_root, relative_path)
     results = {
         "formatter": "skipped",
@@ -559,14 +642,32 @@ def _validate_change(repo_root: str, relative_path: str) -> Dict[str, str]:
         if not lint["ok"]:
             return results
 
-    tests = discover_impacted_tests({"index_name": os.path.basename(repo_root), "name": os.path.basename(repo_root), "id": "local"}, relative_paths=[relative_path], force_repo_root=repo_root)
+    tests = discover_impacted_tests(
+        {
+            "index_name": os.path.basename(repo_root),
+            "name": os.path.basename(repo_root),
+            "id": "local",
+        },
+        relative_paths=[relative_path],
+        force_repo_root=repo_root,
+    )
     selected = tests.get("tests", [])[:8]
     if selected:
-        outcome = run_targeted_tests({"index_name": os.path.basename(repo_root), "name": os.path.basename(repo_root), "id": "local"}, tests=selected, timeout_seconds=_DEFAULT_TEST_TIMEOUT_SECONDS, force_repo_root=repo_root)
+        outcome = run_targeted_tests(
+            {
+                "index_name": os.path.basename(repo_root),
+                "name": os.path.basename(repo_root),
+                "id": "local",
+            },
+            tests=selected,
+            timeout_seconds=_DEFAULT_TEST_TIMEOUT_SECONDS,
+            force_repo_root=repo_root,
+        )
         if outcome.get("status") != "passed":
             results["tests"] = f"failed: {outcome.get('status')}"
             return results
 
+    logger.info("Explorer _validate_change completed: path='%s'", relative_path)
     return results
 
 
@@ -588,6 +689,11 @@ def discover_impacted_tests(
     relative_paths: List[str],
     force_repo_root: Optional[str] = None,
 ) -> Dict[str, Any]:
+    logger.info(
+        "Explorer discover_impacted_tests started: repo_id=%s paths=%s",
+        repo.get("id"),
+        len(relative_paths),
+    )
     repo_root = force_repo_root or _repo_root_for(repo)
     tests_root = os.path.join(repo_root, "tests")
     discovered: List[str] = []
@@ -603,7 +709,13 @@ def discover_impacted_tests(
             discovered.append(rel)
 
     deduped = sorted(set(discovered))
-    return {"tests": deduped[:80], "count": len(deduped)}
+    result = {"tests": deduped[:80], "count": len(deduped)}
+    logger.info(
+        "Explorer discover_impacted_tests completed: repo_id=%s discovered=%s",
+        repo.get("id"),
+        result["count"],
+    )
+    return result
 
 
 def _collect_test_candidates(relative_paths: List[str]) -> List[str]:
@@ -636,6 +748,12 @@ def run_targeted_tests(
     timeout_seconds: int = _DEFAULT_TEST_TIMEOUT_SECONDS,
     force_repo_root: Optional[str] = None,
 ) -> Dict[str, Any]:
+    logger.info(
+        "Explorer run_targeted_tests started: repo_id=%s tests=%s timeout=%s",
+        repo.get("id"),
+        len(tests),
+        timeout_seconds,
+    )
     repo_root = force_repo_root or _repo_root_for(repo)
     if not tests:
         return {
@@ -649,6 +767,7 @@ def run_targeted_tests(
         }
 
     cmd = ["python", "-m", "pytest", "-q", "--maxfail=1", *tests]
+    logger.info("Explorer run_targeted_tests command: %s", " ".join(cmd))
     started = time.time()
     try:
         proc = subprocess.run(
@@ -686,6 +805,13 @@ def run_targeted_tests(
     }
     for test_item in tests:
         _record_history(str(repo.get("id") or ""), test_item, "test_runs", result)
+    logger.info(
+        "Explorer run_targeted_tests completed: status=%s passed=%s failed=%s duration=%s",
+        status,
+        passed,
+        failed,
+        duration,
+    )
     return result
 
 
@@ -706,6 +832,7 @@ def _parse_pytest_counts(output: str) -> Tuple[int, int]:
 
 
 def append_conversation_entry(repo_id: str, path: str, role: str, content: str) -> Dict[str, Any]:
+    logger.info("Explorer append_conversation_entry: repo_id=%s path='%s' role=%s", repo_id, path, role)
     entry = {
         "role": role,
         "content": content,
@@ -716,6 +843,7 @@ def append_conversation_entry(repo_id: str, path: str, role: str, content: str) 
 
 
 def get_file_history(repo_id: str, path: str) -> Dict[str, Any]:
+    logger.info("Explorer get_file_history: repo_id=%s path='%s'", repo_id, path)
     key = (repo_id, _normalize_rel_path(path))
     data = _FILE_HISTORY.get(key, {})
     return {
@@ -736,6 +864,13 @@ def _record_history(repo_id: str, path: str, bucket: str, payload: Dict[str, Any
     values.insert(0, payload)
     if len(values) > 30:
         del values[30:]
+    logger.debug(
+        "Explorer history updated: repo_id=%s path='%s' bucket=%s size=%s",
+        repo_id,
+        key[1],
+        bucket,
+        len(values),
+    )
 
 
 def _strip_code_fences(text: str) -> str:

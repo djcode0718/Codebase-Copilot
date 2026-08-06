@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Dict, Any
+import os
 import numpy as np
 from app.indexing.vector_store import VectorStore
 from app.utils.logger import get_logger
@@ -20,8 +21,21 @@ def retrieve_relevant_chunks(
     - Keyword overlap boost
     """
 
+    logger.info(
+        "retrieve_relevant_chunks started: query_len=%s top_k=%s relevant_files=%s",
+        len(query or ""),
+        top_k,
+        len(relevant_files or []),
+    )
+
     if not query.strip():
+        logger.info("retrieve_relevant_chunks skipped: empty query")
         return []
+
+    # Expand candidate depth slightly to improve recall while preserving
+    # final top_k behavior for callers.
+    recall_extra = int(os.getenv("RETRIEVAL_RECALL_EXTRA", "5"))
+    candidate_top_k = max(top_k, top_k + max(0, recall_extra))
 
     # 🔹 Query vector
     query_vec = vector_store.vectorizer.transform([query]).toarray()
@@ -32,7 +46,7 @@ def retrieve_relevant_chunks(
     # 🔒 Handle zero query vector
     if np.linalg.norm(query_vec) == 0:
         logger.warning("Query vector is zero → fallback to top chunks")
-        return vector_store.metadata[:top_k]
+        return vector_store.metadata[:candidate_top_k][:top_k]
 
     # 🔹 Normalize both for cosine similarity
     query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-10)
@@ -69,6 +83,11 @@ def retrieve_relevant_chunks(
 
     scored_chunks.sort(key=lambda x: x["score"], reverse=True)
 
-    logger.info(f"Hybrid retrieval complete — top {top_k} chunks selected from {len(scored_chunks)} total")
+    logger.info(
+        "retrieve_relevant_chunks completed: candidate_top_k=%s final_top_k=%s total_scored=%s",
+        candidate_top_k,
+        top_k,
+        len(scored_chunks),
+    )
 
-    return scored_chunks[:top_k]
+    return scored_chunks[:candidate_top_k][:top_k]
