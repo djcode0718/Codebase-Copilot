@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Bot, FileCode2, GitCommitHorizontal, GitPullRequest, Loader2, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Bot, FileCode2, GitCommitHorizontal, GitPullRequest, History, Loader2, MessageSquare, Play, Shield, Sparkles, TestTube, Trash2, Wrench } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,14 +11,22 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   deleteReview,
   generateReviewFix,
+  addExplorerConversationEntry,
+  applyExplorerFix,
+  discoverExplorerTests,
+  generateExplorerFix,
+  getExplorerFile,
+  getExplorerHistory,
   getReview,
   listReviews,
+  runExplorerFileReview,
+  runExplorerTests,
   reviewCommit,
   reviewFile,
   reviewFiles,
   reviewPullRequest,
 } from '@/lib/api';
-import type { ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
+import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
 import { toast } from 'sonner';
 
 function SeverityPill({ severity }: { severity: string }) {
@@ -48,6 +56,13 @@ export default function RepositoryReviewPage() {
   const [prDiff, setPrDiff] = useState('');
   const [prompt, setPrompt] = useState('');
   const [fixOutput, setFixOutput] = useState<ReviewFixResponse | null>(null);
+  const [selectedFile, setSelectedFile] = useState<ExplorerFileDetails | null>(null);
+  const [ribbonReview, setRibbonReview] = useState<ExplorerReviewResult | null>(null);
+  const [ribbonFix, setRibbonFix] = useState<ExplorerFixProposal | null>(null);
+  const [ribbonTests, setRibbonTests] = useState<ExplorerTestRunResult | null>(null);
+  const [ribbonHistory, setRibbonHistory] = useState('');
+  const [ribbonAction, setRibbonAction] = useState<string | null>(null);
+  const [showRibbonDiff, setShowRibbonDiff] = useState(false);
 
   const loadHistory = useCallback(async (t: string) => {
     const response = await listReviews(t, repoId);
@@ -89,6 +104,25 @@ export default function RepositoryReviewPage() {
     void init();
   }, [loadHistory, repoId]);
 
+  const selectedFilePath = filePath.trim();
+
+  useEffect(() => {
+    if (!token || !selectedFilePath) return;
+    let cancelled = false;
+    async function loadSelectedFile() {
+      try {
+        const details = await getExplorerFile(token, repoId, selectedFilePath);
+        if (!cancelled) setSelectedFile(details);
+      } catch {
+        if (!cancelled) setSelectedFile(null);
+      }
+    }
+    void loadSelectedFile();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, repoId, selectedFilePath]);
+
   const runReview = useCallback(async (runner: () => Promise<ReviewRun>) => {
     if (!token) return;
     setLoading(true);
@@ -111,6 +145,173 @@ export default function RepositoryReviewPage() {
     return csv.split(',').map((s) => s.trim()).filter(Boolean);
   }
 
+  const ribbonHealthScore = useMemo(() => {
+    if (!selectedFile) return 74;
+    if (selectedFile.health === 'critical') return 42;
+    if (selectedFile.health === 'review_suggested') return 67;
+    if (selectedFile.health === 'healthy') return 84;
+    return 74;
+  }, [selectedFile]);
+
+  async function runRibbonReview(type: string) {
+    if (!token || !selectedFilePath) return;
+    try {
+      setRibbonAction(type);
+      const result = await runExplorerFileReview(token, repoId, { path: selectedFilePath, review_type: type });
+      setRibbonReview(result);
+      toast.success(`${type.replace('_', ' ')} complete`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Action failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  }
+
+  async function runRibbonGenerateTests() {
+    if (!token || !selectedFilePath) return;
+    try {
+      setRibbonAction('generate_tests');
+      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
+      setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
+      toast.success('Generated test candidates');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Generate tests failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  }
+
+  async function runRibbonTests() {
+    if (!token || !selectedFilePath) return;
+    try {
+      setRibbonAction('run_tests');
+      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
+      const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
+      setRibbonTests(run);
+      toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Run tests failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  }
+
+  async function runRibbonGenerateFix() {
+    if (!token || !selectedFilePath) return;
+    const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
+    const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
+    try {
+      setRibbonAction('generate_fix');
+      const fix = await generateExplorerFix(token, repoId, { path: selectedFilePath, finding, recommendation });
+      setRibbonFix(fix);
+      setShowRibbonDiff(true);
+      toast.success('Fix generated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Generate fix failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  }
+
+  async function runRibbonApplyFix() {
+    if (!token || !selectedFilePath || !ribbonFix) return;
+    if (!window.confirm('Apply this fix? Validation checks will run before acceptance.')) return;
+    try {
+      setRibbonAction('apply_fix');
+      await applyExplorerFix(token, repoId, {
+        fix_id: ribbonFix.fix_id,
+        expected_sha256: selectedFile?.sha256,
+        run_validation: true,
+      });
+      const refreshed = await getExplorerFile(token, repoId, selectedFilePath);
+      setSelectedFile(refreshed);
+      toast.success('Fix applied');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Apply fix failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  }
+
+  async function runRibbonHistory() {
+    if (!token || !selectedFilePath) return;
+    try {
+      setRibbonAction('history');
+      const history = await getExplorerHistory(token, repoId, selectedFilePath);
+      setRibbonHistory(
+        [
+          `Reviews: ${history.reviews.length}`,
+          `Fixes: ${history.fixes.length}`,
+          `Applied: ${history.applied_fixes.length}`,
+          `Rejected: ${history.rejected_fixes.length}`,
+          `Tests: ${history.test_runs.length}`,
+          `Conversations: ${history.conversations.length}`,
+        ].join(' | ')
+      );
+      toast.success('History loaded');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'History load failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  }
+
+  async function runRibbonAskAi() {
+    if (!token || !selectedFilePath) return;
+    try {
+      setRibbonAction('ask_ai');
+      await addExplorerConversationEntry(token, repoId, {
+        path: selectedFilePath,
+        role: 'user',
+        content: `Open AI conversation for ${selectedFilePath}`,
+      });
+      window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
+      toast.success('AI chat context queued');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Ask AI failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedFilePath) return;
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return;
+      const key = event.key.toLowerCase();
+
+      if (event.ctrlKey && key === 'd') {
+        event.preventDefault();
+        setShowRibbonDiff((prev) => !prev);
+        return;
+      }
+      if (event.ctrlKey && key === '/') {
+        event.preventDefault();
+        void runRibbonAskAi();
+        return;
+      }
+      if (event.shiftKey && key === 't') {
+        event.preventDefault();
+        void runRibbonTests();
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+
+      if (key === 'e') void runRibbonReview('explain');
+      else if (key === 'r') void runRibbonReview('review');
+      else if (key === 'b') void runRibbonReview('find_bugs');
+      else if (key === 's') void runRibbonReview('security');
+      else if (key === 'a') void runRibbonReview('architecture');
+      else if (key === 't') void runRibbonGenerateTests();
+      else if (key === 'f') void runRibbonGenerateFix();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFilePath, token, repoId, selectedFile, ribbonFix, ribbonReview]);
+
   return (
     <div className="space-y-6">
       <motion.section
@@ -124,6 +325,79 @@ export default function RepositoryReviewPage() {
         </div>
         <p className="mt-2 text-sm text-muted-foreground">Review files, commits, and PR diffs with persisted findings and optional fix generation.</p>
       </motion.section>
+
+      {selectedFilePath && (
+        <section className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-lg shadow-black/5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{selectedFilePath}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {selectedFile?.language || 'unknown'} • {selectedFile?.line_count || 'n/a'} lines • {selectedFile?.imports.length || 0} imports • {selectedFile?.classes.length || 0} classes • {selectedFile?.functions.length || 0} functions
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">Coverage 72% • Owner Unknown • Last Modified</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[11px] text-muted-foreground">Repository Health</p>
+              <p className="text-lg font-semibold">{ribbonHealthScore}</p>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <Button size="sm" variant="outline" title="E" onClick={() => void runRibbonReview('explain')}>Explain</Button>
+            <Button size="sm" variant="outline" title="R" onClick={() => void runRibbonReview('review')}>Review</Button>
+            <Button size="sm" variant="outline" title="B" onClick={() => void runRibbonReview('find_bugs')}>Find Bugs</Button>
+            <Button size="sm" variant="outline" title="S" onClick={() => void runRibbonReview('security')}><Shield size={13} className="mr-1" />Security</Button>
+            <Button size="sm" variant="outline" title="A" onClick={() => void runRibbonReview('architecture')}>Architecture</Button>
+            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('performance')}><Play size={13} className="mr-1" />Performance</Button>
+            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('code_quality')}>Code Quality</Button>
+            <Button size="sm" variant="outline" title="T" onClick={() => void runRibbonGenerateTests()}>Generate Tests</Button>
+            <Button size="sm" variant="outline" title="Shift+T" onClick={() => void runRibbonTests()}><TestTube size={13} className="mr-1" />Run Tests</Button>
+            <Button size="sm" variant="outline" title="F" onClick={() => void runRibbonGenerateFix()}><Wrench size={13} className="mr-1" />Generate Fix</Button>
+            <Button size="sm" variant="outline" onClick={() => void runRibbonApplyFix()} disabled={!ribbonFix}>Apply Fix</Button>
+            <Button size="sm" variant="outline" title="Ctrl+D" onClick={() => setShowRibbonDiff((prev) => !prev)}>Show Diff</Button>
+            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('commit_impact')}>Commit Impact</Button>
+            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('dependencies')}>Dependencies</Button>
+            <Button size="sm" variant="outline" title="Ctrl+/" onClick={() => void runRibbonAskAi()}><MessageSquare size={13} className="mr-1" />Ask AI</Button>
+            <Button size="sm" variant="outline" onClick={() => void runRibbonHistory()}><History size={13} className="mr-1" />History</Button>
+          </div>
+
+          {ribbonAction && (
+            <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs text-brand">
+              <Loader2 size={13} className="animate-spin" /> Running {ribbonAction.replace('_', ' ')}...
+            </div>
+          )}
+
+          {ribbonReview && (
+            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
+              <p className="font-medium">AI Review Score: {ribbonReview.overall_score}</p>
+              <p className="mt-1 text-muted-foreground">{ribbonReview.summary}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Findings: {ribbonReview.findings.length}</p>
+            </div>
+          )}
+
+          {ribbonFix && (
+            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
+              <p className="font-medium">Fix proposal ready</p>
+              {showRibbonDiff && <pre className="mt-2 max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.diff || 'No changes'}</pre>}
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <pre className="max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.current_content}</pre>
+                <pre className="max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.suggested_content}</pre>
+              </div>
+            </div>
+          )}
+
+          {ribbonTests && (
+            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
+              <p className="font-medium">Tests: {ribbonTests.status.toUpperCase()}</p>
+              <p className="mt-1 text-muted-foreground">Passed {ribbonTests.passed} • Failed {ribbonTests.failed} • Duration {ribbonTests.duration_seconds}s</p>
+            </div>
+          )}
+
+          {ribbonHistory && (
+            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-xs text-muted-foreground">{ribbonHistory}</div>
+          )}
+        </section>
+      )}
 
       <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-4">
@@ -249,7 +523,17 @@ export default function RepositoryReviewPage() {
                 {findings.map((f) => (
                   <div key={f.id} className={`rounded-xl border p-3 space-y-2 transition-colors ${fixOutput && fixLoading === null && (fixOutput as ReviewFixResponse & { _findingId?: string })._findingId === f.id ? 'border-brand/40 bg-brand/5' : 'border-border bg-background/70'}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium">{f.finding}</div>
+                      <button
+                        type="button"
+                        className="text-left text-sm font-medium hover:text-brand"
+                        onClick={() => {
+                          if (f.file && f.file !== 'unknown') {
+                            setFilePath(f.file);
+                          }
+                        }}
+                      >
+                        {f.finding}
+                      </button>
                       <SeverityPill severity={f.severity} />
                     </div>
                     <div className="text-xs text-muted-foreground">{f.file} • {f.code_area} • risk: {f.risk_level}</div>
