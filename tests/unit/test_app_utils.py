@@ -1,6 +1,5 @@
 ﻿"""
 tests/test_app_utils.py
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Unit tests for:
   - app/utils/logger.py  â†’ get_logger()
   - app/utils/helpers.py â†’ clean_directory(), get_file_extension()

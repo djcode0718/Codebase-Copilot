@@ -1,6 +1,5 @@
 ﻿"""
 tests/test_app_file_filter.py
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Unit tests for app/ingestion/file_filter.py â†’ filter_files()
 
 Tests the core logic:

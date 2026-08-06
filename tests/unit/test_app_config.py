@@ -1,6 +1,5 @@
 ﻿"""
 tests/test_app_config.py
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Unit tests for app/config.py â€” env var loading, defaults, directory creation.
 Pure Python, no external services needed.
 """

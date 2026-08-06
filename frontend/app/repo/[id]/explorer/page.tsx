@@ -1339,7 +1339,7 @@ function langBadgeClass(lang: string): string {
     case 'python': return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
     case 'typescript': case 'tsx': return 'bg-sky-500/10 text-sky-400 border-sky-500/20';
     case 'javascript': case 'jsx': return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
-    case 'markdown': case 'md': return 'bg-slate-500/10 text-slate-300 border-slate-500/20';
+    case 'markdown': case 'md': return 'bg-slate-100 text-slate-700 border-slate-300';
     case 'json': return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
     case 'shell': case 'bash': case 'sh': return 'bg-green-500/10 text-green-400 border-green-500/20';
     case 'yaml': case 'yml': case 'toml': return 'bg-violet-500/10 text-violet-400 border-violet-500/20';
@@ -1422,6 +1422,9 @@ export default function RepositoryExplorerPage() {
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set(['']));
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [searchIndexNodes, setSearchIndexNodes] = useState<ExplorerTreeNode[]>([]);
+  const [searchIndexBuilt, setSearchIndexBuilt] = useState(false);
+  const [isRepoSearchIndexing, setIsRepoSearchIndexing] = useState(false);
 
   // File viewer state
   const [activeFile, setActiveFile] = useState<ExplorerFileDetails | null>(null);
@@ -1471,6 +1474,49 @@ export default function RepositoryExplorerPage() {
       toast.error(err instanceof Error ? err.message : 'Failed to load tree');
     } finally {
       setLoadingPath(null);
+    }
+  }
+
+  async function buildRepoSearchIndex() {
+    if (!token || isRepoSearchIndexing || searchIndexBuilt) return;
+    setIsRepoSearchIndexing(true);
+    try {
+      const indexedTree: Record<string, ExplorerTreeNode[]> = { ...treeByPath };
+      const queue: string[] = [''];
+      const visited = new Set<string>();
+
+      while (queue.length > 0) {
+        const currentPath = queue.shift() || '';
+        if (visited.has(currentPath)) continue;
+        visited.add(currentPath);
+
+        let nodes = indexedTree[currentPath];
+        if (!nodes) {
+          const payload = await getExplorerTree(token, repoId, { path: currentPath, limit: 500 });
+          nodes = payload.nodes;
+          indexedTree[currentPath] = nodes;
+        }
+
+        for (const node of nodes) {
+          if (node.type === 'folder' && node.has_children && !visited.has(node.path)) {
+            queue.push(node.path);
+          }
+        }
+      }
+
+      const allNodes = Object.values(indexedTree).flat();
+      const dedup = new Map<string, ExplorerTreeNode>();
+      for (const node of allNodes) {
+        dedup.set(node.path, node);
+      }
+
+      setTreeByPath((prev) => ({ ...prev, ...indexedTree }));
+      setSearchIndexNodes(Array.from(dedup.values()));
+      setSearchIndexBuilt(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to build search index');
+    } finally {
+      setIsRepoSearchIndexing(false);
     }
   }
 
@@ -1746,12 +1792,27 @@ export default function RepositoryExplorerPage() {
   }
 
   // ─── Filtered tree nodes ─────────────────────────────────────────────────────
+  const searchableNodes = useMemo(() => {
+    const base = searchIndexBuilt ? searchIndexNodes : Object.values(treeByPath).flat();
+    const dedup = new Map<string, ExplorerTreeNode>();
+    for (const node of base) {
+      dedup.set(node.path, node);
+    }
+    return Array.from(dedup.values());
+  }, [searchIndexBuilt, searchIndexNodes, treeByPath]);
+
   const filteredRoots = useMemo(() => {
     const roots = treeByPath[''] || [];
     if (!search.trim()) return roots;
     const q = search.toLowerCase();
-    return roots.filter((n) => n.name.toLowerCase().includes(q) || n.path.toLowerCase().includes(q));
-  }, [treeByPath, search]);
+    return searchableNodes
+      .filter((n) => n.name.toLowerCase().includes(q) || n.path.toLowerCase().includes(q))
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+        return a.path.localeCompare(b.path);
+      })
+      .slice(0, 800);
+  }, [treeByPath, search, searchableNodes]);
 
   // ─── Recursive tree renderer ─────────────────────────────────────────────────
   function renderTree(nodes: ExplorerTreeNode[], depth: number) {
@@ -1798,7 +1859,13 @@ export default function RepositoryExplorerPage() {
             <FileSearch size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setSearch(value);
+                if (value.trim() && token && !searchIndexBuilt && !isRepoSearchIndexing) {
+                  void buildRepoSearchIndex();
+                }
+              }}
               placeholder="Search files..."
               className="h-8 pl-8 text-xs"
             />
@@ -2032,4 +2099,3 @@ export default function RepositoryExplorerPage() {
     </div>
   );
 }
-
