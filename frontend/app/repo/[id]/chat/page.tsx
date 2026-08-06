@@ -121,6 +121,70 @@ function downloadTextFile(filename: string, content: string, contentType: string
   URL.revokeObjectURL(url);
 }
 
+function getSessionBadge(session: Chat): string {
+  if (session.is_pinned) return 'pinned';
+  if (session.is_favorite) return 'favorite';
+  if (session.is_archived) return 'archived';
+  return '';
+}
+
+function ConversationSessionCard({
+  session, active, isEditing, draftTitle, streaming, selectedIds,
+  onToggleSelect, onOpen, onDraftChange, onCommitRename, onCancelEdit, onStartEdit,
+  onPin, onArchive, onExport, onDelete,
+}: {
+  session: Chat; active: boolean; isEditing: boolean; draftTitle: string;
+  streaming: boolean; selectedIds: Set<string>;
+  onToggleSelect: () => void; onOpen: () => void;
+  onDraftChange: (v: string) => void; onCommitRename: () => void;
+  onCancelEdit: () => void; onStartEdit: () => void;
+  onPin: () => void; onArchive: () => void; onExport: () => void; onDelete: () => void;
+}) {
+  const title = session.title || 'Repository Overview';
+
+  return (
+    <div className={active ? 'rounded-2xl border border-brand/30 bg-brand/5 p-3' : 'rounded-2xl border border-border bg-background/60 p-3'}>
+      <div className="flex items-start gap-2">
+        <input type="checkbox" checked={selectedIds.has(session.id)} onChange={onToggleSelect} className="mt-1" aria-label={`Select ${title}`} />
+        <button type="button" onClick={onOpen} disabled={streaming} className="min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-60">
+          {isEditing ? (
+            <input value={draftTitle} onChange={(e) => onDraftChange(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') onCommitRename(); if (e.key === 'Escape') onCancelEdit(); }}
+              autoFocus className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm font-medium outline-none" />
+          ) : (
+            <div className="truncate text-sm font-semibold text-foreground">{title}</div>
+          )}
+          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{session.last_message_preview || 'Start a repository conversation.'}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            <span>{formatConversationDate(conversationTimestamp(session))}</span>
+            <span>{session.message_count || 0} Messages</span>
+            {session.is_archived && <span>Archived</span>}
+          </div>
+        </button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {isEditing ? (
+          <>
+            <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={onCommitRename} title="Save title"><Check size={12} /></Button>
+            <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={onCancelEdit} title="Cancel rename"><X size={12} /></Button>
+          </>
+        ) : (
+          <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={onStartEdit} title="Rename conversation"><Pencil size={12} /></Button>
+        )}
+        <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={onPin} title={session.is_pinned ? 'Unpin conversation' : 'Pin conversation'}>
+          {session.is_pinned ? <PinOff size={12} /> : <Pin size={12} />}
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={onArchive} title={session.is_archived ? 'Unarchive conversation' : 'Archive conversation'}>
+          <Archive size={12} />
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={onExport} title="Export conversation"><Download size={12} /></Button>
+        <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2 text-destructive hover:text-destructive" onClick={onDelete} title="Delete conversation"><Trash2 size={12} /></Button>
+      </div>
+    </div>
+  );
+}
+
 function ConversationHistoryPanel({
   token,
   repoId,
@@ -216,12 +280,7 @@ function ConversationHistoryPanel({
     });
   }
 
-  function getSessionBadge(session: Chat): string {
-    if (session.is_pinned) return 'pinned';
-    if (session.is_favorite) return 'favorite';
-    if (session.is_archived) return 'archived';
-    return '';
-  }
+  // --- ConversationHistoryPanel render ---
 
   return (
     <aside className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:sticky xl:top-6 xl:max-h-[calc(100vh-10rem)]">
@@ -290,88 +349,34 @@ function ConversationHistoryPanel({
             </div>
           )}
 
+          {/* Conversation list */}
           <div className="max-h-[48vh] space-y-2 overflow-y-auto pr-1 scrollbar-thin">
             {visibleSessions.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border bg-background/50 p-4 text-center text-sm text-muted-foreground">
                 No conversations found.
               </div>
             ) : (
-              visibleSessions.map((session) => {
-                const active = session.id === currentChatId;
-                const title = session.title || 'Repository Overview';
-                const isEditing = editingId === session.id;
-                return (
-                  <div key={session.id} className={active ? 'rounded-2xl border border-brand/30 bg-brand/5 p-3' : 'rounded-2xl border border-border bg-background/60 p-3'}>
-                    <div className="flex items-start gap-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(session.id)}
-                        onChange={() => toggleSelected(session.id)}
-                        className="mt-1"
-                        aria-label={`Select ${title}`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void onOpenSession(session.id)}
-                        disabled={streaming}
-                        className="min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isEditing ? (
-                          <input
-                            value={draftTitle}
-                            onChange={(e) => setDraftTitle(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') void commitRename(session.id);
-                              if (e.key === 'Escape') setEditingId(null);
-                            }}
-                            autoFocus
-                            className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm font-medium outline-none"
-                          />
-                        ) : (
-                          <div className="truncate text-sm font-semibold text-foreground">{title}</div>
-                        )}
-                        <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                          {session.last_message_preview || 'Start a repository conversation.'}
-                        </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                          <span>{formatConversationDate(conversationTimestamp(session))}</span>
-                          <span>{session.message_count || 0} Messages</span>
-                          {session.is_archived && <span>Archived</span>}
-                        </div>
-                      </button>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                      {isEditing ? (
-                        <>
-                          <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void commitRename(session.id)} title="Save title">
-                            <Check size={12} />
-                          </Button>
-                          <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => setEditingId(null)} title="Cancel rename">
-                            <X size={12} />
-                          </Button>
-                        </>
-                      ) : (
-                        <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => { setEditingId(session.id); setDraftTitle(title); }} title="Rename conversation">
-                          <Pencil size={12} />
-                        </Button>
-                      )}
-                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void refreshAfter(updateChatSession(token, session.id, { is_pinned: !session.is_pinned }), session.is_pinned ? 'Conversation unpinned' : 'Conversation pinned')} title={session.is_pinned ? 'Unpin conversation' : 'Pin conversation'}>
-                        {session.is_pinned ? <PinOff size={12} /> : <Pin size={12} />}
-                      </Button>
-                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void refreshAfter(updateChatSession(token, session.id, { is_archived: !session.is_archived }), session.is_archived ? 'Conversation restored' : 'Conversation archived')} title={session.is_archived ? 'Unarchive conversation' : 'Archive conversation'}>
-                        <Archive size={12} />
-                      </Button>
-                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2" onClick={() => void handleExport(session.id)} title="Export conversation">
-                        <Download size={12} />
-                      </Button>
-                      <Button variant="outline" size="sm" className="h-7 cursor-pointer border-border px-2 text-destructive hover:text-destructive" onClick={() => void handleDelete(session.id)} title="Delete conversation">
-                        <Trash2 size={12} />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })
+              visibleSessions.map((session) => (
+                <ConversationSessionCard
+                  key={session.id}
+                  session={session}
+                  active={session.id === currentChatId}
+                  isEditing={editingId === session.id}
+                  draftTitle={draftTitle}
+                  streaming={streaming}
+                  selectedIds={selectedIds}
+                  onToggleSelect={() => toggleSelected(session.id)}
+                  onOpen={() => void onOpenSession(session.id)}
+                  onDraftChange={setDraftTitle}
+                  onCommitRename={() => void commitRename(session.id)}
+                  onCancelEdit={() => setEditingId(null)}
+                  onStartEdit={() => { setEditingId(session.id); setDraftTitle(session.title || 'Repository Overview'); }}
+                  onPin={() => void refreshAfter(updateChatSession(token, session.id, { is_pinned: !session.is_pinned }), session.is_pinned ? 'Conversation unpinned' : 'Conversation pinned')}
+                  onArchive={() => void refreshAfter(updateChatSession(token, session.id, { is_archived: !session.is_archived }), session.is_archived ? 'Conversation restored' : 'Conversation archived')}
+                  onExport={() => void handleExport(session.id)}
+                  onDelete={() => void handleDelete(session.id)}
+                />
+              ))
             )}
           </div>
 
@@ -1002,6 +1007,19 @@ function useChatInteractionHandlers({
   };
 }
 
+function buildFallbackAssistantMessage(chatId: string | null, content: string, meta: Omit<StreamedResponse, 'content'> | null): Message {
+  return {
+    id: `fallback-${Date.now()}`,
+    chat_id: chatId ?? '',
+    role: 'assistant' as const,
+    content,
+    query_mode: meta?.queryMode ?? undefined,
+    retrieved_files: meta?.retrievedFiles ?? [],
+    latency_ms: meta?.latencyTotalMs ?? undefined,
+    created_at: new Date().toISOString(),
+  };
+}
+
 function useMessageMutationHandlers({
   chatId,
   token,
@@ -1039,24 +1057,23 @@ function useMessageMutationHandlers({
   textareaRef: { current: HTMLTextAreaElement | null };
   onAfterMessagePersisted: () => Promise<void>;
 }) {
-  function buildFallbackAssistantMessage(content: string, meta: typeof pendingMetadata): Message {
-    return {
-      id: `fallback-${Date.now()}`,
-      chat_id: chatId ?? '',
-      role: 'assistant' as const,
-      content,
-      query_mode: meta?.queryMode ?? undefined,
-      retrieved_files: meta?.retrievedFiles ?? [],
-      latency_ms: meta?.latencyTotalMs ?? undefined,
-      created_at: new Date().toISOString(),
-    };
-  }
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
   }, [setInput]);
+
+  function buildInspectorPayloadFromMeta(meta: Omit<StreamedResponse, 'content'> | null, content: string): StreamedResponse {
+    return {
+      content,
+      queryMode: meta?.queryMode ?? null,
+      retrievedFiles: meta?.retrievedFiles ?? [],
+      latencyRetrievalMs: meta?.latencyRetrievalMs ?? null,
+      latencyLlmMs: meta?.latencyLlmMs ?? null,
+      latencyTotalMs: meta?.latencyTotalMs ?? null,
+    };
+  }
 
   const handleSend = useCallback(async (query: string) => {
     if (!chatId || !token || !query.trim() || streaming) return;
@@ -1085,14 +1102,7 @@ function useMessageMutationHandlers({
         };
         setMessages((prev) => [...prev, partialAssistantMsg]);
         setInspectedIndex(messages.length + 1);
-        setInspectorData({
-          content: latestStreamedText,
-          queryMode: pendingMetadata?.queryMode ?? null,
-          retrievedFiles: pendingMetadata?.retrievedFiles ?? [],
-          latencyRetrievalMs: pendingMetadata?.latencyRetrievalMs ?? null,
-          latencyLlmMs: pendingMetadata?.latencyLlmMs ?? null,
-          latencyTotalMs: pendingMetadata?.latencyTotalMs ?? null,
-        });
+        setInspectorData(buildInspectorPayloadFromMeta(pendingMetadata, latestStreamedText));
         toast.warning('Recovered partial streamed answer due to stream interruption.');
         return;
       }
@@ -1135,18 +1145,13 @@ function useMessageMutationHandlers({
       };
       setMessages((prev) => [...prev, fallbackAssistantMsg]);
       setInspectedIndex(messages.length + 1);
-      setInspectorData({
-        content: fallbackAssistantMsg.content,
-        queryMode: pendingMetadata?.queryMode ?? null,
-        retrievedFiles: pendingMetadata?.retrievedFiles ?? [],
-        latencyRetrievalMs: pendingMetadata?.latencyRetrievalMs ?? null,
-        latencyLlmMs: pendingMetadata?.latencyLlmMs ?? null,
-        latencyTotalMs: pendingMetadata?.latencyTotalMs ?? null,
-      });
+      setInspectorData(buildInspectorPayloadFromMeta(pendingMetadata, fallbackAssistantMsg.content));
       toast.error('Recovered with a safe fallback answer due to empty stream content.');
       void onAfterMessagePersisted();
       return;
     }
+
+    // Build and append the successful assistant message
     const assistantMsg: Message = {
       id: `a-${Date.now()}`,
       chat_id: chatId,

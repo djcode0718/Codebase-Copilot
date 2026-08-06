@@ -71,6 +71,18 @@ export default function IndexingPage() {
     }
   }, [isComplete, repoId, router]);
 
+  function headingText() {
+    if (isComplete) return 'Indexing complete';
+    if (hasError) return 'Indexing failed';
+    return 'Indexing repository';
+  }
+
+  function subtitleText() {
+    if (isComplete && indexName) return `"${indexName}" is ready to chat.`;
+    if (hasError) return 'Review the error details below and retry when ready.';
+    return 'Processing files, embeddings, and repository structure in real time.';
+  }
+
   return (
     <div className="space-y-6">
       <Link
@@ -94,14 +106,10 @@ export default function IndexingPage() {
             </div>
             <div>
               <h1 className="font-heading text-3xl font-bold tracking-tight">
-                {isComplete ? 'Indexing complete' : hasError ? 'Indexing failed' : 'Indexing repository'}
+                {headingText()}
               </h1>
               <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-                {isComplete && indexName
-                  ? `“${indexName}” is ready to chat.`
-                  : hasError
-                  ? 'Review the error details below and retry when ready.'
-                  : 'Processing files, embeddings, and repository structure in real time.'}
+                {subtitleText()}
               </p>
             </div>
           </div>
@@ -153,13 +161,16 @@ export default function IndexingPage() {
         </div>
 
         <div className="min-w-0 space-y-6">
+
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
+
             transition={{ delay: 0.15 }}
             className="min-w-0 rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
           >
             <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground mb-3">Live summary</h2>
+
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-1">
               {[
                 { label: 'Progress', value: `${progress}%` },

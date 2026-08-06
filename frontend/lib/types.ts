@@ -383,3 +383,92 @@ export interface ReviewFixResponse {
   metadata: Record<string, unknown>;
 }
 
+// -- Repository Explorer ------------------------------------------------------
+
+export type ExplorerHealth = 'healthy' | 'review_suggested' | 'critical' | 'not_analyzed';
+export type ExplorerAiIndicator = 'recently_changed' | 'not_analyzed';
+
+export interface ExplorerTreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'folder';
+  has_children: boolean;
+  size: number;
+  modified_at?: string | null;
+  language: string;
+  health: ExplorerHealth;
+  ai_indicator: ExplorerAiIndicator;
+  git_status: string;
+  is_modified: boolean;
+}
+
+export interface ExplorerTreeResponse {
+  repo_root: string;
+  path: string;
+  nodes: ExplorerTreeNode[];
+  truncated: boolean;
+  count: number;
+}
+
+export interface ExplorerFileDetails {
+  path: string;
+  language: string;
+  content: string;
+  sha256: string;
+  summary: string;
+  complexity: number;
+  health: ExplorerHealth;
+  dependencies: Record<string, unknown>;
+  classes: string[];
+  functions: string[];
+  imports: string[];
+  line_count: number;
+  size: number;
+}
+
+export interface ExplorerReviewResult {
+  review_id: string;
+  scope: 'file' | 'files';
+  overall_score: number;
+  summary: string;
+  findings: ReviewFinding[];
+  changed_files: string[];
+  sections: Record<string, unknown>;
+  generated_at: string;
+}
+
+export interface ExplorerFixProposal {
+  fix_id: string;
+  path: string;
+  current_content: string;
+  suggested_content: string;
+  diff: string;
+  current_sha256: string;
+  generated_at: string;
+}
+
+export interface ExplorerTestDiscoveryResult {
+  tests: string[];
+  count: number;
+}
+
+export interface ExplorerTestRunResult {
+  status: 'passed' | 'failed' | 'timeout' | 'skipped';
+  tests: string[];
+  passed: number;
+  failed: number;
+  duration_seconds: number;
+  coverage: number | null;
+  output: string;
+}
+
+export interface ExplorerHistory {
+  path: string;
+  reviews: Array<Record<string, unknown>>;
+  fixes: Array<Record<string, unknown>>;
+  applied_fixes: Array<Record<string, unknown>>;
+  rejected_fixes: Array<Record<string, unknown>>;
+  test_runs: Array<Record<string, unknown>>;
+  conversations: Array<Record<string, unknown>>;
+}
+

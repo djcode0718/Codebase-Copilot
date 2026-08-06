@@ -30,6 +30,7 @@ import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import { listChatSessions, updateChatSession, deleteChat, deleteAllChats, exportRepositoryMemory } from '@/lib/api';
 import type { Chat, Repo } from '@/lib/types';
+import RepositoryExplorer from '@/components/layout/RepositoryExplorer';
 
 const STORAGE_KEY = 'codebase-copilot.sidebar.collapsed';
 
@@ -249,6 +250,11 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
         toast.success(chat.is_archived ? 'Unarchived' : 'Archived');
       } else if (action === 'delete') {
         await deleteChat(token, chat.id);
+        // Optimistically remove from local state so the UI updates immediately
+        setRepoChats((prev) => ({
+          ...prev,
+          [repoId]: (prev[repoId] ?? []).filter((c) => c.id !== chat.id),
+        }));
         toast.success('Conversation deleted');
       } else if (action === 'download') {
         try {
@@ -490,6 +496,18 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
                               )}
                             </div>
                           </div>
+                        </div>
+                      )}
+
+                      {!collapsed && (
+                        <div className="ml-5 mt-1 border-l border-sidebar-border/50 pl-2">
+                          <RepositoryExplorer
+                            repoId={repo.id}
+                            repoName={repo.name}
+                            repoStatus={repo.status}
+                            token={authToken}
+                            collapsed={collapsed}
+                          />
                         </div>
                       )}
                     </div>

@@ -625,12 +625,16 @@ class MaintainabilityAnalyzer(BaseAnalyzer):
             r")"
         )
         for f in code_files:
+            # Frontend component files (TSX/JSX) naturally have larger render
+            # functions; use a relaxed threshold to avoid false positives.
+            is_frontend_component = f.ext in {".tsx", ".jsx"}
+            threshold = 200 if is_frontend_component else 120
             lines = f.content.splitlines()
             start = None
             for idx, line in enumerate(lines):
                 if _fn_pattern.match(line):
                     start = idx
-                if start is not None and idx - start > 120 and line.strip() == "":
+                if start is not None and idx - start > threshold and line.strip() == "":
                     long_functions.append((f.rel_path, idx - start))
                     start = None
 

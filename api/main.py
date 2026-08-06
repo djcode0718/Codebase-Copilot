@@ -113,7 +113,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import repo, chat, eval, suggestions, health, reviews
+from api.routers import repo, chat, eval, suggestions, health, reviews, explorer
 
 
 async def _schedule_llamaindex_prewarm() -> None:
@@ -202,6 +202,7 @@ app.include_router(eval.router,        prefix="/api/eval",  tags=["Evaluation"])
 app.include_router(suggestions.router, prefix="/api/repo",  tags=["Suggestions"])
 app.include_router(health.router,      prefix="/api/repo",  tags=["Repository Health"])
 app.include_router(reviews.router,     prefix="/api/reviews", tags=["Engineering Review"])
+app.include_router(explorer.router,    prefix="/api/repo",  tags=["Repository Explorer"])
 
 
 

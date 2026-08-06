@@ -304,7 +304,7 @@ def create_chat(
             ],
         ):
             raise
-        # Legacy chats schema fallback: keep only stable columns.
+        # Chats schema backward-compat fallback: keep only stable columns.
         legacy_record = {
             "id": record["id"],
             "user_id": user_id,
@@ -422,7 +422,7 @@ def get_main_chat_for_repo(supabase: Client, user_id: str, repo_id: str) -> Opti
         return result.data[0] if result.data else None
     except Exception as e:
         if _is_missing_column_error(e, ["session_type", "deleted_at"]):
-            # Legacy schema fallback: infer main session by canonical title.
+            # Older schema fallback: infer main session by canonical title.
             try:
                 fallback = (
                     supabase.table("chats")
@@ -1449,5 +1449,3 @@ def delete_repository_review(
             return False
         logger.warning(f"delete_repository_review failed for review_id='{review_id}': {e}")
         return False
-
-

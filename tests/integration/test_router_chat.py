@@ -110,11 +110,11 @@ class TestCreateChatSession:
         }
 
         chats_table = MagicMock()
-        # get_main_chat_for_repo query fails on session_type/deleted_at in legacy schema
+        # get_main_chat_for_repo query fails on session_type/deleted_at in older schema
         chats_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.is_.return_value.limit.return_value.execute.side_effect = MissingColumnError()
         # fallback lookup by title returns no main session yet
         chats_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-        # create_chat first insert fails on new columns, second insert succeeds with legacy payload
+        # create_chat first insert fails on new columns, second insert succeeds with compat payload
         insert_chain = MagicMock()
         insert_chain.execute.side_effect = [MissingColumnError(), MagicMock(data=[{"id": "legacy-main", "repo_id": fake_repo_id}])]
         chats_table.insert.return_value = insert_chain
@@ -647,4 +647,3 @@ class TestStreamMessage:
         assert "repository memory issue" in chunks[1].lower()
         assert "conversation_tags" not in chunks[1]
         assert "done" in chunks[2]
-

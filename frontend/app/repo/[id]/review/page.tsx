@@ -107,6 +107,10 @@ export default function RepositoryReviewPage() {
 
   const findings = useMemo(() => selectedReview?.findings ?? [], [selectedReview]);
 
+  function csvToList(csv: string): string[] {
+    return csv.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+
   return (
     <div className="space-y-6">
       <motion.section
@@ -136,7 +140,7 @@ export default function RepositoryReviewPage() {
               disabled={loading || !filesCsv.trim()}
               onClick={() => runReview(() => reviewFiles(token, {
                 repo_id: repoId,
-                files: filesCsv.split(',').map((s) => s.trim()).filter(Boolean),
+                files: csvToList(filesCsv),
                 prompt: prompt.trim() || undefined,
               }))}
             >
@@ -158,7 +162,7 @@ export default function RepositoryReviewPage() {
               disabled={loading || (!prFilesCsv.trim() && !prDiff.trim())}
               onClick={() => runReview(() => reviewPullRequest(token, {
                 repo_id: repoId,
-                changed_files: prFilesCsv.split(',').map((s) => s.trim()).filter(Boolean),
+                changed_files: csvToList(prFilesCsv),
                 diff: prDiff,
                 prompt: prompt.trim() || undefined,
               }))}
@@ -175,12 +179,14 @@ export default function RepositoryReviewPage() {
 
         <div className="space-y-4">
           <div className="rounded-2xl border border-border bg-card/80 p-4">
+
             <div className="mb-3 flex items-center justify-between">
               <div className="text-sm font-medium">Review history</div>
               {historyLoading && <Loader2 size={13} className="animate-spin text-muted-foreground" />}
             </div>
             <div className="space-y-2 max-h-[18rem] overflow-auto">
               {history.length === 0 && <p className="text-sm text-muted-foreground">No reviews yet.</p>}
+
               {history.map((item) => {
                 const isActive = selectedReview?.review_id === item.review_id;
                 return (
@@ -300,4 +306,3 @@ export default function RepositoryReviewPage() {
     </div>
   );
 }
-

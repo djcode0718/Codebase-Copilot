@@ -37,6 +37,26 @@ const LATENCY_CARDS = [
   { key: 'avg_latency_llm',       label: 'LLM',       color: 'bg-amber-400' },
 ] as const;
 
+function EvalEmptyState({ onRun, running }: { onRun: () => void; running: boolean }) {
+  return (
+    <div className="rounded-[1.5rem] border border-border bg-card/80 px-6 py-16 text-center shadow-lg shadow-black/5 backdrop-blur-sm">
+      <Target size={32} className="text-muted-foreground mx-auto mb-3" />
+      <h3 className="font-heading text-lg font-semibold mb-2">No evaluation data yet</h3>
+      <p className="mx-auto mb-5 max-w-sm text-sm text-muted-foreground">
+        Run an evaluation to see quality metrics, latency breakdown, and a radar chart.
+      </p>
+      <Button
+        onClick={onRun}
+        disabled={running}
+        className="bg-violet-500 hover:bg-violet-400 text-white cursor-pointer"
+      >
+        <Play size={14} className="mr-2" />
+        Run first evaluation
+      </Button>
+    </div>
+  );
+}
+
 export default function EvalPage() {
   const { id: repoId } = useParams<{ id: string }>();
   const [token, setToken] = useState('');
@@ -101,15 +121,18 @@ export default function EvalPage() {
     setRunLog([]);
   }
 
-  const radarData = evalData
-    ? [
-        { metric: 'Hit Rate',    value: evalData.hit_rate * 100 },
-        { metric: 'MRR',         value: evalData.mrr * 100 },
-        { metric: 'Faithfulness',value: evalData.avg_faithfulness * 100 },
-        { metric: 'Relevancy',   value: evalData.avg_relevancy * 100 },
-        { metric: 'Mode Acc.',   value: evalData.mode_accuracy * 100 },
-      ]
-    : [];
+  function buildRadarData() {
+    if (!evalData) return [];
+    return [
+      { metric: 'Hit Rate',    value: evalData.hit_rate * 100 },
+      { metric: 'MRR',         value: evalData.mrr * 100 },
+      { metric: 'Faithfulness',value: evalData.avg_faithfulness * 100 },
+      { metric: 'Relevancy',   value: evalData.avg_relevancy * 100 },
+      { metric: 'Mode Acc.',   value: evalData.mode_accuracy * 100 },
+    ];
+  }
+
+  const radarData = buildRadarData();
 
   return (
     <div className="space-y-6">
@@ -171,21 +194,7 @@ export default function EvalPage() {
       )}
 
       {!loading && !evalData && (
-        <div className="rounded-[1.5rem] border border-border bg-card/80 px-6 py-16 text-center shadow-lg shadow-black/5 backdrop-blur-sm">
-          <Target size={32} className="text-muted-foreground mx-auto mb-3" />
-          <h3 className="font-heading text-lg font-semibold mb-2">No evaluation data yet</h3>
-          <p className="mx-auto mb-5 max-w-sm text-sm text-muted-foreground">
-            Run an evaluation to see quality metrics, latency breakdown, and a radar chart.
-          </p>
-          <Button
-            onClick={runEval}
-            disabled={running}
-            className="bg-violet-500 hover:bg-violet-400 text-white cursor-pointer"
-          >
-            <Play size={14} className="mr-2" />
-            Run first evaluation
-          </Button>
-        </div>
+        <EvalEmptyState onRun={runEval} running={running} />
       )}
 
       {evalData && (
@@ -194,7 +203,9 @@ export default function EvalPage() {
           animate={{ opacity: 1 }}
           className="space-y-6"
         >
+
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
               <CheckCircle2 size={12} className="text-brand" />
               {evalData.total_queries ?? '—'} test queries

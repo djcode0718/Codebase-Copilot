@@ -21,6 +21,13 @@ import type {
   ChatSearchResponse,
   ConversationSummary,
   MemoryExportResponse,
+  ExplorerTreeResponse,
+  ExplorerFileDetails,
+  ExplorerReviewResult,
+  ExplorerFixProposal,
+  ExplorerTestDiscoveryResult,
+  ExplorerTestRunResult,
+  ExplorerHistory,
 } from './types';
 
 const DEFAULT_API_BASE = 'http://localhost:8000';
@@ -551,6 +558,157 @@ export async function deleteReview(token: string, reviewId: string): Promise<voi
     headers: authHeaders(token),
   });
   if (!res.ok) throw new Error('Failed to delete review');
+}
+
+// -- Repository Explorer ------------------------------------------------------
+
+export async function getExplorerTree(
+  token: string,
+  repoId: string,
+  options?: { path?: string; includeHidden?: boolean; limit?: number }
+): Promise<ExplorerTreeResponse> {
+  const params = new URLSearchParams();
+  if (options?.path) params.set('path', options.path);
+  if (options?.includeHidden !== undefined) params.set('include_hidden', String(options.includeHidden));
+  if (options?.limit !== undefined) params.set('limit', String(options.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/tree${suffix}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load repository tree');
+  return res.json();
+}
+
+export async function getExplorerFile(token: string, repoId: string, path: string): Promise<ExplorerFileDetails> {
+  const params = new URLSearchParams({ path });
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/file?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to open file');
+  return res.json();
+}
+
+export async function runExplorerFileReview(
+  token: string,
+  repoId: string,
+  payload: { path: string; review_type?: string; prompt?: string }
+): Promise<ExplorerReviewResult> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/review/file`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to review file');
+  }
+  return res.json();
+}
+
+export async function runExplorerBatchReview(
+  token: string,
+  repoId: string,
+  payload: { paths: string[]; review_type?: string; prompt?: string }
+): Promise<ExplorerReviewResult> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/review/files`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to review files');
+  }
+  return res.json();
+}
+
+export async function generateExplorerFix(
+  token: string,
+  repoId: string,
+  payload: { path: string; finding: string; recommendation?: string }
+): Promise<ExplorerFixProposal> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/fix/generate`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to generate fix');
+  }
+  return res.json();
+}
+
+export async function applyExplorerFix(
+  token: string,
+  repoId: string,
+  payload: { fix_id: string; expected_sha256?: string; run_validation?: boolean }
+): Promise<Record<string, unknown>> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/fix/apply`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to apply fix');
+  }
+  return res.json();
+}
+
+export async function discoverExplorerTests(
+  token: string,
+  repoId: string,
+  paths: string[]
+): Promise<ExplorerTestDiscoveryResult> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/tests/discover`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ paths }),
+  });
+  if (!res.ok) throw new Error('Failed to discover tests');
+  return res.json();
+}
+
+export async function runExplorerTests(
+  token: string,
+  repoId: string,
+  tests: string[],
+  timeoutSeconds = 55
+): Promise<ExplorerTestRunResult> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/tests/run`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ tests, timeout_seconds: timeoutSeconds }),
+  });
+  if (!res.ok) throw new Error('Failed to run tests');
+  return res.json();
+}
+
+export async function getExplorerHistory(token: string, repoId: string, path: string): Promise<ExplorerHistory> {
+  const params = new URLSearchParams({ path });
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/history?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load file history');
+  return res.json();
+}
+
+export async function addExplorerConversationEntry(
+  token: string,
+  repoId: string,
+  payload: { path: string; role: 'user' | 'assistant' | 'system'; content: string }
+): Promise<Record<string, unknown>> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/explorer/conversations`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to save conversation entry');
+  return res.json();
 }
 
 // ── Evaluation endpoints ──────────────────────────────────────────────────

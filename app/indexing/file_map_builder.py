@@ -136,9 +136,3 @@ def build_file_map(file_paths: List[str], repo_path: str, index_name: str) -> Li
     logger.info(f"File map saved — {len(file_map)} files in {time.time() - start_time:.2f}s")
 
     return file_map
-
-
-# # # HJ
-# # # TODO: Implement summary caching
-
-
