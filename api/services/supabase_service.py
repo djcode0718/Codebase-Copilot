@@ -395,6 +395,14 @@ def update_chat_fields(supabase: Client, chat_id: str, fields: Dict[str, Any]) -
 
 
 def delete_chat(supabase: Client, chat_id: str) -> None:
+    """Hard delete chat and all associated messages."""
+    # Delete all messages for this chat first
+    try:
+        supabase.table("messages").delete().eq("chat_id", chat_id).execute()
+    except Exception as e:
+        logger.warning(f"Failed to delete messages for chat {chat_id}: {e}")
+    
+    # Then delete the chat itself
     supabase.table("chats").delete().eq("id", chat_id).execute()
 
 

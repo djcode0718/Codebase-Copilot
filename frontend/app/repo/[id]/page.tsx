@@ -254,17 +254,23 @@ function FastActionsPanel({
         <Link href={`/repo/${repoId}/chat`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-brand/30 hover:bg-brand/5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="font-medium">Repository Chat</p>
-              <p className="mt-1 text-xs text-muted-foreground">Start or continue the repository knowledge thread.</p>
+              <p className="font-medium flex items-center gap-2">
+                <span className="text-base">💬</span>
+                Repository Chat
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Ask questions about your repository.</p>
             </div>
             <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </div>
         </Link>
-        <Link href={`/repo/${repoId}/eval`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-violet-500/30 hover:bg-violet-500/5">
+        <Link href={`/repo/${repoId}/explorer`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="font-medium">Run evaluation</p>
-              <p className="mt-1 text-xs text-muted-foreground">Benchmark grounding, relevancy, and latency.</p>
+              <p className="font-medium flex items-center gap-2">
+                <span className="text-base">📂</span>
+                AI Code Explorer
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Browse files and launch AI engineering actions.</p>
             </div>
             <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </div>
@@ -272,8 +278,23 @@ function FastActionsPanel({
         <Link href={`/repo/${repoId}/review`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-cyan-500/30 hover:bg-cyan-500/5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="font-medium">AI engineering review</p>
-              <p className="mt-1 text-xs text-muted-foreground">Review files, commits, and PR diffs with fix suggestions.</p>
+              <p className="font-medium flex items-center gap-2">
+                <span className="text-base">🛠</span>
+                AI Engineering Review
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Review files, commits and PRs.</p>
+            </div>
+            <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </div>
+        </Link>
+        <Link href={`/repo/${repoId}/eval`} className="group block rounded-2xl border border-border/70 bg-background/70 p-4 transition-colors hover:border-violet-500/30 hover:bg-violet-500/5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-medium flex items-center gap-2">
+                <span className="text-base">📊</span>
+                Repository Evaluation
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Analyze architecture, security and quality.</p>
             </div>
             <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </div>
@@ -286,11 +307,11 @@ function FastActionsPanel({
         >
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="font-medium flex items-center gap-1.5">
-                <Brain size={13} className="text-pink-400" />
+              <p className="font-medium flex items-center gap-2">
+                <span className="text-base">🧠</span>
                 Digital Twin
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">Generate living architecture model.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Generate a living architectural model.</p>
             </div>
             <ArrowRight size={14} className="text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </div>

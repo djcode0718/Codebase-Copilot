@@ -30,7 +30,6 @@ import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import { listChatSessions, updateChatSession, deleteChat, deleteAllChats, exportRepositoryMemory } from '@/lib/api';
 import type { Chat, Repo } from '@/lib/types';
-import RepositoryExplorer from '@/components/layout/RepositoryExplorer';
 
 const STORAGE_KEY = 'codebase-copilot.sidebar.collapsed';
 
@@ -245,12 +244,15 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
       if (action === 'pin') {
         await updateChatSession(token, chat.id, { is_pinned: !chat.is_pinned });
         toast.success(chat.is_pinned ? 'Unpinned' : 'Pinned');
+        await fetchChats(repoId);
       } else if (action === 'archive') {
         await updateChatSession(token, chat.id, { is_archived: !chat.is_archived });
         toast.success(chat.is_archived ? 'Unarchived' : 'Archived');
+        await fetchChats(repoId);
       } else if (action === 'delete') {
         await deleteChat(token, chat.id);
-        // Optimistically remove from local state so the UI updates immediately
+        // Remove from local state immediately and do NOT refetch
+        // The soft-delete is persistent on backend, so refresh page won't show deleted chats
         setRepoChats((prev) => ({
           ...prev,
           [repoId]: (prev[repoId] ?? []).filter((c) => c.id !== chat.id),
@@ -262,9 +264,7 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
           downloadTextFile(payload.filename, payload.content, payload.content_type || 'text/markdown');
           toast.success('Exported');
         } catch { toast.error('Export failed'); }
-        return;
       }
-      await fetchChats(repoId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed');
     }
@@ -498,18 +498,6 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
                           </div>
                         </div>
                       )}
-
-                      {!collapsed && (
-                        <div className="ml-5 mt-1 border-l border-sidebar-border/50 pl-2">
-                          <RepositoryExplorer
-                            repoId={repo.id}
-                            repoName={repo.name}
-                            repoStatus={repo.status}
-                            token={authToken}
-                            collapsed={collapsed}
-                          />
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -517,6 +505,30 @@ export default function Sidebar({ repos = [], userEmail: _userEmail, mobileOpen 
             </div>
           )}
         </div>
+
+        {/* Repository Explorer - Only on /repo/[id]/review page */}
+        {pathname.includes('/review') && (
+          <div className="flex-1 overflow-y-auto border-t border-sidebar-border mt-3 pt-3">
+            <div className="px-2.5 py-1.5 mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/60">Repository Files</h3>
+            </div>
+            <div className="space-y-1 px-1">
+              <p className="px-2.5 text-[10px] text-sidebar-foreground/50 italic">Open files from the explorer panel on the right. Files will appear here when selected.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Chat History - Only on non-review pages */}
+        {!pathname.includes('/review') && (
+          <div className="border-t border-sidebar-border mt-3 pt-3">
+            <div className="flex items-center justify-between px-2.5 py-1.5">
+              <span className="text-xs font-semibold text-sidebar-foreground/60 uppercase tracking-wider">Chat History</span>
+            </div>
+            <div className="mt-2 space-y-1 max-h-[200px] overflow-auto text-[11px] text-sidebar-foreground/60">
+              <p className="px-2">Chat sessions will appear here</p>
+            </div>
+          </div>
+        )}
         {/* User section moved to Topbar */}
       </aside>
     </>

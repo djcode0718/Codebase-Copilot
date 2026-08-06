@@ -346,7 +346,7 @@ export async function getMessages(token: string, chatId: string, opts?: { limit?
 
 /** DELETE /api/chat/{chat_id} */
 export async function deleteChat(token: string, chatId: string): Promise<void> {
-  const res = await fetch(apiUrl(`/api/chat/${chatId}`), {
+  const res = await fetch(apiUrl(`/api/chat/${chatId}?hard_delete=true`), {
     method: 'DELETE',
     headers: authHeaders(token),
   });

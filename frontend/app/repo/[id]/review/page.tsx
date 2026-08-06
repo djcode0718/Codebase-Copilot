@@ -3,7 +3,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Bot, FileCode2, GitCommitHorizontal, GitPullRequest, History, Loader2, MessageSquare, Play, Shield, Sparkles, TestTube, Trash2, Wrench } from 'lucide-react';
+import {
+  Bot,
+  Circle,
+  FileCode,
+  FileCode2,
+  GitCommitHorizontal,
+  GitPullRequest,
+  History,
+  Loader2,
+  MessageSquare,
+  Play,
+  Shield,
+  Sparkles,
+  TestTube,
+  Trash2,
+  Wrench,
+} from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,6 +44,7 @@ import {
 } from '@/lib/api';
 import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 
 function SeverityPill({ severity }: { severity: string }) {
   const cls = severity === 'critical'
@@ -40,6 +57,7 @@ function SeverityPill({ severity }: { severity: string }) {
 
   return <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${cls}`}>{severity}</span>;
 }
+
 
 export default function RepositoryReviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
@@ -62,6 +80,7 @@ export default function RepositoryReviewPage() {
   const [ribbonTests, setRibbonTests] = useState<ExplorerTestRunResult | null>(null);
   const [ribbonHistory, setRibbonHistory] = useState('');
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
+  const [fileViewerOpen, setFileViewerOpen] = useState(true);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
 
   const loadHistory = useCallback(async (t: string) => {
@@ -122,6 +141,9 @@ export default function RepositoryReviewPage() {
       cancelled = true;
     };
   }, [token, repoId, selectedFilePath]);
+
+
+  const visibleTreeRoots = useMemo(() => [], []); // Explorer moved to sidebar
 
   const runReview = useCallback(async (runner: () => Promise<ReviewRun>) => {
     if (!token) return;
@@ -323,7 +345,7 @@ export default function RepositoryReviewPage() {
           <Sparkles size={16} className="text-brand" />
           <h1 className="font-heading text-2xl font-bold tracking-tight">AI Engineering Review</h1>
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">Review files, commits, and PR diffs with persisted findings and optional fix generation.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Review commits and PR diffs with persisted findings and optional fix generation. Use the <a href={`/repo/${repoId}/explorer`} className="text-brand underline hover:no-underline">File Explorer</a> to browse and review individual files.</p>
       </motion.section>
 
       {selectedFilePath && (
@@ -398,6 +420,8 @@ export default function RepositoryReviewPage() {
           )}
         </section>
       )}
+
+      {/* File Viewer removed — use /explorer page for full file browsing */}
 
       <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-4">
