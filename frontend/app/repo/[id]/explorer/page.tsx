@@ -9,6 +9,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   Circle,
   Download,
@@ -1138,7 +1139,7 @@ function AdvancedMarkdownViewer({ content, theme, isDarkMode }: { content: strin
         out.push(
           <div key={`code-${idx}`} className={cn('my-4 overflow-hidden rounded border', markdownStyle.codeWrap)}>
             <div className={cn('px-3 py-1.5 font-mono text-xs', markdownStyle.codeHead)}>{language}</div>
-            <pre className="overflow-auto px-3 py-2 font-mono text-xs leading-6 text-foreground">
+            <pre className={cn('overflow-auto px-3 py-2 font-mono text-xs leading-6', style.text)}>
               {codeLines.map((codeLine, i) => (
                 <div key={i}>{highlightLine(codeLine, language)}</div>
               ))}
@@ -1199,11 +1200,11 @@ function AdvancedMarkdownViewer({ content, theme, isDarkMode }: { content: strin
     }
 
     return out;
-  }, [lines, markdownStyle, isDarkMode]);
+  }, [lines, markdownStyle, isDarkMode, style.text]);
 
   return (
     <div className={cn('flex-1 overflow-auto px-8 py-6', style.bg)}>
-      <article className="prose prose-sm max-w-4xl text-foreground">
+      <article className={cn('prose prose-sm max-w-4xl', isDarkMode ? 'prose-invert text-[#e5e7eb]' : 'text-[#1f2937]')}>
         {blocks}
       </article>
     </div>
@@ -1215,7 +1216,8 @@ type AdvancedCodeViewerProps = {
   language: string;
   theme: ViewerTheme;
   isDarkMode: boolean;
-  search: string;
+  matchLines: number[];
+  activeMatchLine: number | null;
   wordWrap: boolean;
   showLineNumbers: boolean;
   fontSize: number;
@@ -1226,7 +1228,8 @@ function AdvancedCodeViewer({
   language,
   theme,
   isDarkMode,
-  search,
+  matchLines,
+  activeMatchLine,
   wordWrap,
   showLineNumbers,
   fontSize,
@@ -1237,15 +1240,7 @@ function AdvancedCodeViewer({
   const [scrollTop, setScrollTop] = useState(0);
   const lineHeight = Math.round(fontSize * 1.7);
 
-  const matching = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return new Set<number>();
-    const set = new Set<number>();
-    lines.forEach((line, i) => {
-      if (line.toLowerCase().includes(q)) set.add(i);
-    });
-    return set;
-  }, [lines, search]);
+  const matching = useMemo(() => new Set<number>(matchLines), [matchLines]);
 
   useEffect(() => {
     const el = viewerRef.current;
@@ -1254,6 +1249,14 @@ function AdvancedCodeViewer({
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
+
+  useEffect(() => {
+    if (activeMatchLine === null) return;
+    const el = viewerRef.current;
+    if (!el) return;
+    const targetTop = Math.max(0, activeMatchLine * lineHeight - Math.floor(el.clientHeight * 0.35));
+    el.scrollTo({ top: targetTop, behavior: 'smooth' });
+  }, [activeMatchLine, lineHeight]);
 
   const viewportHeight = 700;
   const start = Math.max(0, Math.floor(scrollTop / lineHeight) - 40);
@@ -1270,7 +1273,12 @@ function AdvancedCodeViewer({
             return (
               <div
                 key={lineNo}
-                className={cn('flex items-start', style.lineHover, matching.has(lineNo) && 'bg-yellow-100')}
+                className={cn(
+                  'flex items-start',
+                  style.lineHover,
+                  matching.has(lineNo) && (isDarkMode ? 'bg-amber-500/15' : 'bg-amber-100'),
+                  activeMatchLine === lineNo && (isDarkMode ? 'ring-1 ring-amber-400/70 bg-amber-500/20' : 'ring-1 ring-amber-500 bg-amber-200')
+                )}
                 style={{ minHeight: `${lineHeight}px` }}
               >
                 {showLineNumbers && (
@@ -1420,6 +1428,7 @@ export default function RepositoryExplorerPage() {
   const [activeFilePath, setActiveFilePath] = useState<string>('');
   const viewerTheme: ViewerTheme = 'github';
   const [viewerSearch, setViewerSearch] = useState('');
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0);
   const wordWrap = false;
   const [showLineNumbers, setShowLineNumbers] = useState(true);
   const [fontSize, setFontSize] = useState(12);
@@ -1478,6 +1487,7 @@ export default function RepositoryExplorerPage() {
 
   async function openFile(path: string) {
     setActiveFilePath(path);
+    setSearchMatchIndex(0);
     setRibbonReview(null);
     setRibbonFix(null);
     setRibbonTests(null);
@@ -1504,6 +1514,19 @@ export default function RepositoryExplorerPage() {
     if (!activeFile) return 'text' as ViewerMode;
     return detectViewerMode(activeFile.path, activeLanguage, activeFile.content);
   }, [activeFile, activeLanguage]);
+
+  const searchMatchLines = useMemo(() => {
+    if (!activeFile || !viewerSearch.trim()) return [] as number[];
+    const q = viewerSearch.toLowerCase();
+    return activeFile.content.split('\n').reduce<number[]>((acc, line, idx) => {
+      if (line.toLowerCase().includes(q)) acc.push(idx);
+      return acc;
+    }, []);
+  }, [activeFile, viewerSearch]);
+
+  const activeMatchLine = searchMatchLines.length > 0
+    ? searchMatchLines[Math.min(searchMatchIndex, searchMatchLines.length - 1)]
+    : null;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1756,16 +1779,6 @@ export default function RepositoryExplorerPage() {
     });
   }
 
-  // ─── Health score ────────────────────────────────────────────────────────────
-  const healthScore = useMemo(() => {
-    if (!activeFile) return null;
-    if (activeFile.health === 'critical') return 42;
-    if (activeFile.health === 'review_suggested') return 67;
-    if (activeFile.health === 'healthy') return 84;
-    return 74;
-  }, [activeFile]);
-
-
   return (
     <div className={cn('flex h-[calc(100vh-4rem)] overflow-hidden', isDarkMode && 'bg-[#111827] text-[#e5e7eb]')}>
       {/* ─── Sidebar: File Explorer ─────────────────────────────────────────── */}
@@ -1855,9 +1868,6 @@ export default function RepositoryExplorerPage() {
                   <Circle size={5} fill="currentColor" />
                   {activeFile.health || 'unknown'}
                 </span>
-                {healthScore && (
-                  <span className="text-lg font-bold tabular-nums text-foreground">{healthScore}</span>
-                )}
               </div>
             </div>
 
@@ -1889,12 +1899,39 @@ export default function RepositoryExplorerPage() {
                 <Input
                   id="file-viewer-search"
                   value={viewerSearch}
-                  onChange={(e) => setViewerSearch(e.target.value)}
+                  onChange={(e) => {
+                    setViewerSearch(e.target.value);
+                    setSearchMatchIndex(0);
+                  }}
                   placeholder="Search in file (Ctrl+F)"
                   className="h-8 pl-6 text-xs"
                   aria-label="Search within file"
                 />
               </div>
+
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-8 p-0"
+                aria-label="Previous match"
+                onClick={() => setSearchMatchIndex((idx) => (searchMatchLines.length === 0 ? 0 : (idx - 1 + searchMatchLines.length) % searchMatchLines.length))}
+                disabled={searchMatchLines.length === 0}
+              >
+                <ChevronUp size={12} />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-8 p-0"
+                aria-label="Next match"
+                onClick={() => setSearchMatchIndex((idx) => (searchMatchLines.length === 0 ? 0 : (idx + 1) % searchMatchLines.length))}
+                disabled={searchMatchLines.length === 0}
+              >
+                <ChevronDown size={12} />
+              </Button>
+              <span className="w-[82px] text-center text-xs text-muted-foreground">
+                {searchMatchLines.length === 0 ? '0 / 0' : `${Math.min(searchMatchIndex + 1, searchMatchLines.length)} / ${searchMatchLines.length}`}
+              </span>
 
               <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => void handleCopyContent()} aria-label="Copy file content">
                 {copied ? <Check size={12} className="mr-1" /> : <Copy size={12} className="mr-1" />} {copied ? 'Copied' : 'Copy'}
@@ -1969,7 +2006,8 @@ export default function RepositoryExplorerPage() {
                 language={activeLanguage}
                 theme={viewerTheme}
                 isDarkMode={isDarkMode}
-                search={viewerSearch}
+                matchLines={searchMatchLines}
+                activeMatchLine={activeMatchLine}
                 wordWrap={wordWrap}
                 showLineNumbers={showLineNumbers}
                 fontSize={fontSize}
