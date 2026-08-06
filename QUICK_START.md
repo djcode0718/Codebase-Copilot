@@ -63,3 +63,27 @@ ollama serve
 2. Sign in and click **Index repository**
 3. Paste a GitHub URL or local path
 4. Wait for indexing to complete, then click **Repository Chat**
+
+---
+
+## 6. Run AI Evaluation Center
+
+From the repository page, open **Evaluation Dashboard** and select a mode:
+- **Quick**: cache + static analysis only
+- **Standard**: changed-file analysis, calls AI only when needed
+- **Deep**: full evaluation
+- **Benchmark**: compares with previous runs
+
+Optional API usage:
+
+```bash
+curl -X POST http://localhost:8000/api/eval/run \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"repo_id":"<repo_id>","index_name":"","mode":"standard"}'
+
+curl -H "Authorization: Bearer <token>" "http://localhost:8000/api/eval/<repo_id>/history?limit=30"
+
+curl -H "Authorization: Bearer <token>" "http://localhost:8000/api/eval/<repo_id>/compare"
+```
+

@@ -966,6 +966,54 @@ def get_latest_evaluation(
         return None
 
 
+def get_recent_evaluations(
+    supabase: Client,
+    *,
+    repo_id: str,
+    limit: int = 30,
+) -> List[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("evaluations")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .order("created_at", desc=True)
+            .limit(max(1, min(limit, 200)))
+            .execute()
+        )
+        data = getattr(result, "data", None)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.warning(f"get_recent_evaluations failed for repo_id='{repo_id}': {e}")
+        return []
+
+
+def get_evaluation_by_id(
+    supabase: Client,
+    *,
+    repo_id: str,
+    evaluation_id: str,
+) -> Optional[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("evaluations")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .eq("id", evaluation_id)
+            .limit(1)
+            .execute()
+        )
+        data = getattr(result, "data", None)
+        if isinstance(data, list) and data:
+            return data[0]
+        return None
+    except Exception as e:
+        logger.warning(
+            f"get_evaluation_by_id failed for repo_id='{repo_id}', eval_id='{evaluation_id}': {e}"
+        )
+        return None
+
+
 # -- Repository Health Intelligence -------------------------------------------
 
 def insert_health_run(

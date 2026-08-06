@@ -220,6 +220,18 @@ Conversation memory is treated as long-term repository intelligence, not disposa
 
 A complete evaluation pipeline measuring retrieval quality (Hit Rate, MRR), generation quality (Faithfulness, Relevancy), routing accuracy, and system latency — runnable via CLI or via the API (with results persisted to Supabase).
 
+The Evaluation Dashboard now operates as an **AI Evaluation Center** with additive capabilities:
+- **Evaluation modes**: `quick`, `standard`, `deep`, `benchmark`
+- **Intelligent cache reuse** keyed by repository, branch, commit SHA, embedding version, retrieval settings, and prompt version
+- **Selective AI invocation**: LLM runs only when confidence is below threshold, cache is invalidated by relevant changes, or Deep mode is requested
+- **Efficiency telemetry**: cache hit rate, AI calls, static analysis %, estimated token usage/cost, and estimated cache savings
+- **Historical trend tracking**: overall score, hit rate, faithfulness, latency, and estimated AI cost
+- **Run comparisons**: current vs previous, explicit baseline run comparison, and benchmark-oriented deltas
+
+Evaluation API additions (backward-compatible):
+- `GET /api/eval/{repo_id}/history`
+- `GET /api/eval/{repo_id}/compare`
+
 ### 🧩 Advanced Parsing & Chunking
 
 Recursive repository traversal, metadata-rich chunking, function-aware splitting, tree-sitter parsing, and semantic file summaries.

@@ -170,7 +170,76 @@ export interface EvalSummary {
   colbert_enabled: boolean;
   // From result_json (read via: eval_record.get("result_json", {}).get("total_queries", 0))
   total_queries?: number;
+  mode?: 'quick' | 'standard' | 'deep' | 'benchmark';
+  cache_key?: string | null;
+  cache_hit?: boolean;
+  ai_summary?: EvalAiSummary | null;
+  top_recommendations?: EvalRecommendation[];
+  efficiency?: EvalEfficiency | null;
+  comparison?: EvalComparison | null;
   created_at: string;
+}
+
+export interface EvalAiSummary {
+  overall_score: number;
+  strengths: string[];
+  weaknesses: string[];
+  top_priority_improvements: string[];
+  estimated_score_improvement: number;
+}
+
+export interface EvalRecommendation {
+  rank: number;
+  title: string;
+  description: string;
+  estimated_impact: number;
+  expected_effort: 'Low' | 'Medium' | 'High';
+  one_click_action?: {
+    type: 'run_mode' | 'open_explorer' | 'open_settings';
+    mode?: 'quick' | 'standard' | 'deep' | 'benchmark';
+    target?: string;
+  } | null;
+}
+
+export interface EvalEfficiency {
+  cache_hit_rate: number;
+  ai_calls: number;
+  static_analysis_percentage: number;
+  estimated_token_usage: number;
+  estimated_cost_usd: number;
+  estimated_savings_usd: number;
+}
+
+export interface EvalComparison {
+  baseline_eval_id?: string | null;
+  overall_score_delta: number;
+  hit_rate_delta: number;
+  faithfulness_delta: number;
+  latency_delta_ms: number;
+  estimated_cost_delta_usd: number;
+}
+
+export interface EvalHistoryPoint {
+  id: string;
+  created_at: string;
+  overall_score: number;
+  hit_rate: number;
+  avg_faithfulness: number;
+  avg_latency_total: number;
+  cache_hit_rate: number;
+  estimated_ai_cost_usd: number;
+}
+
+export interface EvalHistoryResponse {
+  repo_id: string;
+  points: EvalHistoryPoint[];
+}
+
+export interface EvalComparisonResponse {
+  repo_id: string;
+  current: EvalSummary | null;
+  baseline: EvalSummary | null;
+  comparison: EvalComparison | null;
 }
 
 // Eval SSE events from api/routers/eval.py lines 59-108
@@ -471,4 +540,3 @@ export interface ExplorerHistory {
   test_runs: Array<Record<string, unknown>>;
   conversations: Array<Record<string, unknown>>;
 }
-

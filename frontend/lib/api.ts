@@ -10,6 +10,8 @@ import type {
   Message,
   CreateSessionResponse,
   EvalSummary,
+  EvalHistoryResponse,
+  EvalComparisonResponse,
   HealthCategoryDetailResponse,
   HealthHistoryResponse,
   HealthLatestResponse,
@@ -730,6 +732,49 @@ export async function getLatestEval(
 /** POST /api/eval/run — starts eval SSE stream */
 export function evalRunUrl(): string {
   return apiUrl('/api/eval/run');
+}
+
+export interface RunEvalPayload {
+  repo_id: string;
+  index_name: string;
+  mode?: 'quick' | 'standard' | 'deep' | 'benchmark';
+  branch?: string;
+  commit_sha?: string;
+  embedding_version?: string;
+  retrieval_settings?: Record<string, unknown>;
+  prompt_version?: string;
+  static_confidence_threshold?: number;
+}
+
+export async function getEvalHistory(
+  token: string,
+  repoId: string,
+  limit = 30,
+): Promise<EvalHistoryResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(apiUrl(`/api/eval/${repoId}/history?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to load evaluation history');
+  return res.json();
+}
+
+export async function compareEvals(
+  token: string,
+  repoId: string,
+  options?: { currentEvalId?: string; baselineEvalId?: string },
+): Promise<EvalComparisonResponse> {
+  const params = new URLSearchParams();
+  if (options?.currentEvalId) params.set('current_eval_id', options.currentEvalId);
+  if (options?.baselineEvalId) params.set('baseline_eval_id', options.baselineEvalId);
+  const query = params.toString();
+  const res = await fetch(apiUrl(`/api/eval/${repoId}/compare${query ? `?${query}` : ''}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error('Failed to compare evaluations');
+  return res.json();
 }
 
 // ── Health ────────────────────────────────────────────────────────────────

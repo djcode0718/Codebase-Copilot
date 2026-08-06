@@ -9,8 +9,7 @@ Tests for evaluation router endpoints:
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 
 # â”€â”€ GET /api/eval/{repo_id}/latest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -54,6 +53,7 @@ class TestGetLatestEvaluation:
         assert body["hit_rate"] == 0.9
         assert body["total_queries"] == 10
         assert body["colbert_enabled"] is False
+        assert body["mode"] == "standard"
 
     def test_returns_none_if_no_eval(self, client, mock_supabase, fake_repo, fake_repo_id):
         def table_side_effect(table_name):
@@ -97,6 +97,111 @@ class TestGetLatestEvaluation:
 
         resp = client.get(f"/api/eval/{fake_repo_id}/latest")
         assert resp.status_code == 403
+
+
+class TestEvaluationHistoryAndCompare:
+    def test_history_returns_points(self, client, mock_supabase, fake_repo, fake_repo_id):
+        eval_record = {
+            "id": "eval-001",
+            "repo_id": fake_repo_id,
+            "hit_rate": 0.8,
+            "mrr": 0.7,
+            "avg_faithfulness": 0.75,
+            "avg_relevancy": 0.74,
+            "mode_accuracy": 0.9,
+            "avg_latency_total": 1100.0,
+            "avg_latency_retrieval": 250.0,
+            "avg_latency_rerank": 120.0,
+            "avg_latency_llm": 730.0,
+            "colbert_enabled": False,
+            "result_json": {
+                "total_queries": 10,
+                "efficiency": {"cache_hit_rate": 0.4, "estimated_cost_usd": 0.012},
+            },
+            "created_at": "2025-01-01T00:00:00+00:00",
+        }
+
+        def table_side_effect(table_name):
+            mock_table = MagicMock()
+            if table_name == "repositories":
+                eq_chain = MagicMock()
+                eq_chain.execute.return_value = MagicMock(data=[fake_repo])
+                mock_table.select.return_value.eq.return_value = eq_chain
+            elif table_name == "evaluations":
+                limit_chain = MagicMock()
+                limit_chain.execute.return_value = MagicMock(data=[eval_record])
+                mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value = limit_chain
+            return mock_table
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        resp = client.get(f"/api/eval/{fake_repo_id}/history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["repo_id"] == fake_repo_id
+        assert len(body["points"]) == 1
+        assert "overall_score" in body["points"][0]
+
+    def test_compare_returns_delta(self, client, mock_supabase, fake_repo, fake_repo_id):
+        current = {
+            "id": "eval-new",
+            "repo_id": fake_repo_id,
+            "hit_rate": 0.9,
+            "mrr": 0.85,
+            "avg_faithfulness": 0.8,
+            "avg_relevancy": 0.79,
+            "mode_accuracy": 0.95,
+            "avg_latency_total": 1000.0,
+            "avg_latency_retrieval": 200.0,
+            "avg_latency_rerank": 100.0,
+            "avg_latency_llm": 700.0,
+            "colbert_enabled": False,
+            "result_json": {"total_queries": 10, "efficiency": {"estimated_cost_usd": 0.02}},
+            "created_at": "2025-01-02T00:00:00+00:00",
+        }
+        baseline = {
+            "id": "eval-old",
+            "repo_id": fake_repo_id,
+            "hit_rate": 0.8,
+            "mrr": 0.75,
+            "avg_faithfulness": 0.7,
+            "avg_relevancy": 0.72,
+            "mode_accuracy": 0.9,
+            "avg_latency_total": 1200.0,
+            "avg_latency_retrieval": 260.0,
+            "avg_latency_rerank": 120.0,
+            "avg_latency_llm": 820.0,
+            "colbert_enabled": False,
+            "result_json": {"total_queries": 10, "efficiency": {"estimated_cost_usd": 0.03}},
+            "created_at": "2025-01-01T00:00:00+00:00",
+        }
+
+        eval_table = MagicMock()
+        limit_chain = MagicMock()
+        limit_chain.execute.side_effect = [
+            MagicMock(data=[current]),
+            MagicMock(data=[current, baseline]),
+        ]
+        eval_table.select.return_value.eq.return_value.order.return_value.limit.return_value = limit_chain
+
+        def table_side_effect(table_name):
+            mock_table = MagicMock()
+            if table_name == "repositories":
+                eq_chain = MagicMock()
+                eq_chain.execute.return_value = MagicMock(data=[fake_repo])
+                mock_table.select.return_value.eq.return_value = eq_chain
+            elif table_name == "evaluations":
+                return eval_table
+            return mock_table
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        resp = client.get(f"/api/eval/{fake_repo_id}/compare")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["current"]["id"] == "eval-new"
+        assert body["baseline"]["id"] == "eval-old"
+        assert body["comparison"]["overall_score_delta"] > 0
 
 
 # â”€â”€ POST /api/eval/run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -165,5 +270,3 @@ class TestRunEvaluation:
         )
         assert resp.status_code == 400
         assert "index_name" in resp.json().get("detail", "")
-
-
