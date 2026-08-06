@@ -30,6 +30,7 @@ import {
   Sparkles,
   TestTube,
   Wrench,
+  X,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -1046,7 +1047,16 @@ function AdvancedLogViewer({ content, theme, isDarkMode }: { content: string; th
         </div>
         <div className="relative w-52">
           <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search logs" className="h-7 pl-6 text-xs" />
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search logs" className="h-7 pl-6 pr-7 text-xs" />
+          {query && (
+            <button
+              onClick={() => setQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded hover:bg-muted"
+              aria-label="Clear search"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
       </div>
       <div className="h-full overflow-auto px-4 py-3 font-mono text-xs leading-5">
@@ -1254,7 +1264,12 @@ function AdvancedCodeViewer({
     if (activeMatchLine === null) return;
     const el = viewerRef.current;
     if (!el) return;
-    const targetTop = Math.max(0, activeMatchLine * lineHeight - Math.floor(el.clientHeight * 0.35));
+
+    // Scroll to position the matched line at the top of the viewport
+    // Add a small buffer (40px) below the top for readability
+    const bufferTop = 60;
+    const targetTop = Math.max(0, activeMatchLine * lineHeight - bufferTop);
+
     el.scrollTo({ top: targetTop, behavior: 'smooth' });
   }, [activeMatchLine, lineHeight]);
 
@@ -1264,7 +1279,7 @@ function AdvancedCodeViewer({
   const visible = lines.slice(start, end);
 
   return (
-    <div ref={viewerRef} className={cn('flex-1 overflow-auto', style.bg)}>
+    <div ref={viewerRef} className={cn('flex-1 overflow-auto scrollbar-thin scrollbar-thumb-rounded scrollbar-track-bg', style.bg)}>
       <div style={{ height: `${lines.length * lineHeight}px`, position: 'relative' }}>
         <div style={{ position: 'absolute', top: `${start * lineHeight}px`, left: 0, right: 0 }}>
           {visible.map((line, i) => {
@@ -1277,7 +1292,7 @@ function AdvancedCodeViewer({
                   'flex items-start',
                   style.lineHover,
                   matching.has(lineNo) && (isDarkMode ? 'bg-amber-500/15' : 'bg-amber-100'),
-                  activeMatchLine === lineNo && (isDarkMode ? 'ring-1 ring-amber-400/70 bg-amber-500/20' : 'ring-1 ring-amber-500 bg-amber-200')
+                  activeMatchLine === lineNo && (isDarkMode ? 'ring-2 ring-amber-300/80 bg-amber-500/25 border-l-2 border-l-amber-300' : 'ring-2 ring-amber-500 bg-amber-200 border-l-2 border-l-amber-600')
                 )}
                 style={{ minHeight: `${lineHeight}px` }}
               >
@@ -1360,6 +1375,7 @@ function TreeNodeItem({
   isOpen,
   isActive,
   isLoading,
+  showPath,
   onToggle,
   onClick,
 }: {
@@ -1368,6 +1384,7 @@ function TreeNodeItem({
   isOpen: boolean;
   isActive: boolean;
   isLoading: boolean;
+  showPath?: boolean;
   onToggle: () => void;
   onClick: () => void;
 }) {
@@ -1376,7 +1393,8 @@ function TreeNodeItem({
     <button
       type="button"
       className={cn(
-        'group flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent/60',
+        'group flex w-full gap-1.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-accent/60',
+        showPath ? 'items-start py-2' : 'items-center',
         isActive && 'bg-brand/10 text-brand font-medium',
       )}
       style={{ paddingLeft: `${depth * 14 + 8}px` }}
@@ -1403,7 +1421,14 @@ function TreeNodeItem({
           <FileCode size={14} className="text-muted-foreground flex-shrink-0" />
         </>
       )}
-      <span className="truncate flex-1">{node.name}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{node.name}</span>
+        {showPath && (
+          <span className="block truncate text-[10px] leading-4 text-muted-foreground" title={node.path}>
+            {node.path}
+          </span>
+        )}
+      </span>
       {!isFolder && (
         <Circle size={6} fill="currentColor" className={cn('flex-shrink-0 opacity-70', healthColor(node.health))} />
       )}
@@ -1831,6 +1856,7 @@ export default function RepositoryExplorerPage() {
             isOpen={isOpen}
             isActive={isActive}
             isLoading={isLoading}
+            showPath={Boolean(search.trim())}
             onToggle={() => toggleFolder(node.path)}
             onClick={() => openFile(node.path)}
           />
@@ -1856,7 +1882,7 @@ export default function RepositoryExplorerPage() {
             </div>
           </div>
           <div className="relative">
-            <FileSearch size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <FileSearch size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <Input
               value={search}
               onChange={(e) => {
@@ -1867,13 +1893,22 @@ export default function RepositoryExplorerPage() {
                 }
               }}
               placeholder="Search files..."
-              className="h-8 pl-8 text-xs"
+              className="h-8 pl-8 pr-7 text-xs"
             />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded hover:bg-muted"
+                aria-label="Clear search"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
         </div>
 
         {/* Tree */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden py-1 scrollbar-thin">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden py-1 scrollbar-thin scrollbar-thumb-rounded scrollbar-track-bg">
           {filteredRoots.length === 0 && !loadingPath && (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">
               {token ? 'No files found' : 'Loading...'}
@@ -1884,7 +1919,21 @@ export default function RepositoryExplorerPage() {
               <Loader2 size={18} className="animate-spin text-muted-foreground" />
             </div>
           )}
-          {renderTree(filteredRoots, 0)}
+          {search.trim()
+            ? filteredRoots.map((node) => (
+              <TreeNodeItem
+                key={`search-${node.path}`}
+                node={node}
+                depth={0}
+                isOpen={openFolders.has(node.path)}
+                isActive={activeFilePath === node.path}
+                isLoading={loadingPath === node.path}
+                showPath
+                onToggle={() => toggleFolder(node.path)}
+                onClick={() => openFile(node.path)}
+              />
+            ))
+            : renderTree(filteredRoots, 0)}
         </div>
       </aside>
 
@@ -1962,7 +2011,7 @@ export default function RepositoryExplorerPage() {
 
             <div className={cn('sticky top-0 z-20 border-b border-border px-4 py-2 flex flex-wrap items-center gap-2', isDarkMode ? 'bg-[#1f2937]' : 'bg-white')}>
               <div className="relative min-w-[220px] flex-1 max-w-[360px]">
-                <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                 <Input
                   id="file-viewer-search"
                   value={viewerSearch}
@@ -1970,10 +2019,33 @@ export default function RepositoryExplorerPage() {
                     setViewerSearch(e.target.value);
                     setSearchMatchIndex(0);
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    if (searchMatchLines.length === 0) return;
+                    if (e.shiftKey) {
+                      setSearchMatchIndex((idx) => (idx - 1 + searchMatchLines.length) % searchMatchLines.length);
+                    } else {
+                      setSearchMatchIndex((idx) => (idx + 1) % searchMatchLines.length);
+                    }
+                  }}
                   placeholder="Search in file (Ctrl+F)"
-                  className="h-8 pl-6 text-xs"
+                  className="h-8 pl-6 pr-7 text-xs"
                   aria-label="Search within file"
                 />
+                {viewerSearch && (
+                  <button
+                    onClick={() => {
+                      setViewerSearch('');
+                      setSearchMatchIndex(0);
+                      document.getElementById('file-viewer-search')?.focus();
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded hover:bg-muted"
+                    aria-label="Clear search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </div>
 
               <Button
@@ -1999,6 +2071,7 @@ export default function RepositoryExplorerPage() {
               <span className="w-[82px] text-center text-xs text-muted-foreground">
                 {searchMatchLines.length === 0 ? '0 / 0' : `${Math.min(searchMatchIndex + 1, searchMatchLines.length)} / ${searchMatchLines.length}`}
               </span>
+              <span className="hidden text-[11px] text-muted-foreground lg:inline">Enter: next, Shift+Enter: prev</span>
 
               <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => void handleCopyContent()} aria-label="Copy file content">
                 {copied ? <Check size={12} className="mr-1" /> : <Copy size={12} className="mr-1" />} {copied ? 'Copied' : 'Copy'}
