@@ -62,7 +62,7 @@ def test_load_repository_clones_into_clean_target(tmp_path, monkeypatch):
     existing.mkdir()
     (existing / "old.txt").write_text("old")
 
-    def fake_clone_from(source, target_dir):
+    def fake_clone_from(source, target_dir, **_kwargs):
         os.makedirs(target_dir, exist_ok=True)
         with open(os.path.join(target_dir, "new.txt"), "w", encoding="utf-8") as f:
             f.write(source)
@@ -74,4 +74,3 @@ def test_load_repository_clones_into_clean_target(tmp_path, monkeypatch):
     assert os.path.normcase(target) == os.path.normcase(str(existing))
     assert os.path.exists(os.path.join(target, "new.txt"))
     assert not os.path.exists(os.path.join(target, "old.txt"))
-

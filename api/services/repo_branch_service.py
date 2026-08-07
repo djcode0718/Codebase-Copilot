@@ -4,8 +4,10 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from app.config import REPOS_DIR
+from app.utils.git_auth import get_git_auth_token
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,12 +24,27 @@ def _repo_root(repo: Dict[str, Any]) -> str:
 
 
 def _run_git(repo_root: str, args: List[str]) -> str:
+    token = get_git_auth_token()
+    cmd = ["git", "--no-pager"]
+    if token:
+        safe_token = quote(token, safe="")
+        cmd += [
+            "-c",
+            f"url.https://x-access-token:{safe_token}@github.com/.insteadof=https://github.com/",
+        ]
+    cmd.extend(args)
+
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = "echo"
+
     completed = subprocess.run(
-        ["git", "--no-pager", *args],
+        cmd,
         cwd=repo_root,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "git command failed")

@@ -4,8 +4,9 @@ import shutil
 import git
 import threading
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from app.config import REPOS_DIR
+from app.utils.git_auth import get_git_auth_token
 from app.utils.logger import get_logger
 import time
 
@@ -90,6 +91,50 @@ def is_valid_url(url: str) -> bool:
     except ValueError:
         return False
 
+
+def _build_authenticated_url(source: str) -> str:
+    """Inject a GitHub token into HTTPS URL when available for private repos."""
+    token = get_git_auth_token() or ""
+    if not token:
+        return source
+
+    parsed = urlparse(source)
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        return source
+    if parsed.username:
+        return source
+
+    safe_token = quote(token, safe="")
+    netloc = f"x-access-token:{safe_token}@{parsed.netloc}"
+    return parsed._replace(netloc=netloc).geturl()
+
+
+def _clone_repository(source: str, target_dir: str) -> None:
+    """Clone with non-interactive git settings to fail fast on auth issues."""
+    clone_source = _build_authenticated_url(source)
+    clone_env = os.environ.copy()
+    clone_env["GIT_TERMINAL_PROMPT"] = "0"
+    clone_env["GIT_ASKPASS"] = "echo"
+
+    try:
+        git.Repo.clone_from(clone_source, target_dir, env=clone_env)
+    except git.exc.GitCommandError as e:
+        err = str(e)
+        lowered = err.lower()
+        auth_signals = (
+            "authentication failed",
+            "could not read username",
+            "access denied",
+            "repository not found",
+            "terminal prompts disabled",
+        )
+        if any(signal in lowered for signal in auth_signals):
+            raise ValueError(
+                "Git clone authentication failed. This repository may be private. "
+                "Set GIT_AUTH_TOKEN (or GITHUB_TOKEN) in backend environment with repo read access."
+            ) from e
+        raise
+
 def load_repository(source: str) -> str:
     """
     Clones a GitHub repository or validates a local path.
@@ -110,7 +155,7 @@ def load_repository(source: str) -> str:
             logger.info(f"Cloning repository into {target_dir}")
 
             start_time = time.time()
-            git.Repo.clone_from(source, target_dir)
+            _clone_repository(source, target_dir)
             logger.info(f"Cloning completed in {time.time() - start_time:.2f}s")
         
         return target_dir
