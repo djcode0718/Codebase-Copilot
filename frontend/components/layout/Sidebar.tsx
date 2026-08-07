@@ -188,6 +188,290 @@ function ChatContextMenu({
   );
 }
 
+interface RepoConversationsProps {
+  repo: Repo;
+  allChats: Chat[];
+  visibleChats: Chat[];
+  loadingChatRepoId: string | null;
+  isSearchOpen: boolean;
+  query: string;
+  renamingChatId: string | null;
+  renameValue: string;
+  isRepoHistoryVisible: (repoId: string) => boolean;
+  toggleRepoHistory: (repoId: string) => void;
+  setSearchOpen: Dispatch<SetStateAction<Record<string, boolean>>>;
+  setSearchQuery: Dispatch<SetStateAction<Record<string, string>>>;
+  setContextMenu: Dispatch<SetStateAction<ChatMenuState | null>>;
+  setRenameValue: Dispatch<SetStateAction<string>>;
+  setRenamingChatId: Dispatch<SetStateAction<string | null>>;
+  commitRename: (repoId: string) => Promise<void>;
+  openChatSession: (repoId: string, chatId: string) => void;
+  handleNewChat: (repoId: string) => void;
+  handleDeleteAllChats: (repoId: string) => Promise<void>;
+}
+
+function RepoConversationsSection(props: RepoConversationsProps) {
+  const {
+    repo,
+    allChats,
+    visibleChats,
+    loadingChatRepoId,
+    isSearchOpen,
+    query,
+    renamingChatId,
+    renameValue,
+    isRepoHistoryVisible,
+    toggleRepoHistory,
+    setSearchOpen,
+    setSearchQuery,
+    setContextMenu,
+    setRenameValue,
+    setRenamingChatId,
+    commitRename,
+    openChatSession,
+    handleNewChat,
+    handleDeleteAllChats,
+  } = props;
+
+  return (
+    <div className="ml-5 mt-0.5 space-y-0.5 border-l border-sidebar-border/70 pl-2">
+      <div className="mb-0.5 flex items-center justify-between px-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/45">Conversations</span>
+        <button
+          type="button"
+          onClick={() => toggleRepoHistory(repo.id)}
+          className="text-[10px] text-sidebar-foreground/55 underline underline-offset-2 hover:text-sidebar-foreground"
+        >
+          {isRepoHistoryVisible(repo.id) ? 'Hide' : 'Show'}
+        </button>
+      </div>
+
+      {isRepoHistoryVisible(repo.id) && (
+        <>
+          {isSearchOpen ? (
+            <div className="flex items-center gap-1 rounded-xl border border-sidebar-border bg-sidebar px-2 py-1.5 mb-1">
+              <Search size={11} className="shrink-0 text-sidebar-foreground/45" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setSearchQuery(prev => ({ ...prev, [repo.id]: e.target.value }))}
+                placeholder="Search conversations…"
+                className="flex-1 min-w-0 bg-transparent text-xs outline-none placeholder:text-sidebar-foreground/40 text-sidebar-foreground"
+              />
+              <button type="button"
+                onClick={() => { setSearchOpen(p => ({ ...p, [repo.id]: false })); setSearchQuery(p => ({ ...p, [repo.id]: '' })); }}
+                className="text-sidebar-foreground/40 hover:text-sidebar-foreground"
+              ><X size={11} /></button>
+            </div>
+          ) : (
+            <button type="button"
+              onClick={() => setSearchOpen(p => ({ ...p, [repo.id]: true }))}
+              className="flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-left text-xs text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <Search size={11} /> <span className="truncate">Search conversations</span>
+            </button>
+          )}
+
+          <div className="space-y-0.5 pb-1">
+            {loadingChatRepoId === repo.id ? (
+              <div className="px-2 py-1 text-[11px] text-sidebar-foreground/50">Loading…</div>
+            ) : visibleChats.length === 0 ? (
+              <div className="px-2 py-1 text-[11px] text-sidebar-foreground/50">
+                {query ? 'No matches' : 'No conversations yet'}
+              </div>
+            ) : (
+              visibleChats.slice(0, 8).map((chat) => {
+                const isRenaming = renamingChatId === chat.id;
+                return (
+                  <div key={chat.id}
+                    className="group flex items-center gap-1 rounded-xl hover:bg-sidebar-accent transition-colors"
+                    onContextMenu={(e) => { e.preventDefault(); setContextMenu({ chat, repoId: repo.id, x: e.clientX, y: e.clientY }); }}
+                  >
+                    {isRenaming ? (
+                      <div className="flex flex-1 items-center gap-1 px-2 py-1">
+                        <input autoFocus value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') void commitRename(repo.id); if (e.key === 'Escape') setRenamingChatId(null); }}
+                          onBlur={() => void commitRename(repo.id)}
+                          className="flex-1 min-w-0 rounded border border-sidebar-border bg-sidebar px-1.5 py-0.5 text-xs outline-none focus:border-brand"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => openChatSession(repo.id, chat.id)}
+                          className="flex-1 min-w-0 truncate px-2 py-1.5 text-left text-xs text-sidebar-foreground/65 hover:text-sidebar-foreground"
+                          title={chat.title || 'Untitled chat'}
+                        >
+                          {chat.is_pinned ? '★ ' : ''}{chat.title || 'Untitled chat'}
+                        </button>
+                        <button
+                          type="button"
+                          title="More options"
+                          className="mr-1 hidden group-hover:flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-border/60 transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setContextMenu({ chat, repoId: repo.id, x: rect.left, y: rect.bottom + 4 });
+                          }}
+                        >
+                          <MoreHorizontal size={13} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })
+            )}
+
+            <div className="flex items-center gap-1 pt-0.5">
+              <button type="button"
+                onClick={() => handleNewChat(repo.id)}
+                className="flex flex-1 items-center gap-1.5 rounded-xl px-2 py-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand/10"
+              >
+                <Plus size={11} /> New Chat
+              </button>
+              {allChats.length > 0 && (
+                <button type="button" title="Delete all conversations"
+                  onClick={() => void handleDeleteAllChats(repo.id)}
+                  className="flex h-6 w-6 items-center justify-center rounded-lg text-destructive/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                >
+                  <Trash2 size={11} />
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface RepositoryListSectionProps {
+  collapsed: boolean;
+  pathname: string;
+  recentRepos: Repo[];
+  repoChats: Record<string, Chat[]>;
+  loadingChatRepoId: string | null;
+  searchOpen: Record<string, boolean>;
+  searchQuery: Record<string, string>;
+  renamingChatId: string | null;
+  renameValue: string;
+  isRepoHistoryVisible: (repoId: string) => boolean;
+  toggleRepoHistory: (repoId: string) => void;
+  setSearchOpen: Dispatch<SetStateAction<Record<string, boolean>>>;
+  setSearchQuery: Dispatch<SetStateAction<Record<string, string>>>;
+  setContextMenu: Dispatch<SetStateAction<ChatMenuState | null>>;
+  setRenameValue: Dispatch<SetStateAction<string>>;
+  setRenamingChatId: Dispatch<SetStateAction<string | null>>;
+  setActiveRepoPreference: (repoId: string, source: 'repo-link' | 'new-chat' | 'open-chat') => void;
+  closeMobileIfOpen: () => void;
+  commitRename: (repoId: string) => Promise<void>;
+  openChatSession: (repoId: string, chatId: string) => void;
+  handleNewChat: (repoId: string) => void;
+  handleDeleteAllChats: (repoId: string) => Promise<void>;
+}
+
+function RepositoryListSection(props: RepositoryListSectionProps) {
+  const {
+    collapsed,
+    pathname,
+    recentRepos,
+    repoChats,
+    loadingChatRepoId,
+    searchOpen,
+    searchQuery,
+    renamingChatId,
+    renameValue,
+    isRepoHistoryVisible,
+    toggleRepoHistory,
+    setSearchOpen,
+    setSearchQuery,
+    setContextMenu,
+    setRenameValue,
+    setRenamingChatId,
+    setActiveRepoPreference,
+    closeMobileIfOpen,
+    commitRename,
+    openChatSession,
+    handleNewChat,
+    handleDeleteAllChats,
+  } = props;
+
+  if (recentRepos.length === 0) {
+    return (
+      <div className={cn('rounded-xl border border-dashed border-sidebar-border/80 bg-sidebar-accent/20 p-3', collapsed && 'text-center')}>
+        {!collapsed ? (
+          <><p className="text-sm font-medium text-sidebar-foreground">No repositories yet</p>
+          <p className="mt-1 text-xs text-sidebar-foreground/60">Index a repository to populate the workspace.</p></>
+        ) : <Clock3 size={15} className="mx-auto text-sidebar-foreground/55" />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {!collapsed && <div className="px-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-sidebar-foreground/55">Repositories</div>}
+      <div className="space-y-1">
+        {recentRepos.map((repo) => {
+          const isActive = pathname.startsWith(`/repo/${repo.id}`);
+          const href = repo.status === 'ready' ? `/repo/${repo.id}` : `/repo/${repo.id}/indexing`;
+          const allChats = repoChats[repo.id] ?? [];
+          const query = (searchQuery[repo.id] ?? '').trim().toLowerCase();
+          const visibleChats = query
+            ? allChats.filter(c => (c.title || '').toLowerCase().includes(query) || (c.last_message_preview || '').toLowerCase().includes(query))
+            : allChats;
+          const isSearchOpen = searchOpen[repo.id] ?? false;
+
+          return (
+            <div key={repo.id}>
+              <Link href={href} onClick={() => { setActiveRepoPreference(repo.id, 'repo-link'); closeMobileIfOpen(); }}
+                className={cn(
+                  'flex items-center gap-2 rounded-2xl px-3 py-2.5 text-sm transition-all duration-150 group',
+                  collapsed && 'justify-center px-0',
+                  isActive ? 'bg-sidebar-accent text-foreground border border-sidebar-border' : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-foreground'
+                )} title={repo.name}
+              >
+                <GitBranch size={14} className="flex-shrink-0" />
+                {!collapsed && (
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{repo.name}</div>
+                    <div className="truncate text-[11px] text-sidebar-foreground/55">{repo.index_name}</div>
+                  </div>
+                )}
+              </Link>
+
+              {!collapsed && repo.status === 'ready' && (
+                <RepoConversationsSection
+                  repo={repo}
+                  allChats={allChats}
+                  visibleChats={visibleChats}
+                  loadingChatRepoId={loadingChatRepoId}
+                  isSearchOpen={isSearchOpen}
+                  query={query}
+                  renamingChatId={renamingChatId}
+                  renameValue={renameValue}
+                  isRepoHistoryVisible={isRepoHistoryVisible}
+                  toggleRepoHistory={toggleRepoHistory}
+                  setSearchOpen={setSearchOpen}
+                  setSearchQuery={setSearchQuery}
+                  setContextMenu={setContextMenu}
+                  setRenameValue={setRenameValue}
+                  setRenamingChatId={setRenamingChatId}
+                  commitRename={commitRename}
+                  openChatSession={openChatSession}
+                  handleNewChat={handleNewChat}
+                  handleDeleteAllChats={handleDeleteAllChats}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Main sidebar ──────────────────────────────────────────────────────────────
 
 export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose }: SidebarProps) {
@@ -463,168 +747,30 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent</span>
             </div>
           )}
-          {recentRepos.length === 0 ? (
-            <div className={cn('rounded-xl border border-dashed border-sidebar-border/80 bg-sidebar-accent/20 p-3', collapsed && 'text-center')}>
-              {!collapsed ? (
-                <><p className="text-sm font-medium text-sidebar-foreground">No repositories yet</p>
-                <p className="mt-1 text-xs text-sidebar-foreground/60">Index a repository to populate the workspace.</p></>
-              ) : <Clock3 size={15} className="mx-auto text-sidebar-foreground/55" />}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {!collapsed && <div className="px-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-sidebar-foreground/55">Repositories</div>}
-              <div className="space-y-1">
-                {recentRepos.map((repo) => {
-                  const isActive = pathname.startsWith(`/repo/${repo.id}`);
-                  const href = repo.status === 'ready' ? `/repo/${repo.id}` : `/repo/${repo.id}/indexing`;
-                  const allChats = repoChats[repo.id] ?? [];
-                  const q = (searchQuery[repo.id] ?? '').trim().toLowerCase();
-                  const visibleChats = q
-                    ? allChats.filter(c => (c.title || '').toLowerCase().includes(q) || (c.last_message_preview || '').toLowerCase().includes(q))
-                    : allChats;
-                  const isSearchOpen = searchOpen[repo.id] ?? false;
-
-                  return (
-                    <div key={repo.id}>
-                      <Link href={href} onClick={() => { setActiveRepoPreference(repo.id, 'repo-link'); closeMobileIfOpen(); }}
-                        className={cn(
-                          'flex items-center gap-2 rounded-2xl px-3 py-2.5 text-sm transition-all duration-150 group',
-                          collapsed && 'justify-center px-0',
-                          isActive ? 'bg-sidebar-accent text-foreground border border-sidebar-border' : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-foreground'
-                        )} title={repo.name}
-                      >
-                        <GitBranch size={14} className="flex-shrink-0" />
-                        {!collapsed && (
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-medium">{repo.name}</div>
-                            <div className="truncate text-[11px] text-sidebar-foreground/55">{repo.index_name}</div>
-                          </div>
-                        )}
-                      </Link>
-
-                      {!collapsed && repo.status === 'ready' && (
-                        <div className="ml-5 mt-0.5 space-y-0.5 border-l border-sidebar-border/70 pl-2">
-
-                          <div className="mb-0.5 flex items-center justify-between px-2">
-                            <span className="text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/45">Conversations</span>
-                            <button
-                              type="button"
-                              onClick={() => toggleRepoHistory(repo.id)}
-                              className="text-[10px] text-sidebar-foreground/55 underline underline-offset-2 hover:text-sidebar-foreground"
-                            >
-                              {isRepoHistoryVisible(repo.id) ? 'Hide' : 'Show'}
-                            </button>
-                          </div>
-
-                          {isRepoHistoryVisible(repo.id) && (
-                            <>
-                              {/* Search conversations inline */}
-                              {isSearchOpen ? (
-                                <div className="flex items-center gap-1 rounded-xl border border-sidebar-border bg-sidebar px-2 py-1.5 mb-1">
-                                  <Search size={11} className="shrink-0 text-sidebar-foreground/45" />
-                                  <input
-                                    autoFocus
-                                    value={searchQuery[repo.id] ?? ''}
-                                    onChange={(e) => setSearchQuery(prev => ({ ...prev, [repo.id]: e.target.value }))}
-                                    placeholder="Search conversations…"
-                                    className="flex-1 min-w-0 bg-transparent text-xs outline-none placeholder:text-sidebar-foreground/40 text-sidebar-foreground"
-                                  />
-                                  <button type="button"
-                                    onClick={() => { setSearchOpen(p => ({ ...p, [repo.id]: false })); setSearchQuery(p => ({ ...p, [repo.id]: '' })); }}
-                                    className="text-sidebar-foreground/40 hover:text-sidebar-foreground"
-                                  ><X size={11} /></button>
-                                </div>
-                              ) : (
-                                <button type="button"
-                                  onClick={() => setSearchOpen(p => ({ ...p, [repo.id]: true }))}
-                                  className="flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-left text-xs text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                                >
-                                  <Search size={11} /> <span className="truncate">Search conversations</span>
-                                </button>
-                              )}
-
-                              {/* Chat list */}
-                              <div className="space-y-0.5 pb-1">
-                                {loadingChatRepoId === repo.id ? (
-                                  <div className="px-2 py-1 text-[11px] text-sidebar-foreground/50">Loading…</div>
-                                ) : visibleChats.length === 0 ? (
-                                  <div className="px-2 py-1 text-[11px] text-sidebar-foreground/50">
-                                    {q ? 'No matches' : 'No conversations yet'}
-                                  </div>
-                                ) : (
-                                  visibleChats.slice(0, 8).map((chat) => {
-                                    const isRenaming = renamingChatId === chat.id;
-                                    return (
-                                      <div key={chat.id}
-                                        className="group flex items-center gap-1 rounded-xl hover:bg-sidebar-accent transition-colors"
-                                        onContextMenu={(e) => { e.preventDefault(); setContextMenu({ chat, repoId: repo.id, x: e.clientX, y: e.clientY }); }}
-                                      >
-                                        {isRenaming ? (
-                                          <div className="flex flex-1 items-center gap-1 px-2 py-1">
-                                            <input autoFocus value={renameValue}
-                                              onChange={(e) => setRenameValue(e.target.value)}
-                                              onKeyDown={(e) => { if (e.key === 'Enter') void commitRename(repo.id); if (e.key === 'Escape') setRenamingChatId(null); }}
-                                              onBlur={() => void commitRename(repo.id)}
-                                              className="flex-1 min-w-0 rounded border border-sidebar-border bg-sidebar px-1.5 py-0.5 text-xs outline-none focus:border-brand"
-                                            />
-                                          </div>
-                                        ) : (
-                                          <>
-                                            <button type="button" onClick={() => openChatSession(repo.id, chat.id)}
-                                              className="flex-1 min-w-0 truncate px-2 py-1.5 text-left text-xs text-sidebar-foreground/65 hover:text-sidebar-foreground"
-                                              title={chat.title || 'Untitled chat'}
-                                            >
-                                              {chat.is_pinned ? '★ ' : ''}{chat.title || 'Untitled chat'}
-                                            </button>
-                                            {/* Single "..." button — replaces 5 tiny hover icons for reliability */}
-                                            <button
-                                              type="button"
-                                              title="More options"
-                                              className="mr-1 hidden group-hover:flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-border/60 transition-colors"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                e.preventDefault();
-                                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                                setContextMenu({ chat, repoId: repo.id, x: rect.left, y: rect.bottom + 4 });
-                                              }}
-                                            >
-                                              <MoreHorizontal size={13} />
-                                            </button>
-                                          </>
-                                        )}
-                                      </div>
-                                    );
-                                  })
-                                )}
-
-                                {/* New Chat + Delete All row */}
-                                <div className="flex items-center gap-1 pt-0.5">
-                                  <button type="button"
-                                    onClick={() => handleNewChat(repo.id)}
-                                    className="flex flex-1 items-center gap-1.5 rounded-xl px-2 py-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand/10"
-                                  >
-                                    <Plus size={11} /> New Chat
-                                  </button>
-                                  {allChats.length > 0 && (
-                                    <button type="button" title="Delete all conversations"
-                                      onClick={() => void handleDeleteAllChats(repo.id)}
-                                      className="flex h-6 w-6 items-center justify-center rounded-lg text-destructive/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                                    >
-                                      <Trash2 size={11} />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          <RepositoryListSection
+            collapsed={collapsed}
+            pathname={pathname}
+            recentRepos={recentRepos}
+            repoChats={repoChats}
+            loadingChatRepoId={loadingChatRepoId}
+            searchOpen={searchOpen}
+            searchQuery={searchQuery}
+            renamingChatId={renamingChatId}
+            renameValue={renameValue}
+            isRepoHistoryVisible={isRepoHistoryVisible}
+            toggleRepoHistory={toggleRepoHistory}
+            setSearchOpen={setSearchOpen}
+            setSearchQuery={setSearchQuery}
+            setContextMenu={setContextMenu}
+            setRenameValue={setRenameValue}
+            setRenamingChatId={setRenamingChatId}
+            setActiveRepoPreference={setActiveRepoPreference}
+            closeMobileIfOpen={closeMobileIfOpen}
+            commitRename={commitRename}
+            openChatSession={openChatSession}
+            handleNewChat={handleNewChat}
+            handleDeleteAllChats={handleDeleteAllChats}
+          />
         </div>
 
         {/* Repository Explorer - Only on /repo/[id]/review page */}
