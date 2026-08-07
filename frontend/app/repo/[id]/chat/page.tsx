@@ -4,7 +4,7 @@
  * Chat screen — 60/40 split: message thread | AI Inspector.
  * Creates a new chat session on mount and handles full SSE streaming.
  */
-import { useEffect, useRef, useState, useCallback, useMemo, useLayoutEffect } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus, Wrench, Search, Pin, PinOff, Trash2, Archive, Pencil, Check, X, Download, ChevronDown } from 'lucide-react';
@@ -41,20 +41,12 @@ function withMermaidGuardrails(query: string): string {
 }
 
 function buildThreadStats(messages: Message[], suggestions: string[], inspectedIndex: number | null) {
+  void inspectedIndex;
   return [
     { label: 'Messages', value: messages.length },
     { label: 'Suggestions', value: suggestions.length },
-    { label: 'Inspector', value: inspectedIndex !== null ? 'Open' : 'Idle' },
   ];
 }
-
-type HeaderChip = {
-  key: string;
-  priority: number;
-  kind: 'overview' | 'stat' | 'context';
-  label: string;
-  value?: string | number;
-};
 
 function PrioritizedHeaderChips({
   repoId,
@@ -63,132 +55,39 @@ function PrioritizedHeaderChips({
   repoId: string;
   threadStats: { label: string; value: string | number }[];
 }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const measureRef = useRef<HTMLDivElement | null>(null);
-  const [visibleCount, setVisibleCount] = useState(4);
-
-  const chips = useMemo<HeaderChip[]>(() => {
-    const statPriority: Record<string, number> = {
-      Messages: 90,
-      Inspector: 80,
-      Suggestions: 70,
-    };
-
-    return [
-      { key: 'context', priority: 20, kind: 'context', label: 'Thread-first workspace' },
-      { key: 'overview', priority: 100, kind: 'overview', label: 'Repository overview' },
-      ...threadStats.map((stat) => ({
-        key: `stat-${stat.label.toLowerCase()}`,
-        priority: statPriority[stat.label] ?? 50,
-        kind: 'stat' as const,
-        label: stat.label,
-        value: stat.value,
-      })),
-    ].sort((a, b) => b.priority - a.priority);
-  }, [threadStats]);
-
-  const renderChip = useCallback((chip: HeaderChip, forMeasure = false) => {
-    if (chip.kind === 'overview') {
-      const className = 'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 text-[11px] text-muted-foreground';
-      if (forMeasure) {
-        return (
-          <span key={chip.key} className={className}>
-            <ArrowLeft size={12} />
-            {chip.label}
-          </span>
-        );
-      }
-      return (
-        <Link key={chip.key} href={`/repo/${repoId}`} className={`${className} transition-colors hover:text-foreground`}>
-          <ArrowLeft size={12} />
-          {chip.label}
-        </Link>
-      );
-    }
-
-    if (chip.kind === 'context') {
-      return (
-        <span key={chip.key} className="inline-flex h-7 shrink-0 items-center rounded-full border border-border bg-background/70 px-2.5 text-[11px] text-muted-foreground">
-          {chip.label}
-        </span>
-      );
-    }
-
-    return (
-      <span
-        key={chip.key}
-        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-background/70 px-2.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
-      >
-        {chip.label}
-        <span className="font-heading text-[11px] normal-case tracking-normal text-foreground">{chip.value}</span>
-      </span>
-    );
-  }, [repoId]);
-
-  useLayoutEffect(() => {
-    function recalculateVisible() {
-      const container = containerRef.current;
-      const measure = measureRef.current;
-      if (!container || !measure) {
-        setVisibleCount(chips.length);
-        return;
-      }
-
-      const measuredChildren = Array.from(measure.children) as HTMLElement[];
-      if (!measuredChildren.length) {
-        setVisibleCount(chips.length);
-        return;
-      }
-
-      const widths = measuredChildren.slice(0, chips.length).map((el) => el.offsetWidth);
-      const overflowPillWidth = measuredChildren[chips.length]?.offsetWidth ?? 42;
-      const availableWidth = container.clientWidth;
-
-      let used = 0;
-      let count = 0;
-      for (let i = 0; i < widths.length; i += 1) {
-        const remaining = widths.length - (i + 1);
-        const reserve = remaining > 0 ? overflowPillWidth : 0;
-        if (used + widths[i] + reserve <= availableWidth) {
-          used += widths[i];
-          count += 1;
-        } else {
-          break;
-        }
-      }
-
-      setVisibleCount(Math.max(1, count));
-    }
-
-    recalculateVisible();
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(recalculateVisible) : null;
-    if (observer && containerRef.current) observer.observe(containerRef.current);
-    window.addEventListener('resize', recalculateVisible);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener('resize', recalculateVisible);
-    };
-  }, [chips]);
-
-  const visibleChips = chips.slice(0, Math.min(visibleCount, chips.length));
-  const hiddenCount = Math.max(0, chips.length - visibleChips.length);
+  const messagesStat = threadStats.find((stat) => stat.label === 'Messages');
+  const suggestionsStat = threadStats.find((stat) => stat.label === 'Suggestions');
+  const shouldShowStat = (stat?: { value: string | number }) => {
+    if (!stat) return false;
+    const numericValue = typeof stat.value === 'number' ? stat.value : Number(stat.value);
+    if (Number.isFinite(numericValue)) return numericValue > 0;
+    return Boolean(stat.value);
+  };
 
   return (
-    <>
-      <div ref={containerRef} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-        {visibleChips.map((chip) => renderChip(chip))}
-        {hiddenCount > 0 && (
-          <span className="inline-flex h-7 shrink-0 items-center rounded-full border border-border bg-background/70 px-2.5 text-[10px] font-medium text-muted-foreground">
-            +{hiddenCount}
-          </span>
-        )}
-      </div>
+    <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto pr-1 scrollbar-thin">
+      <Link
+        href={`/repo/${repoId}`}
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft size={12} />
+        Repository overview
+      </Link>
 
-      <div ref={measureRef} className="pointer-events-none absolute -left-[9999px] top-0 flex items-center gap-1.5 opacity-0">
-        {chips.map((chip) => renderChip(chip, true))}
-        <span className="inline-flex h-7 items-center rounded-full border border-border bg-background/70 px-2.5 text-[10px] font-medium">+99</span>
-      </div>
-    </>
+      {shouldShowStat(messagesStat) && (
+        <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-background/70 px-2.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          {messagesStat.label}
+          <span className="font-heading text-[11px] normal-case tracking-normal text-foreground">{messagesStat.value}</span>
+        </span>
+      )}
+
+      {shouldShowStat(suggestionsStat) && (
+        <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-background/70 px-2.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          {suggestionsStat.label}
+          <span className="font-heading text-[11px] normal-case tracking-normal text-foreground">{suggestionsStat.value}</span>
+        </span>
+      )}
+    </div>
   );
 }
 
