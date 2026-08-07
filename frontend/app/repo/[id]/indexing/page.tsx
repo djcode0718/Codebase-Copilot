@@ -4,7 +4,7 @@
  * Centerpiece indexing screen — real-time SSE pipeline with animated steps,
  * live stats bar, progress indicator. No spinners.
  */
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, AlertCircle, MessageSquare, RotateCcw, ArrowLeft, Activity, Sparkles, Clock3, FileCode2, Layers } from 'lucide-react';
@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import PipelineStep from '@/components/indexing/PipelineStep';
 import { useIndexingStream } from '@/hooks/useIndexingStream';
-import { createClient } from '@/lib/supabase/client';
+import { useRepoSessionToken } from '@/hooks/useRepoSessionToken';
 import Link from 'next/link';
 
 function formatElapsed(ms: number): string {
@@ -40,13 +40,7 @@ function AnimatedCounter({ value }: { value: number | null }) {
 export default function IndexingPage() {
   const { id: repoId } = useParams<{ id: string }>();
   const router = useRouter();
-  const [token, setToken] = useState('');
-
-  useEffect(() => {
-    createClient().auth.getSession().then(({ data }) => {
-      setToken(data.session?.access_token ?? '');
-    });
-  }, []);
+  const token = useRepoSessionToken();
 
   const {
     steps,

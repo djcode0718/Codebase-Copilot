@@ -14,11 +14,11 @@ import {
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { createClient } from '@/lib/supabase/client';
 import { getRepo, deleteRepo, refreshRepo } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
+import { useRepoSessionToken } from '@/hooks/useRepoSessionToken';
 import RepositoryHealthDashboard from '@/components/repo/RepositoryHealthDashboard';
 import IntelligenceActions from '@/components/repo/IntelligenceActions';
 import ExportMenu from '@/components/repo/ExportMenu';
@@ -326,18 +326,15 @@ function RepoOverviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
   const router = useRouter();
   const [repo, setRepo] = useState<Repo | null>(null);
-  const [token, setToken] = useState('');
+  const token = useRepoSessionToken();
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     async function load() {
-      const { data } = await createClient().auth.getSession();
-      const t = data.session?.access_token ?? '';
-      setToken(t);
-      if (!t) return;
+      if (!token) return;
 
       try {
-        const r = await getRepo(t, repoId);
+        const r = await getRepo(token, repoId);
         setRepo(r);
       } catch {
         toast.error('Repository not found');
@@ -345,8 +342,8 @@ function RepoOverviewPage() {
         return;
       }
     }
-    load();
-  }, [repoId, router]);
+    void load();
+  }, [repoId, router, token]);
 
   async function handleDelete() {
     if (!token || !repo) return;

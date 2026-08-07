@@ -32,7 +32,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
+import { useRepoSessionToken } from '@/hooks/useRepoSessionToken';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -1149,7 +1149,7 @@ function TreeNodeItem({
 export default function RepositoryExplorerPage() {
   const { id: repoId } = useParams<{ id: string }>();
   const router = useRouter();
-  const [token, setToken] = useState('');
+  const token = useRepoSessionToken();
 
   // Tree state
   const [treeByPath, setTreeByPath] = useState<Record<string, ExplorerTreeNode[]>>({});
@@ -1180,15 +1180,6 @@ export default function RepositoryExplorerPage() {
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
 
-  // Init
-  useEffect(() => {
-    async function init() {
-      const { data } = await createClient().auth.getSession();
-      const t = data.session?.access_token ?? '';
-      setToken(t);
-    }
-    void init();
-  }, []);
 
   // Load root tree on token ready
   useEffect(() => {

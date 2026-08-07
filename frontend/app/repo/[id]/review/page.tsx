@@ -18,7 +18,7 @@ import {
   Trash2,
   Wrench,
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
+import { useRepoSessionToken } from '@/hooks/useRepoSessionToken';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -183,7 +183,7 @@ function FileActionRibbon({
 
 export default function RepositoryReviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
-  const [token, setToken] = useState('');
+  const token = useRepoSessionToken();
   const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
   const [selectedReview, setSelectedReview] = useState<ReviewRun | null>(null);
   const [loading, setLoading] = useState(false);
@@ -211,12 +211,9 @@ export default function RepositoryReviewPage() {
 
   useEffect(() => {
     async function init() {
-      const { data } = await createClient().auth.getSession();
-      const t = data.session?.access_token ?? '';
-      setToken(t);
-      if (!t) return;
+      if (!token) return;
       try {
-        await loadHistory(t);
+        await loadHistory(token);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to load review history');
       }
@@ -242,7 +239,7 @@ export default function RepositoryReviewPage() {
       }
     }
     void init();
-  }, [loadHistory, repoId]);
+  }, [loadHistory, repoId, token]);
 
   const selectedFilePath = filePath.trim();
 
