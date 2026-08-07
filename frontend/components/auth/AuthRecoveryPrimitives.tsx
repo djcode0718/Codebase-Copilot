@@ -46,6 +46,43 @@ export function AuthBusyLabel({ loading, idleLabel }: { loading: boolean; idleLa
   );
 }
 
+export function AuthRecoverySubmitButton({
+  loading,
+  idleLabel,
+}: {
+  loading: boolean;
+  idleLabel: string;
+}) {
+  return (
+    <Button
+      type="submit"
+      disabled={loading}
+      className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200"
+    >
+      <AuthBusyLabel loading={loading} idleLabel={idleLabel} />
+    </Button>
+  );
+}
+
+export function AuthRecoveryFooterLink({
+  text,
+  href,
+  linkLabel,
+}: {
+  text: string;
+  href: string;
+  linkLabel: string;
+}) {
+  return (
+    <p className="text-center text-sm text-muted-foreground">
+      {text}{' '}
+      <Link href={href} className="text-brand hover:underline">
+        {linkLabel}
+      </Link>
+    </p>
+  );
+}
+
 export function AuthRecoveryPageFrame({
   heading,
   subtitle,
