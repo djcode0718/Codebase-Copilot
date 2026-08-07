@@ -27,6 +27,7 @@
 | **AI Review — Generate Fix** | Fixed 404 caused by stale schema-availability cache; added inline finding fallback so fixes work even when DB record is temporarily unavailable |
 | **Review UX** | Per-finding loading state, active selection highlight, branded fix output, toast feedback for all actions |
 | **Backend resilience** | `get_repository_review_by_id` and `insert_repository_review` now bypass the stale schema cache and update it on success |
+| **Maintainability refactor** | Shared router access guard (`api/routers/_repo_access.py`) removes duplicated ownership checks across evaluation and health routers; frontend explorer/sidebar/indexing stream were split into smaller units for readability with no API or route contract changes |
 
 The system combines:
 

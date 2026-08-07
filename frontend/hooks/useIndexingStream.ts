@@ -5,7 +5,7 @@
  * Opens a fetch stream to GET /api/repo/{repoId}/index-progress
  * and maintains ordered PipelineStep state.
  */
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, type Dispatch, type SetStateAction, type MutableRefObject } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 import type { IndexingEvent, IndexingStepName, PipelineStep, StepStatus } from '@/lib/types';
 
@@ -39,6 +39,75 @@ interface UseIndexingStreamResult {
   hasError: boolean;
   errorMessage: string | null;
   indexName: string | null;
+}
+
+interface IndexingStateSetters {
+  setSteps: Dispatch<SetStateAction<PipelineStep[]>>;
+  setProgress: Dispatch<SetStateAction<number>>;
+  setFileCount: Dispatch<SetStateAction<number | null>>;
+  setNodeCount: Dispatch<SetStateAction<number | null>>;
+  setIsComplete: Dispatch<SetStateAction<boolean>>;
+  setHasError: Dispatch<SetStateAction<boolean>>;
+  setErrorMessage: Dispatch<SetStateAction<string | null>>;
+  setIndexName: Dispatch<SetStateAction<string | null>>;
+  setElapsedMs: Dispatch<SetStateAction<number>>;
+}
+
+function resetIndexingRunState(setters: IndexingStateSetters): void {
+  setters.setSteps(PIPELINE_ORDER.map((id) => makeStep(id, 'pending')));
+  setters.setProgress(0);
+  setters.setFileCount(null);
+  setters.setNodeCount(null);
+  setters.setIsComplete(false);
+  setters.setHasError(false);
+  setters.setErrorMessage(null);
+  setters.setIndexName(null);
+  setters.setElapsedMs(0);
+}
+
+function stopTimer(timerRef: MutableRefObject<ReturnType<typeof setInterval> | null>) {
+  if (timerRef.current) {
+    clearInterval(timerRef.current);
+    timerRef.current = null;
+  }
+}
+
+async function connectToStreamWithRetry(
+  url: string,
+  token: string,
+  isAborted: () => boolean,
+  onConnectionError: (message: string) => void,
+): Promise<Response | null> {
+  const MAX_RETRIES = 4;
+  const RETRY_DELAY_MS = 1500;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (isAborted()) return null;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 200_000);
+      try {
+        return await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (fetchErr) {
+      if (attempt < MAX_RETRIES && !isAborted()) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        continue;
+      }
+      if (!isAborted()) {
+        const message = fetchErr instanceof Error ? fetchErr.message : '';
+        onConnectionError(message || 'Failed to connect to indexing stream');
+      }
+      return null;
+    }
+  }
+
+  return null;
 }
 
 export function useIndexingStream(
@@ -140,55 +209,28 @@ export function useIndexingStream(
     }, 100);
 
     async function readStream() {
-      // Reset per indexing run to avoid stale UI state from previous attempts.
-      setSteps(PIPELINE_ORDER.map((id) => makeStep(id, 'pending')));
-      setProgress(0);
-      setFileCount(null);
-      setNodeCount(null);
-      setIsComplete(false);
-      setHasError(false);
-      setErrorMessage(null);
-      setIndexName(null);
-      setElapsedMs(0);
+      resetIndexingRunState({
+        setSteps,
+        setProgress,
+        setFileCount,
+        setNodeCount,
+        setIsComplete,
+        setHasError,
+        setErrorMessage,
+        setIndexName,
+        setElapsedMs,
+      });
 
-      // Retry a few times on connection errors (uvicorn may still be starting up)
-      const MAX_RETRIES = 4;
-      const RETRY_DELAY_MS = 1500;
-
-      let res: Response | null = null;
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (aborted) return;
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 200_000);
-          try {
-            res = await fetch(
-              `${apiBase}/api/repo/${repoId}/index-progress`,
-              {
-                headers: { Authorization: `Bearer ${token}` },
-                signal: controller.signal,
-              }
-            );
-          } finally {
-            clearTimeout(timeout);
-          }
-          break; // success — stop retrying
-        } catch (fetchErr) {
-          if (attempt < MAX_RETRIES && !aborted) {
-            // Connection refused / network error — wait and retry
-            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-            continue;
-          }
-          // All retries exhausted
-          if (!aborted) {
-            setHasError(true);
-            const message = fetchErr instanceof Error ? fetchErr.message : '';
-            setErrorMessage(message || 'Failed to connect to indexing stream');
-            if (timerRef.current) clearInterval(timerRef.current);
-          }
-          return;
+      const res = await connectToStreamWithRetry(
+        `${apiBase}/api/repo/${repoId}/index-progress`,
+        token,
+        () => aborted,
+        (message) => {
+          setHasError(true);
+          setErrorMessage(message);
+          stopTimer(timerRef);
         }
-      }
+      );
 
       if (!res) return;
 
@@ -198,7 +240,7 @@ export function useIndexingStream(
           setErrorMessage(
             `Indexing server error: ${res.status} ${res.statusText || 'check backend logs'}`
           );
-          if (timerRef.current) clearInterval(timerRef.current);
+          stopTimer(timerRef);
           return;
         }
 
@@ -230,14 +272,14 @@ export function useIndexingStream(
               onError: (msg) => {
                 setHasError(true);
                 setErrorMessage(msg);
-                if (timerRef.current) clearInterval(timerRef.current);
+                stopTimer(timerRef);
               },
               onDone: (ev) => {
                 setFileCount(ev.file_count ?? null);
                 setNodeCount(ev.node_count ?? null);
                 setIndexName(ev.index_name ?? null);
                 setIsComplete(true);
-                if (timerRef.current) clearInterval(timerRef.current);
+                stopTimer(timerRef);
               },
               onStep: () => {},
             });
@@ -248,7 +290,7 @@ export function useIndexingStream(
         if (!aborted) {
           setHasError(true);
           setErrorMessage(err instanceof Error ? err.message : 'Stream error');
-          if (timerRef.current) clearInterval(timerRef.current);
+          stopTimer(timerRef);
         }
       }
     }
@@ -256,9 +298,7 @@ export function useIndexingStream(
     readStream();
     return () => {
       aborted = true;
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
+      stopTimer(timerRef);
     };
   }, [repoId, token, enabled, apiBase, updateStep, handleIndexingEvent]);
 

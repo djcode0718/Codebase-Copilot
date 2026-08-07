@@ -20,6 +20,7 @@ from api.models.health import (
     HealthLatestResponse,
     HealthRunResponse,
 )
+from api.routers._repo_access import ensure_repo_access
 from api.services import supabase_service
 from api.services.repository_health_engine import RepositoryHealthEngine
 from app.utils.logger import get_logger
@@ -29,32 +30,48 @@ engine = RepositoryHealthEngine()
 logger = get_logger(__name__)
 
 
+def _load_previous_health_context(supabase: Client, repo_id: str, user_id: str) -> tuple[dict | None, set[str] | None]:
+    previous_run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
+    if not previous_run:
+        return None, None
+
+    previous_scores = supabase_service.get_health_category_score_map(
+        supabase,
+        run_id=previous_run["id"],
+        user_id=user_id,
+    )
+    previous_findings = supabase_service.get_health_problem_titles(
+        supabase,
+        run_id=previous_run["id"],
+        user_id=user_id,
+    )
+    return previous_scores, previous_findings
+
+
+def _build_history_points(supabase: Client, runs: list[dict], user_id: str) -> list[HealthHistoryPoint]:
+    points: list[HealthHistoryPoint] = []
+    for run in runs:
+        category_map = supabase_service.get_health_category_score_map(supabase, run_id=run["id"], user_id=user_id)
+        points.append(
+            HealthHistoryPoint(
+                run_id=run["id"],
+                created_at=run["created_at"],
+                repository_health=run["repository_health"],
+                grade=run["grade"],
+                category_scores=category_map,
+            )
+        )
+    return points
+
+
 @router.post("/{repo_id}/health/run", response_model=HealthRunResponse)
 async def run_repository_health_analysis(
     repo_id: str,
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    repo = supabase_service.get_repo(supabase, repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    previous_run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
-    previous_scores = None
-    previous_findings = None
-    if previous_run:
-        previous_scores = supabase_service.get_health_category_score_map(
-            supabase,
-            run_id=previous_run["id"],
-            user_id=user_id,
-        )
-        previous_findings = supabase_service.get_health_problem_titles(
-            supabase,
-            run_id=previous_run["id"],
-            user_id=user_id,
-        )
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    previous_scores, previous_findings = _load_previous_health_context(supabase, repo_id, user_id)
 
     run_payload = engine.run(repo=repo, previous_scores=previous_scores, previous_findings=previous_findings)
 
@@ -116,11 +133,7 @@ async def get_latest_repository_health(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    repo = supabase_service.get_repo(supabase, repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    ensure_repo_access(supabase, repo_id, user_id)
 
     run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
     if not run:
@@ -136,23 +149,10 @@ async def get_repository_health_history(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    repo = supabase_service.get_repo(supabase, repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    ensure_repo_access(supabase, repo_id, user_id)
 
     runs = supabase_service.get_health_history(supabase, repo_id=repo_id, user_id=user_id, days=days, limit=limit)
-    points = []
-    for run in runs:
-        category_map = supabase_service.get_health_category_score_map(supabase, run_id=run["id"], user_id=user_id)
-        points.append(HealthHistoryPoint(
-            run_id=run["id"],
-            created_at=run["created_at"],
-            repository_health=run["repository_health"],
-            grade=run["grade"],
-            category_scores=category_map,
-        ))
+    points = _build_history_points(supabase, runs, user_id)
 
     latest = runs[0] if runs else None
     return HealthHistoryResponse(
@@ -173,11 +173,7 @@ async def get_repository_health_category_details(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    repo = supabase_service.get_repo(supabase, repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    ensure_repo_access(supabase, repo_id, user_id)
 
     selected_run_id = run_id
     if not selected_run_id:
@@ -261,5 +257,3 @@ def _build_transient_health_run_response(repo_id: str, run_payload: dict) -> Hea
         performance_risks=run_payload.get("performance_risks") or [],
         recommended_sprint=run_payload.get("recommended_sprint") or [],
     )
-
-

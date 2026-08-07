@@ -40,6 +40,28 @@ function extractRepoIdFromPath(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
+function readStoredRecord(key: string): Record<string, boolean> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, boolean>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function promoteRepoToTop(sortedRepos: Repo[], activeRepoId: string | null): Repo[] {
+  if (!activeRepoId) return sortedRepos;
+  const idx = sortedRepos.findIndex((repo) => repo.id === activeRepoId);
+  if (idx <= 0) return sortedRepos;
+  const next = [...sortedRepos];
+  const [activeRepo] = next.splice(idx, 1);
+  next.unshift(activeRepo);
+  return next;
+}
+
 interface SidebarProps {
   repos?: Repo[];
   userEmail?: string;
@@ -142,15 +164,7 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
   const [searchOpen,   setSearchOpen]   = useState<Record<string, boolean>>({});
   const [searchQuery,  setSearchQuery]  = useState<Record<string, string>>({});
   const [historyVisibleByRepo, setHistoryVisibleByRepo] = useState<Record<string, boolean>>(() => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const rawVisibility = window.localStorage.getItem(HISTORY_VISIBILITY_STORAGE_KEY);
-      if (!rawVisibility) return {};
-      const parsed = JSON.parse(rawVisibility) as Record<string, boolean>;
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
+    return readStoredRecord(HISTORY_VISIBILITY_STORAGE_KEY);
   });
   const [lastUsedRepoId, setLastUsedRepoId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -245,13 +259,7 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
     [repos]
   );
   const prioritizedRepos = useMemo(() => {
-    if (!activeRepoId) return sortedRepos;
-    const idx = sortedRepos.findIndex((repo) => repo.id === activeRepoId);
-    if (idx <= 0) return sortedRepos;
-    const next = [...sortedRepos];
-    const [activeRepo] = next.splice(idx, 1);
-    next.unshift(activeRepo);
-    return next;
+    return promoteRepoToTop(sortedRepos, activeRepoId);
   }, [activeRepoId, sortedRepos]);
   const recentRepos = prioritizedRepos.slice(0, 5);
 

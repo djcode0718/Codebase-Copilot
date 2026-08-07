@@ -24,11 +24,31 @@ from api.models.eval import (
     EvalHistoryResponse,
     EvalComparisonResponse,
 )
+from api.routers._repo_access import ensure_repo_access
 from api.services import supabase_service, evaluation_center_service
 from app.utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _resolve_index_name(repo: dict, request_index_name: Optional[str]) -> str:
+    index_name = (request_index_name or "").strip() or (repo.get("index_name") or "").strip()
+    if not index_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Repository has no valid index_name. Re-index the repository before running evaluation.",
+        )
+    return index_name
+
+
+def _sse_event(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _emit_progress_messages(messages: list[str]):
+    for message in messages:
+        yield _sse_event({"type": "progress", "message": message})
 
 
 @router.post("/run")
@@ -49,25 +69,12 @@ async def run_evaluation(
 
     Note: This is CPU/LLM intensive. Don't run concurrently for the same repo.
     """
-    # Verify repo access
-    repo = supabase_service.get_repo(supabase, body.repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    request_index_name = (body.index_name or "").strip()
-    repo_index_name = (repo.get("index_name") or "").strip()
-    index_name = request_index_name or repo_index_name
-    if not index_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Repository has no valid index_name. Re-index the repository before running evaluation.",
-        )
+    repo = ensure_repo_access(supabase, body.repo_id, user_id)
+    index_name = _resolve_index_name(repo, body.index_name)
 
     async def eval_generator():
         try:
-            yield f"data: {json.dumps({'type': 'progress', 'message': 'Initialising evaluation suite...'})}\n\n"
+            yield _sse_event({'type': 'progress', 'message': 'Initialising evaluation suite...'})
 
             progress_buffer: list[str] = []
 
@@ -90,10 +97,10 @@ async def run_evaluation(
                 emit_progress=_emit,
             )
 
-            for msg in progress_buffer:
-                yield f"data: {json.dumps({'type': 'progress', 'message': msg})}\n\n"
+            for event in _emit_progress_messages(progress_buffer):
+                yield event
 
-            yield f"data: {json.dumps({'type': 'progress', 'message': 'Saving evaluation results...'})}\n\n"
+            yield _sse_event({'type': 'progress', 'message': 'Saving evaluation results...'})
 
             # Persist to Supabase
             try:
@@ -110,12 +117,12 @@ async def run_evaluation(
             if saved:
                 summary_dict = evaluation_center_service.hydrate_eval_response(saved)
 
-            yield f"data: {json.dumps({'type': 'result', 'summary': summary_dict})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            yield _sse_event({'type': 'result', 'summary': summary_dict})
+            yield _sse_event({'type': 'done'})
 
         except Exception as e:
             logger.error(f"Evaluation failed: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield _sse_event({'type': 'error', 'message': str(e)})
 
     return StreamingResponse(
         eval_generator(),
@@ -134,11 +141,7 @@ async def get_latest_evaluation(
     supabase: Client = Depends(get_supabase),
 ):
     """Return the most recent evaluation results for a repository."""
-    repo = supabase_service.get_repo(supabase, repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    ensure_repo_access(supabase, repo_id, user_id)
 
     eval_record = supabase_service.get_latest_evaluation(supabase, repo_id)
     if not eval_record:
@@ -154,11 +157,7 @@ async def get_evaluation_history(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    repo = supabase_service.get_repo(supabase, repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    ensure_repo_access(supabase, repo_id, user_id)
 
     rows = supabase_service.get_recent_evaluations(supabase, repo_id=repo_id, limit=limit)
     points = evaluation_center_service.build_eval_history_points(rows)
@@ -173,11 +172,7 @@ async def compare_evaluations(
     user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    repo = supabase_service.get_repo(supabase, repo_id)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if repo.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    ensure_repo_access(supabase, repo_id, user_id)
 
     current_row = (
         supabase_service.get_evaluation_by_id(supabase, repo_id=repo_id, evaluation_id=current_eval_id)

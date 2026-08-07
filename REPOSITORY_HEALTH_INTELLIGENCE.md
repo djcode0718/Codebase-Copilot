@@ -33,6 +33,7 @@ evidence-backed engineering KPI system.
   - `TrendAnalyzer`
   - `RecommendationEngine`
 - `api/routers/health.py` for health intelligence APIs
+- `api/routers/_repo_access.py` shared access guard used by health/evaluation routers to avoid duplicated ownership checks
 - `api/services/supabase_service.py` persistence helpers
 - `api/migrations/20260804_repository_health_intelligence.sql`
 
@@ -47,6 +48,11 @@ evidence-backed engineering KPI system.
 - `frontend/lib/types.ts` health intelligence contracts
 - `frontend/lib/api.ts` health intelligence client calls
 - `frontend/app/repo/[id]/page.tsx` integration into repository dashboard
+- Additive maintainability refactors in explorer-related UI (`frontend/components/layout/RepositoryExplorer.tsx`, `frontend/components/layout/Sidebar.tsx`, `frontend/hooks/useIndexingStream.ts`) to split oversized blocks while preserving behavior
+
+## Backward compatibility
+
+- All updates are additive internal refactors; no API path, request/response contract, or migration behavior changes were introduced by these maintainability updates.
 
 ## Migration
 

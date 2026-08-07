@@ -1,12 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
   Bot,
-  Circle,
-  FileCode,
   FileCode2,
   GitCommitHorizontal,
   GitPullRequest,
@@ -44,7 +42,6 @@ import {
 } from '@/lib/api';
 import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 
 function SeverityPill({ severity }: { severity: string }) {
   const cls = severity === 'critical'
@@ -56,6 +53,131 @@ function SeverityPill({ severity }: { severity: string }) {
     : 'border-border text-muted-foreground';
 
   return <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${cls}`}>{severity}</span>;
+}
+
+function csvToList(csv: string): string[] {
+  return csv.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null): number {
+  if (!selectedFile) return 74;
+  if (selectedFile.health === 'critical') return 42;
+  if (selectedFile.health === 'review_suggested') return 67;
+  if (selectedFile.health === 'healthy') return 84;
+  return 74;
+}
+
+interface FileActionRibbonProps {
+  selectedFilePath: string;
+  selectedFile: ExplorerFileDetails | null;
+  ribbonHealthScore: number;
+  runRibbonReview: (type: string) => Promise<void>;
+  runRibbonGenerateTests: () => Promise<void>;
+  runRibbonTests: () => Promise<void>;
+  runRibbonGenerateFix: () => Promise<void>;
+  runRibbonApplyFix: () => Promise<void>;
+  runRibbonAskAi: () => Promise<void>;
+  runRibbonHistory: () => Promise<void>;
+  ribbonAction: string | null;
+  ribbonReview: ExplorerReviewResult | null;
+  ribbonFix: ExplorerFixProposal | null;
+  showRibbonDiff: boolean;
+  setShowRibbonDiff: Dispatch<SetStateAction<boolean>>;
+  ribbonTests: ExplorerTestRunResult | null;
+  ribbonHistory: string;
+}
+
+function FileActionRibbon({
+  selectedFilePath,
+  selectedFile,
+  ribbonHealthScore,
+  runRibbonReview,
+  runRibbonGenerateTests,
+  runRibbonTests,
+  runRibbonGenerateFix,
+  runRibbonApplyFix,
+  runRibbonAskAi,
+  runRibbonHistory,
+  ribbonAction,
+  ribbonReview,
+  ribbonFix,
+  showRibbonDiff,
+  setShowRibbonDiff,
+  ribbonTests,
+  ribbonHistory,
+}: FileActionRibbonProps) {
+  return (
+    <section className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-lg shadow-black/5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{selectedFilePath}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {selectedFile?.language || 'unknown'} • {selectedFile?.line_count || 'n/a'} lines • {selectedFile?.imports.length || 0} imports • {selectedFile?.classes.length || 0} classes • {selectedFile?.functions.length || 0} functions
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Coverage 72% • Owner Unknown • Last Modified</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[11px] text-muted-foreground">Repository Health</p>
+          <p className="text-lg font-semibold">{ribbonHealthScore}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        <Button size="sm" variant="outline" title="E" onClick={() => void runRibbonReview('explain')}>Explain</Button>
+        <Button size="sm" variant="outline" title="R" onClick={() => void runRibbonReview('review')}>Review</Button>
+        <Button size="sm" variant="outline" title="B" onClick={() => void runRibbonReview('find_bugs')}>Find Bugs</Button>
+        <Button size="sm" variant="outline" title="S" onClick={() => void runRibbonReview('security')}><Shield size={13} className="mr-1" />Security</Button>
+        <Button size="sm" variant="outline" title="A" onClick={() => void runRibbonReview('architecture')}>Architecture</Button>
+        <Button size="sm" variant="outline" onClick={() => void runRibbonReview('performance')}><Play size={13} className="mr-1" />Performance</Button>
+        <Button size="sm" variant="outline" onClick={() => void runRibbonReview('code_quality')}>Code Quality</Button>
+        <Button size="sm" variant="outline" title="T" onClick={() => void runRibbonGenerateTests()}>Generate Tests</Button>
+        <Button size="sm" variant="outline" title="Shift+T" onClick={() => void runRibbonTests()}><TestTube size={13} className="mr-1" />Run Tests</Button>
+        <Button size="sm" variant="outline" title="F" onClick={() => void runRibbonGenerateFix()}><Wrench size={13} className="mr-1" />Generate Fix</Button>
+        <Button size="sm" variant="outline" onClick={() => void runRibbonApplyFix()} disabled={!ribbonFix}>Apply Fix</Button>
+        <Button size="sm" variant="outline" title="Ctrl+D" onClick={() => setShowRibbonDiff((prev) => !prev)}>Show Diff</Button>
+        <Button size="sm" variant="outline" onClick={() => void runRibbonReview('commit_impact')}>Commit Impact</Button>
+        <Button size="sm" variant="outline" onClick={() => void runRibbonReview('dependencies')}>Dependencies</Button>
+        <Button size="sm" variant="outline" title="Ctrl+/" onClick={() => void runRibbonAskAi()}><MessageSquare size={13} className="mr-1" />Ask AI</Button>
+        <Button size="sm" variant="outline" onClick={() => void runRibbonHistory()}><History size={13} className="mr-1" />History</Button>
+      </div>
+
+      {ribbonAction && (
+        <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs text-brand">
+          <Loader2 size={13} className="animate-spin" /> Running {ribbonAction.replace('_', ' ')}...
+        </div>
+      )}
+
+      {ribbonReview && (
+        <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
+          <p className="font-medium">AI Review Score: {ribbonReview.overall_score}</p>
+          <p className="mt-1 text-muted-foreground">{ribbonReview.summary}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Findings: {ribbonReview.findings.length}</p>
+        </div>
+      )}
+
+      {ribbonFix && (
+        <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
+          <p className="font-medium">Fix proposal ready</p>
+          {showRibbonDiff && <pre className="mt-2 max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.diff || 'No changes'}</pre>}
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            <pre className="max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.current_content}</pre>
+            <pre className="max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.suggested_content}</pre>
+          </div>
+        </div>
+      )}
+
+      {ribbonTests && (
+        <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
+          <p className="font-medium">Tests: {ribbonTests.status.toUpperCase()}</p>
+          <p className="mt-1 text-muted-foreground">Passed {ribbonTests.passed} • Failed {ribbonTests.failed} • Duration {ribbonTests.duration_seconds}s</p>
+        </div>
+      )}
+
+      {ribbonHistory && (
+        <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-xs text-muted-foreground">{ribbonHistory}</div>
+      )}
+    </section>
+  );
 }
 
 
@@ -80,7 +202,6 @@ export default function RepositoryReviewPage() {
   const [ribbonTests, setRibbonTests] = useState<ExplorerTestRunResult | null>(null);
   const [ribbonHistory, setRibbonHistory] = useState('');
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
-  const [fileViewerOpen, setFileViewerOpen] = useState(true);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
 
   const loadHistory = useCallback(async (t: string) => {
@@ -143,8 +264,6 @@ export default function RepositoryReviewPage() {
   }, [token, repoId, selectedFilePath]);
 
 
-  const visibleTreeRoots = useMemo(() => [], []); // Explorer moved to sidebar
-
   const runReview = useCallback(async (runner: () => Promise<ReviewRun>) => {
     if (!token) return;
     setLoading(true);
@@ -163,16 +282,8 @@ export default function RepositoryReviewPage() {
 
   const findings = useMemo(() => selectedReview?.findings ?? [], [selectedReview]);
 
-  function csvToList(csv: string): string[] {
-    return csv.split(',').map((s) => s.trim()).filter(Boolean);
-  }
-
   const ribbonHealthScore = useMemo(() => {
-    if (!selectedFile) return 74;
-    if (selectedFile.health === 'critical') return 42;
-    if (selectedFile.health === 'review_suggested') return 67;
-    if (selectedFile.health === 'healthy') return 84;
-    return 74;
+    return computeRibbonHealthScore(selectedFile);
   }, [selectedFile]);
 
   async function runRibbonAction<T>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> {
@@ -304,76 +415,25 @@ export default function RepositoryReviewPage() {
       </motion.section>
 
       {selectedFilePath && (
-        <section className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-lg shadow-black/5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">{selectedFilePath}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {selectedFile?.language || 'unknown'} • {selectedFile?.line_count || 'n/a'} lines • {selectedFile?.imports.length || 0} imports • {selectedFile?.classes.length || 0} classes • {selectedFile?.functions.length || 0} functions
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">Coverage 72% • Owner Unknown • Last Modified</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[11px] text-muted-foreground">Repository Health</p>
-              <p className="text-lg font-semibold">{ribbonHealthScore}</p>
-            </div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            <Button size="sm" variant="outline" title="E" onClick={() => void runRibbonReview('explain')}>Explain</Button>
-            <Button size="sm" variant="outline" title="R" onClick={() => void runRibbonReview('review')}>Review</Button>
-            <Button size="sm" variant="outline" title="B" onClick={() => void runRibbonReview('find_bugs')}>Find Bugs</Button>
-            <Button size="sm" variant="outline" title="S" onClick={() => void runRibbonReview('security')}><Shield size={13} className="mr-1" />Security</Button>
-            <Button size="sm" variant="outline" title="A" onClick={() => void runRibbonReview('architecture')}>Architecture</Button>
-            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('performance')}><Play size={13} className="mr-1" />Performance</Button>
-            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('code_quality')}>Code Quality</Button>
-            <Button size="sm" variant="outline" title="T" onClick={() => void runRibbonGenerateTests()}>Generate Tests</Button>
-            <Button size="sm" variant="outline" title="Shift+T" onClick={() => void runRibbonTests()}><TestTube size={13} className="mr-1" />Run Tests</Button>
-            <Button size="sm" variant="outline" title="F" onClick={() => void runRibbonGenerateFix()}><Wrench size={13} className="mr-1" />Generate Fix</Button>
-            <Button size="sm" variant="outline" onClick={() => void runRibbonApplyFix()} disabled={!ribbonFix}>Apply Fix</Button>
-            <Button size="sm" variant="outline" title="Ctrl+D" onClick={() => setShowRibbonDiff((prev) => !prev)}>Show Diff</Button>
-            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('commit_impact')}>Commit Impact</Button>
-            <Button size="sm" variant="outline" onClick={() => void runRibbonReview('dependencies')}>Dependencies</Button>
-            <Button size="sm" variant="outline" title="Ctrl+/" onClick={() => void runRibbonAskAi()}><MessageSquare size={13} className="mr-1" />Ask AI</Button>
-            <Button size="sm" variant="outline" onClick={() => void runRibbonHistory()}><History size={13} className="mr-1" />History</Button>
-          </div>
-
-          {ribbonAction && (
-            <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs text-brand">
-              <Loader2 size={13} className="animate-spin" /> Running {ribbonAction.replace('_', ' ')}...
-            </div>
-          )}
-
-          {ribbonReview && (
-            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
-              <p className="font-medium">AI Review Score: {ribbonReview.overall_score}</p>
-              <p className="mt-1 text-muted-foreground">{ribbonReview.summary}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Findings: {ribbonReview.findings.length}</p>
-            </div>
-          )}
-
-          {ribbonFix && (
-            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
-              <p className="font-medium">Fix proposal ready</p>
-              {showRibbonDiff && <pre className="mt-2 max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.diff || 'No changes'}</pre>}
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <pre className="max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.current_content}</pre>
-                <pre className="max-h-32 overflow-auto rounded bg-black/10 p-2 text-xs">{ribbonFix.suggested_content}</pre>
-              </div>
-            </div>
-          )}
-
-          {ribbonTests && (
-            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-sm">
-              <p className="font-medium">Tests: {ribbonTests.status.toUpperCase()}</p>
-              <p className="mt-1 text-muted-foreground">Passed {ribbonTests.passed} • Failed {ribbonTests.failed} • Duration {ribbonTests.duration_seconds}s</p>
-            </div>
-          )}
-
-          {ribbonHistory && (
-            <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-xs text-muted-foreground">{ribbonHistory}</div>
-          )}
-        </section>
+        <FileActionRibbon
+          selectedFilePath={selectedFilePath}
+          selectedFile={selectedFile}
+          ribbonHealthScore={ribbonHealthScore}
+          runRibbonReview={runRibbonReview}
+          runRibbonGenerateTests={runRibbonGenerateTests}
+          runRibbonTests={runRibbonTests}
+          runRibbonGenerateFix={runRibbonGenerateFix}
+          runRibbonApplyFix={runRibbonApplyFix}
+          runRibbonAskAi={runRibbonAskAi}
+          runRibbonHistory={runRibbonHistory}
+          ribbonAction={ribbonAction}
+          ribbonReview={ribbonReview}
+          ribbonFix={ribbonFix}
+          showRibbonDiff={showRibbonDiff}
+          setShowRibbonDiff={setShowRibbonDiff}
+          ribbonTests={ribbonTests}
+          ribbonHistory={ribbonHistory}
+        />
       )}
 
       {/* File Viewer removed — use /explorer page for full file browsing */}

@@ -101,6 +101,151 @@ function saveLocalSet(key: string, values: Set<string>) {
   }
 }
 
+interface ActiveFileStats {
+  healthScore: number;
+  language: string;
+  lines: number;
+  imports: number;
+  classes: number;
+  functions: number;
+  coverage: number;
+}
+
+interface ActiveFilePanelProps {
+  activeFile: ExplorerFileDetails;
+  fileStats: ActiveFileStats;
+  activeAction: string | null;
+  fixProposal: ExplorerFixProposal | null;
+  reviewResult: ExplorerReviewResult | null;
+  testResult: ExplorerTestRunResult | null;
+  historyText: string;
+  recent: string[];
+  showDiff: boolean;
+  onToggleDiff: () => void;
+  onOpenRecent: (path: string) => void;
+  onExecuteReview: (type: string) => void;
+  onExecuteGenerateTests: () => void;
+  onExecuteTests: () => void;
+  onExecuteGenerateFix: () => void;
+  onExecuteApplyFix: () => void;
+  onExecuteAskAi: () => void;
+  onExecuteHistory: () => void;
+}
+
+function ActiveFilePanel({
+  activeFile,
+  fileStats,
+  activeAction,
+  fixProposal,
+  reviewResult,
+  testResult,
+  historyText,
+  recent,
+  showDiff,
+  onToggleDiff,
+  onOpenRecent,
+  onExecuteReview,
+  onExecuteGenerateTests,
+  onExecuteTests,
+  onExecuteGenerateFix,
+  onExecuteApplyFix,
+  onExecuteAskAi,
+  onExecuteHistory,
+}: ActiveFilePanelProps) {
+  return (
+    <>
+      <div className="rounded-xl border border-sidebar-border bg-sidebar p-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold text-sidebar-foreground">{activeFile.path}</p>
+            <p className="mt-0.5 text-[10px] text-sidebar-foreground/60">{fileStats.language} • {fileStats.lines} lines • {fileStats.imports} imports • {fileStats.classes} classes • {fileStats.functions} functions</p>
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] text-sidebar-foreground/55">Repository Health</p>
+            <p className="text-sm font-semibold text-sidebar-foreground">{fileStats.healthScore}</p>
+          </div>
+        </div>
+        <p className="mt-1 text-[10px] text-sidebar-foreground/55">Coverage {fileStats.coverage}% • Owner Unknown • Last Modified</p>
+
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <button type="button" title="E" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('explain')}>Explain</button>
+          <button type="button" title="R" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('review')}><FileSearch size={10} className="mr-1 inline" />Review</button>
+          <button type="button" title="B" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('find_bugs')}>Find Bugs</button>
+          <button type="button" title="S" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('security')}><Shield size={10} className="mr-1 inline" />Security</button>
+          <button type="button" title="A" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('architecture')}>Architecture</button>
+          <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('performance')}><Play size={10} className="mr-1 inline" />Performance</button>
+          <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('code_quality')}>Code Quality</button>
+          <button type="button" title="T" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={onExecuteGenerateTests}>Generate Tests</button>
+          <button type="button" title="Shift+T" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={onExecuteTests}><TestTube size={10} className="mr-1 inline" />Run Tests</button>
+          <button type="button" title="F" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={onExecuteGenerateFix}><Wrench size={10} className="mr-1 inline" />Generate Fix</button>
+          <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={onExecuteApplyFix} disabled={!fixProposal}>Apply Fix</button>
+          <button type="button" title="Ctrl+D" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={onToggleDiff}>Show Diff</button>
+          <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('commit_impact')}>Commit Impact</button>
+          <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => onExecuteReview('dependencies')}>Dependencies</button>
+          <button type="button" title="Ctrl+/" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={onExecuteAskAi}><MessageSquare size={10} className="mr-1 inline" />Ask AI</button>
+          <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={onExecuteHistory}><History size={10} className="mr-1 inline" />History</button>
+        </div>
+        {activeAction && (
+          <div className="mt-2 inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand/10 px-2 py-1 text-[10px] text-sidebar-foreground/75">
+            <Loader2 size={10} className="animate-spin" /> Running {activeAction.replace('_', ' ')}...
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-sidebar-border bg-sidebar p-2">
+        <div className="mb-1 flex items-center justify-between">
+          <div className="truncate text-xs font-semibold text-sidebar-foreground">{activeFile.path}</div>
+          <button type="button" className="text-[10px] text-sidebar-foreground/60" onClick={onExecuteHistory}>History</button>
+        </div>
+        <p className="line-clamp-2 text-[11px] text-sidebar-foreground/65">{activeFile.summary}</p>
+        <div className="mt-1 text-[10px] text-sidebar-foreground/55">Complexity {activeFile.complexity} | {activeFile.line_count} lines | {activeFile.imports.length} imports</div>
+        <pre className="mt-2 max-h-36 overflow-auto rounded-lg bg-black/20 p-2 text-[10px] leading-relaxed text-sidebar-foreground/80">{activeFile.content}</pre>
+      </div>
+
+      {reviewResult && (
+        <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[11px]">
+          <div className="font-semibold">AI Review Score: {reviewResult.overall_score}</div>
+          <div className="mt-1 text-sidebar-foreground/70">{reviewResult.summary}</div>
+          <div className="mt-1 text-sidebar-foreground/60">Findings: {reviewResult.findings.length}</div>
+        </div>
+      )}
+
+      {fixProposal && (
+        <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[11px]">
+          <div className="font-semibold">Fix Diff ({fixProposal.diff ? 'ready' : 'no changes'})</div>
+          {showDiff && <pre className="mt-1 max-h-32 overflow-auto rounded bg-black/20 p-1 text-[10px]">{fixProposal.diff || 'No changes in diff'}</pre>}
+          <div className="mt-1 grid grid-cols-2 gap-2">
+            <pre className="max-h-24 overflow-auto rounded bg-black/20 p-1 text-[10px]">{fixProposal.current_content}</pre>
+            <pre className="max-h-24 overflow-auto rounded bg-black/20 p-1 text-[10px]">{fixProposal.suggested_content}</pre>
+          </div>
+        </div>
+      )}
+
+      {testResult && (
+        <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[11px]">
+          <div className="font-semibold">Tests: {testResult.status.toUpperCase()}</div>
+          <div className="mt-1 text-sidebar-foreground/65">Passed {testResult.passed} | Failed {testResult.failed} | Duration {testResult.duration_seconds}s</div>
+        </div>
+      )}
+
+      {historyText && <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[10px] text-sidebar-foreground/60">{historyText}</div>}
+
+      {recent.length > 0 && (
+        <div className="rounded-xl border border-sidebar-border bg-sidebar p-2">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/55">Recently Viewed</div>
+          <div className="space-y-1">
+            {recent.slice(0, 5).map((path) => (
+              <button key={path} type="button" onClick={() => onOpenRecent(path)} className="block w-full truncate text-left text-[11px] text-sidebar-foreground/70 hover:text-sidebar-foreground">
+                {path}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function RepositoryExplorer({ repoId, repoName, repoStatus, token, collapsed }: RepositoryExplorerProps) {
   const [expanded, setExpanded] = useState(false);
   const [treeByPath, setTreeByPath] = useState<Record<string, ExplorerTreeNode[]>>({});
@@ -581,103 +726,31 @@ export default function RepositoryExplorer({ repoId, repoName, repoStatus, token
           </div>
 
           {activeFile && fileStats && (
-            <div className="rounded-xl border border-sidebar-border bg-sidebar p-2.5">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold text-sidebar-foreground">{activeFile.path}</p>
-                  <p className="mt-0.5 text-[10px] text-sidebar-foreground/60">{fileStats.language} • {fileStats.lines} lines • {fileStats.imports} imports • {fileStats.classes} classes • {fileStats.functions} functions</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[10px] text-sidebar-foreground/55">Repository Health</p>
-                  <p className="text-sm font-semibold text-sidebar-foreground">{fileStats.healthScore}</p>
-                </div>
-              </div>
-              <p className="mt-1 text-[10px] text-sidebar-foreground/55">Coverage {fileStats.coverage}% • Owner Unknown • Last Modified</p>
-
-              <div className="mt-2 flex flex-wrap items-center gap-1">
-                <button type="button" title="E" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('explain')}>Explain</button>
-                <button type="button" title="R" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('review')}><FileSearch size={10} className="mr-1 inline" />Review</button>
-                <button type="button" title="B" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('find_bugs')}>Find Bugs</button>
-                <button type="button" title="S" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('security')}><Shield size={10} className="mr-1 inline" />Security</button>
-                <button type="button" title="A" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('architecture')}>Architecture</button>
-                <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('performance')}><Play size={10} className="mr-1 inline" />Performance</button>
-                <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('code_quality')}>Code Quality</button>
-                <button type="button" title="T" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeGenerateTests()}>Generate Tests</button>
-                <button type="button" title="Shift+T" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeTests()}><TestTube size={10} className="mr-1 inline" />Run Tests</button>
-                <button type="button" title="F" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeGenerateFix()}><Wrench size={10} className="mr-1 inline" />Generate Fix</button>
-                <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeApplyFix()} disabled={!fixProposal}>Apply Fix</button>
-                <button type="button" title="Ctrl+D" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => setShowDiff((prev) => !prev)}>Show Diff</button>
-                <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('commit_impact')}>Commit Impact</button>
-                <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeReview('dependencies')}>Dependencies</button>
-                <button type="button" title="Ctrl+/" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeAskAi()}><MessageSquare size={10} className="mr-1 inline" />Ask AI</button>
-                <button type="button" className="rounded-full border border-sidebar-border px-2 py-1 text-[10px]" onClick={() => void executeHistory(activeFile.path)}><History size={10} className="mr-1 inline" />History</button>
-              </div>
-              {activeAction && (
-                <div className="mt-2 inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand/10 px-2 py-1 text-[10px] text-sidebar-foreground/75">
-                  <Loader2 size={10} className="animate-spin" /> Running {activeAction.replace('_', ' ')}...
-                </div>
-              )}
-            </div>
+            <ActiveFilePanel
+              activeFile={activeFile}
+              fileStats={fileStats}
+              activeAction={activeAction}
+              fixProposal={fixProposal}
+              reviewResult={reviewResult}
+              testResult={testResult}
+              historyText={historyText}
+              recent={recent}
+              showDiff={showDiff}
+              onToggleDiff={() => setShowDiff((prev) => !prev)}
+              onOpenRecent={(path) => { void openFile(path); }}
+              onExecuteReview={(type) => { void executeReview(type); }}
+              onExecuteGenerateTests={() => { void executeGenerateTests(); }}
+              onExecuteTests={() => { void executeTests(); }}
+              onExecuteGenerateFix={() => { void executeGenerateFix(); }}
+              onExecuteApplyFix={() => { void executeApplyFix(); }}
+              onExecuteAskAi={() => { void executeAskAi(); }}
+              onExecuteHistory={() => { void executeHistory(activeFile.path); }}
+            />
           )}
 
           <div className="flex flex-wrap items-center gap-1">
             <button type="button" className="rounded-lg border border-sidebar-border px-2 py-1 text-[11px]" onClick={() => void executeBatchReview()}>Batch Review</button>
           </div>
-
-          {activeFile && (
-            <div className="rounded-xl border border-sidebar-border bg-sidebar p-2">
-              <div className="mb-1 flex items-center justify-between">
-                <div className="truncate text-xs font-semibold text-sidebar-foreground">{activeFile.path}</div>
-                <button type="button" className="text-[10px] text-sidebar-foreground/60" onClick={() => void executeHistory(activeFile.path)}>History</button>
-              </div>
-              <p className="line-clamp-2 text-[11px] text-sidebar-foreground/65">{activeFile.summary}</p>
-              <div className="mt-1 text-[10px] text-sidebar-foreground/55">Complexity {activeFile.complexity} | {activeFile.line_count} lines | {activeFile.imports.length} imports</div>
-              <pre className="mt-2 max-h-36 overflow-auto rounded-lg bg-black/20 p-2 text-[10px] leading-relaxed text-sidebar-foreground/80">{activeFile.content}</pre>
-            </div>
-          )}
-
-          {reviewResult && (
-            <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[11px]">
-              <div className="font-semibold">AI Review Score: {reviewResult.overall_score}</div>
-              <div className="mt-1 text-sidebar-foreground/70">{reviewResult.summary}</div>
-              <div className="mt-1 text-sidebar-foreground/60">Findings: {reviewResult.findings.length}</div>
-            </div>
-          )}
-
-          {fixProposal && (
-            <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[11px]">
-              <div className="font-semibold">Fix Diff ({fixProposal.diff ? 'ready' : 'no changes'})</div>
-              {showDiff && <pre className="mt-1 max-h-32 overflow-auto rounded bg-black/20 p-1 text-[10px]">{fixProposal.diff || 'No changes in diff'}</pre>}
-              <div className="mt-1 grid grid-cols-2 gap-2">
-                <pre className="max-h-24 overflow-auto rounded bg-black/20 p-1 text-[10px]">{fixProposal.current_content}</pre>
-                <pre className="max-h-24 overflow-auto rounded bg-black/20 p-1 text-[10px]">{fixProposal.suggested_content}</pre>
-              </div>
-            </div>
-          )}
-
-          {testResult && (
-            <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[11px]">
-              <div className="font-semibold">Tests: {testResult.status.toUpperCase()}</div>
-              <div className="mt-1 text-sidebar-foreground/65">Passed {testResult.passed} | Failed {testResult.failed} | Duration {testResult.duration_seconds}s</div>
-            </div>
-          )}
-
-          {historyText && (
-            <div className="rounded-xl border border-sidebar-border bg-sidebar p-2 text-[10px] text-sidebar-foreground/60">{historyText}</div>
-          )}
-
-          {recent.length > 0 && (
-            <div className="rounded-xl border border-sidebar-border bg-sidebar p-2">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/55">Recently Viewed</div>
-              <div className="space-y-1">
-                {recent.slice(0, 5).map((path) => (
-                  <button key={path} type="button" onClick={() => void openFile(path)} className="block w-full truncate text-left text-[11px] text-sidebar-foreground/70 hover:text-sidebar-foreground">
-                    {path}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
