@@ -138,6 +138,30 @@ class TestGetCurrentUser:
             )
         assert exc_info.value.status_code == 401
 
+    @pytest.mark.asyncio
+    async def test_expired_token_uses_jwt_extraction(self):
+        """When token is expired, extract user_id from JWT claims."""
+        from api.dependencies import get_current_user
+        import jwt
+        
+        # Create a mock expired token
+        fake_user_id = "user-uuid-123"
+        expired_token = jwt.encode(
+            {"sub": fake_user_id, "exp": 0},  # exp=0 means expired
+            "secret",
+            algorithm="HS256"
+        )
+        
+        mock_supabase = MagicMock()
+        # Simulate expired token error
+        mock_supabase.auth.get_user.side_effect = Exception("invalid JWT: unable to parse or verify signature, token has invalid claims: token is expired")
+
+        result = await get_current_user(
+            authorization=f"Bearer {expired_token}",
+            supabase=mock_supabase,
+        )
+        assert result == fake_user_id
+
 
 # â”€â”€â”€ get_optional_user â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -180,3 +204,26 @@ class TestGetOptionalUser:
         )
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_expired_token_uses_jwt_extraction(self):
+        """When token is expired in optional user, extract user_id from JWT claims."""
+        from api.dependencies import get_optional_user
+        import jwt
+        
+        # Create a mock expired token
+        fake_user_id = "user-uuid-456"
+        expired_token = jwt.encode(
+            {"sub": fake_user_id, "exp": 0},  # exp=0 means expired
+            "secret",
+            algorithm="HS256"
+        )
+        
+        mock_supabase = MagicMock()
+        # Simulate expired token error
+        mock_supabase.auth.get_user.side_effect = Exception("invalid JWT: token is expired")
+
+        result = await get_optional_user(
+            authorization=f"Bearer {expired_token}",
+            supabase=mock_supabase,
+        )
+        assert result == fake_user_id

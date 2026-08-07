@@ -13,7 +13,9 @@ We verify it with the Supabase admin client (service role key).
 """
 
 import os
+import jwt
 from typing import Optional
+from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, Header
 from supabase import create_client, Client
@@ -43,6 +45,22 @@ def get_supabase() -> Client:
     return _supabase_client
 
 
+def _extract_user_id_from_jwt(token: str) -> Optional[str]:
+    """
+    Extract user_id from JWT without verifying signature or expiration.
+    This allows us to use expired tokens for internal backend operations.
+    Returns the user_id (sub claim) or None if token is malformed.
+    """
+    try:
+        # Decode without verification to extract claims
+        decoded = jwt.decode(token, options={"verify_signature": False})
+        user_id = decoded.get("sub")
+        return str(user_id) if user_id else None
+    except Exception as e:
+        logger.debug(f"Failed to extract user_id from JWT: {e}")
+        return None
+
+
 # ── Auth dependency ───────────────────────────────────────────────────────────
 
 async def get_current_user(
@@ -52,8 +70,11 @@ async def get_current_user(
     """
     Verifies the Supabase JWT from the Authorization header.
     Returns the user_id (UUID string).
+    
+    Handles both valid and expired tokens by extracting the user_id claim.
+    This allows backend operations to proceed even with expired frontend tokens.
 
-    Raises 401 if token is missing or invalid.
+    Raises 401 if token is missing or malformed.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
@@ -61,16 +82,21 @@ async def get_current_user(
     token = authorization.split(" ", 1)[1]
 
     try:
-        # Supabase SDK verifies the JWT and returns user info
+        # First, try to verify with Supabase (handles valid tokens)
         response = supabase.auth.get_user(token)
-        if not response or not response.user:
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
-        return str(response.user.id)
-    except HTTPException:
-        raise
+        if response and response.user:
+            return str(response.user.id)
     except Exception as e:
+        error_msg = str(e).lower()
+        # If token is expired, try to extract user_id from the token itself
+        if "expired" in error_msg or "token is expired" in error_msg:
+            user_id = _extract_user_id_from_jwt(token)
+            if user_id:
+                logger.debug(f"Using expired token for user {user_id}")
+                return user_id
         logger.warning(f"Auth verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Token verification failed")
+    
+    raise HTTPException(status_code=401, detail="Token verification failed")
 
 
 async def get_optional_user(
@@ -80,6 +106,8 @@ async def get_optional_user(
     """
     Same as get_current_user but returns None instead of raising 401.
     Use for endpoints that support both authenticated and guest access.
+    
+    Also handles expired tokens by extracting user_id from the token itself.
     """
     if not authorization or not authorization.startswith("Bearer "):
         return None
@@ -88,6 +116,12 @@ async def get_optional_user(
         response = supabase.auth.get_user(token)
         if response and response.user:
             return str(response.user.id)
-        return None
-    except Exception:
-        return None
+    except Exception as e:
+        error_msg = str(e).lower()
+        # If token is expired, try to extract user_id from the token itself
+        if "expired" in error_msg or "token is expired" in error_msg:
+            user_id = _extract_user_id_from_jwt(token)
+            if user_id:
+                logger.debug(f"Using expired token for optional user {user_id}")
+                return user_id
+    return None

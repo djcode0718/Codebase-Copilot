@@ -1180,6 +1180,15 @@ export default function RepositoryExplorerPage() {
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
 
+  // Init
+  useEffect(() => {
+    async function init() {
+      const { data } = await createClient().auth.getSession();
+      const t = data.session?.access_token ?? '';
+      setToken(t);
+    }
+    void init();
+  }, []);
 
   // Load root tree on token ready
   useEffect(() => {
