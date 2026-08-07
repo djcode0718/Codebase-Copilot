@@ -64,7 +64,12 @@ def _enforce_rate_limit(request: Request, route_key: str) -> None:
         bucket.append(now)
 
 
-@router.post("/register/preflight", response_model=RegisterPreflightResponse)
+@router.post(
+    "/register/preflight",
+    response_model=RegisterPreflightResponse,
+    tags=["public"],
+    security=[],
+)
 async def register_preflight(
     body: RegisterPreflightRequest,
     request: Request,
@@ -128,7 +133,12 @@ async def register_preflight(
     )
 
 
-@router.post("/login/preflight", response_model=LoginPreflightResponse)
+@router.post(
+    "/login/preflight",
+    response_model=LoginPreflightResponse,
+    tags=["public"],
+    security=[],
+)
 async def login_preflight(
     body: LoginPreflightRequest,
     request: Request,
@@ -173,7 +183,12 @@ async def login_preflight(
     )
 
 
-@router.post("/login/audit", response_model=GenericAuthResponse)
+@router.post(
+    "/login/audit",
+    response_model=GenericAuthResponse,
+    tags=["public"],
+    security=[],
+)
 async def login_audit(
     body: LoginAuditRequest,
     request: Request,
@@ -230,7 +245,12 @@ async def login_audit(
     return GenericAuthResponse(message="Authentication event recorded.")
 
 
-@router.post("/logout/audit", response_model=GenericAuthResponse)
+@router.post(
+    "/logout/audit",
+    response_model=GenericAuthResponse,
+    tags=["public"],
+    security=[],
+)
 async def logout_audit(
     body: LogoutAuditRequest,
     request: Request,
@@ -238,11 +258,10 @@ async def logout_audit(
     supabase: Client = Depends(get_supabase),
 ):
     """
-    SEMI-PUBLIC ENDPOINT (optional authentication).
+    PUBLIC ENDPOINT (optional authentication).
     Records logout events for security auditing. Can be called by:
     - Authenticated users (session.user_id is captured)
     - Anonymous/guest users (provided email for audit trail)
-    No rate limit enforced here; relies on Supabase auth session expiration.
     """
     normalized_email: Optional[str] = None
     if body.email:
@@ -271,13 +290,24 @@ async def logout_audit(
     return GenericAuthResponse(message="Logout event recorded.")
 
 
-@router.post("/password-reset/audit-request", response_model=GenericAuthResponse)
+@router.post(
+    "/password-reset/audit-request",
+    response_model=GenericAuthResponse,
+    tags=["public"],
+    security=[],
+)
 async def password_reset_audit_request(
     body: PasswordResetAuditRequest,
     request: Request,
     _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
+    """
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
+    Records password reset requests for audit logging.
+    Protected by per-IP rate limiting.
+    Intentionally generic response to avoid leaking account existence.
+    """
     _enforce_rate_limit(request, "password-reset-request")
 
     # Intentionally generic: do not leak account existence.
@@ -296,13 +326,23 @@ async def password_reset_audit_request(
     return GenericAuthResponse(message="If an account exists, reset instructions have been sent.")
 
 
-@router.post("/password-reset/audit-complete", response_model=GenericAuthResponse)
+@router.post(
+    "/password-reset/audit-complete",
+    response_model=GenericAuthResponse,
+    tags=["public"],
+    security=[],
+)
 async def password_reset_audit_complete(
     body: PasswordResetCompleteAuditRequest,
     request: Request,
     user_id: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
+    """
+    PUBLIC ENDPOINT (optional authentication).
+    Records password reset completion for audit logging.
+    Can be called by authenticated users or guests resetting their password.
+    """
     normalized_email = None
     if body.email:
         try:
