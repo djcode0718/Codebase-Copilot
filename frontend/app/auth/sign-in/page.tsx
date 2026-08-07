@@ -25,8 +25,7 @@ function shouldBlockOnPreflight(message: string, lockedUntil?: string | null): b
   const lowered = (message || '').toLowerCase();
   return (
     lowered.includes('too many unsuccessful login attempts') ||
-    lowered.includes('account has been disabled') ||
-    lowered.includes('verify your email address')
+    lowered.includes('account has been disabled')
   );
 }
 
