@@ -2,7 +2,7 @@
 /**
  * app/auth/sign-in/page.tsx
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { buildOAuthRedirectUrl, createClient } from '@/lib/supabase/client';
+import { auditLoginAttempt, linkOAuthIdentity, normalizeEmail, preflightLogin } from '@/lib/auth-api';
 import { toast } from 'sonner';
 import { Suspense } from 'react';
 import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/components/auth/AuthExperienceShell';
@@ -18,6 +19,30 @@ import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/compone
 const REMEMBER_EMAIL_KEY = 'codebase-copilot.remember-email.v1';
 
 type InlineErrors = { email?: string; password?: string; form?: string };
+
+function shouldBlockOnPreflight(message: string, lockedUntil?: string | null): boolean {
+  if (lockedUntil) return true;
+  const lowered = (message || '').toLowerCase();
+  return (
+    lowered.includes('too many unsuccessful login attempts') ||
+    lowered.includes('account has been disabled') ||
+    lowered.includes('verify your email address')
+  );
+}
+
+function mapSignInErrorMessage(raw: string): string {
+  const lowered = (raw || '').toLowerCase();
+  if (lowered.includes('invalid login credentials') || lowered.includes('invalid credentials')) {
+    return 'The password you entered is incorrect.';
+  }
+  if (lowered.includes('email not confirmed') || lowered.includes('email not verified')) {
+    return 'Please verify your email address before signing in.';
+  }
+  if (lowered.includes('too many requests') || lowered.includes('rate limit')) {
+    return 'Too many sign-in attempts. Please try again later.';
+  }
+  return 'Unable to sign in. Check your credentials and try again.';
+}
 
 function PasswordVisibilityButton({
   showPassword,
@@ -168,6 +193,7 @@ function SignInForm() {
   const next = searchParams.get('next') ?? '/dashboard';
   const authProvider = searchParams.get('auth_provider');
   const oauthCode = searchParams.get('code');
+  const nextPath = next.startsWith('/') ? next : '/dashboard';
   const supabase = useMemo(() => createClient(), []);
 
   const [email, setEmail] = useState(() => {
@@ -194,17 +220,37 @@ function SignInForm() {
   const [capsLockOn, setCapsLockOn] = useState(false);
   const [errors, setErrors] = useState<InlineErrors>({});
   const formErrorRef = useRef<HTMLDivElement | null>(null);
+  const oauthRecordedRef = useRef(false);
   const [resolvingOAuthCallback, setResolvingOAuthCallback] = useState(Boolean(authProvider || oauthCode));
 
-  useEffect(() => {
-    const nextPath = next.startsWith('/') ? next : '/dashboard';
+  const recordOAuthSuccess = useCallback(async (provider: OAuthProvider | 'other') => {
+    if (oauthRecordedRef.current) return;
+    oauthRecordedRef.current = true;
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const signedInEmail = session?.user?.email;
+    if (!session?.access_token || !signedInEmail) return;
+    await linkOAuthIdentity(session.access_token, provider);
+    await auditLoginAttempt({
+      email: signedInEmail,
+      success: true,
+      provider,
+      token: session.access_token,
+      sessionId: session.access_token.slice(-16),
+      metadata: { oauth_callback: true },
+    });
+  }, [supabase]);
 
+  useEffect(() => {
     async function redirectIfAuthenticated() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (user && !user.is_anonymous) {
+        const provider = (authProvider as OAuthProvider | null) ?? 'other';
+        void recordOAuthSuccess(provider);
         router.replace(nextPath);
         router.refresh();
         return;
@@ -222,6 +268,8 @@ function SignInForm() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user && !session.user.is_anonymous) {
+        const provider = (authProvider as OAuthProvider | null) ?? 'other';
+        void recordOAuthSuccess(provider);
         router.replace(nextPath);
         router.refresh();
         return;
@@ -233,14 +281,15 @@ function SignInForm() {
     });
 
     return () => subscription.unsubscribe();
-  }, [authProvider, oauthCode, next, router, supabase]);
+  }, [authProvider, oauthCode, nextPath, recordOAuthSuccess, router, supabase]);
 
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
     if (loading) return;
 
-    const nextErrors = validateSignIn(email, password);
+    const normalizedEmail = normalizeEmail(email);
+    const nextErrors = validateSignIn(normalizedEmail, password);
     setErrors(nextErrors);
 
     if (Object.keys(nextErrors).length > 0) {
@@ -249,19 +298,50 @@ function SignInForm() {
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    const preflight = await preflightLogin(normalizedEmail).catch(() => null);
+    if (preflight && !preflight.ok && shouldBlockOnPreflight(preflight.message, preflight.locked_until)) {
+      setLoading(false);
+      setErrors({ form: preflight.message });
+      formErrorRef.current?.focus();
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
     setLoading(false);
 
     if (error) {
-      setErrors({ form: 'Unable to sign in. Check your credentials and try again.' });
+      const preflightFailure = preflight && !preflight.ok ? preflight.message : null;
+      const failureReason = preflightFailure?.toLowerCase().includes('no account')
+        ? 'unknown_email'
+        : 'incorrect_password';
+      await auditLoginAttempt({
+        email: normalizedEmail,
+        success: false,
+        provider: 'password',
+        failureReason,
+        rememberMe,
+      }).catch(() => undefined);
+      setErrors({ form: preflightFailure || mapSignInErrorMessage(error.message) });
       formErrorRef.current?.focus();
       toast.error('Unable to sign in.');
       return;
     }
 
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    await auditLoginAttempt({
+      email: normalizedEmail,
+      success: true,
+      provider: 'password',
+      token: session?.access_token,
+      rememberMe,
+      sessionId: session?.access_token?.slice(-16),
+    }).catch(() => undefined);
+
     try {
       if (rememberMe) {
-        window.localStorage.setItem(REMEMBER_EMAIL_KEY, email.trim());
+        window.localStorage.setItem(REMEMBER_EMAIL_KEY, normalizedEmail);
       } else {
         window.localStorage.removeItem(REMEMBER_EMAIL_KEY);
       }
@@ -270,7 +350,7 @@ function SignInForm() {
       // Ignore storage write failures.
     }
 
-    router.push(next);
+    router.push(nextPath);
     router.refresh();
   }
 

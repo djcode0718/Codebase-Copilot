@@ -178,11 +178,13 @@ export function AuthExperienceShell({
   subtitle,
   authCard,
   footer,
+  showBrand = true,
 }: {
   heading: string;
   subtitle: string;
   authCard: React.ReactNode;
   footer: React.ReactNode;
+  showBrand?: boolean;
 }) {
   const reducedMotion = useReducedMotionPreference();
   const [showcaseIndex, setShowcaseIndex] = useState(0);
@@ -204,18 +206,20 @@ export function AuthExperienceShell({
   const secondaryMetrics = MATURITY_METRICS.filter((metric) => !PRIMARY_METRIC_LABELS.has(metric.label));
 
   return (
-    <div className="h-[100dvh] overflow-hidden bg-background p-3 sm:p-4">
+    <div className="min-h-[100dvh] overflow-x-hidden overflow-y-auto bg-background p-3 sm:p-4">
       <div className="absolute inset-0 bg-[linear-gradient(rgba(51,65,85,0.11)_1px,transparent_1px),linear-gradient(90deg,rgba(51,65,85,0.11)_1px,transparent_1px)] bg-[size:48px_48px] pointer-events-none" />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(34,197,94,0.15),transparent_36%),radial-gradient(circle_at_82%_18%,rgba(59,130,246,0.14),transparent_28%)]" />
       <div className="relative mx-auto grid h-full w-full max-w-[1280px] gap-4 lg:grid-cols-[minmax(420px,0.9fr)_minmax(540px,1.1fr)] xl:gap-6">
-        <section className="surface-glass min-h-0 overflow-y-auto scrollbar-none rounded-3xl border border-border/90 bg-card/92 p-5 shadow-[0_20px_48px_rgba(15,23,42,0.13)] sm:p-6">
-          <Link href="/" className="inline-flex items-center gap-2" aria-label="Codebase Copilot home">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand text-green-950">
-              <span className="font-code text-sm font-bold">CC</span>
-            </div>
-            <span className="font-heading text-lg font-semibold tracking-tight">Codebase Copilot</span>
-          </Link>
-          <div className="mt-6 space-y-2">
+        <section className="surface-glass rounded-3xl border border-border/90 bg-card/92 p-5 pb-7 shadow-[0_20px_48px_rgba(15,23,42,0.13)] sm:p-6 sm:pb-8 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto scrollbar-none">
+          {showBrand ? (
+            <Link href="/" className="inline-flex items-center gap-2" aria-label="Codebase Copilot home">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand text-green-950">
+                <span className="font-code text-sm font-bold">CC</span>
+              </div>
+              <span className="font-heading text-lg font-semibold tracking-tight">Codebase Copilot</span>
+            </Link>
+          ) : null}
+          <div className={cn(showBrand ? 'mt-6 space-y-2' : 'space-y-2')}>
             <p className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs text-brand">
               <Sparkles size={12} aria-hidden="true" /> AI Engineering Workspace
             </p>
@@ -226,7 +230,7 @@ export function AuthExperienceShell({
           <div className="mt-5">{footer}</div>
         </section>
 
-        <section className="surface-glass min-h-0 overflow-y-auto scrollbar-none rounded-3xl border border-border/90 bg-card/74 p-5 backdrop-blur-sm sm:p-6">
+        <section className="surface-glass rounded-3xl border border-border/90 bg-card/74 p-5 pb-7 backdrop-blur-sm sm:p-6 sm:pb-8 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto scrollbar-none">
           <h2 className="font-heading text-[2rem] font-semibold tracking-tight leading-[1.1] sm:text-[2.25rem] xl:text-[2.35rem]">
             AI Operating System for Repository Engineering
           </h2>
@@ -294,13 +298,13 @@ export function AuthExperienceShell({
               <Boxes size={12} className="text-brand" aria-hidden="true" />
               Technology ecosystem
             </div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className="mt-2.5 flex flex-wrap gap-2">
               {ecosystemItems.map(({ tech, delay }) => (
                 <span
                   key={tech}
                   style={reducedMotion ? undefined : { animationDelay: delay }}
                   className={cn(
-                    'auth-tech-chip rounded-full border border-border bg-background/80 px-2 py-0.5 text-[11px] text-muted-foreground',
+                    'auth-tech-chip rounded-full border border-border/95 bg-card px-2.5 py-1 text-[11px] font-medium text-foreground/85 shadow-sm',
                     reducedMotion ? '' : 'auth-tech-float'
                   )}
                 >
@@ -310,9 +314,9 @@ export function AuthExperienceShell({
             </div>
           </div>
 
-          <div className="mt-3 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-3.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {TRUST_SIGNALS.map((signal) => (
-              <div key={signal} className="auth-elevate flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground transition-all duration-200">
+              <div key={signal} className="auth-elevate flex items-center gap-1.5 rounded-full border border-border/90 bg-card px-2.5 py-1.5 text-[11px] text-foreground/85 shadow-sm transition-all duration-200">
                 {signal === 'OAuth 2.0 Protected' ? <Lock size={13} className="text-brand" aria-hidden="true" /> : null}
                 {signal === 'Secure Authentication' ? <ShieldCheck size={13} className="text-brand" aria-hidden="true" /> : null}
                 {signal === 'Privacy First' ? <Lock size={13} className="text-brand" aria-hidden="true" /> : null}

@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { getApiBaseUrl } from '@/lib/api';
+import { auditLogout } from '@/lib/auth-api';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -25,9 +26,35 @@ export default function SettingsPage() {
   const apiBase = mounted ? getApiBaseUrl() : '';
 
   async function handleSignOut() {
-    await createClient().auth.signOut();
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    await auditLogout({
+      token: session?.access_token,
+      email: session?.user?.email,
+      sessionId: session?.access_token?.slice(-16),
+    }).catch(() => undefined);
+    await supabase.auth.signOut();
     router.push('/auth/sign-in');
     toast.success('Signed out');
+  }
+
+  async function handleSignOutAllDevices() {
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    await auditLogout({
+      token: session?.access_token,
+      email: session?.user?.email,
+      allDevices: true,
+    }).catch(() => undefined);
+
+    await supabase.auth.signOut({ scope: 'global' });
+    router.push('/auth/sign-in');
+    toast.success('Signed out on all devices');
   }
 
   async function handleDeleteAccount() {
@@ -70,6 +97,13 @@ export default function SettingsPage() {
             Sign out
           </Button>
           <p className="text-xs text-muted-foreground">Signed-in sessions are managed through Supabase auth.</p>
+          <Button
+            variant="outline"
+            className="border-border cursor-pointer"
+            onClick={handleSignOutAllDevices}
+          >
+            Sign out all devices
+          </Button>
         </div>
       </motion.section>
 

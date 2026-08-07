@@ -13,13 +13,12 @@ We verify it with the Supabase admin client (service role key).
 """
 
 import os
-import jwt
-from typing import Optional
-from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
-from fastapi import Depends, HTTPException, Header
+from fastapi import Depends, HTTPException, Header, Request
 from supabase import create_client, Client
 
+from app.config import GUEST_READ_ONLY_MODE
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -45,83 +44,91 @@ def get_supabase() -> Client:
     return _supabase_client
 
 
-def _extract_user_id_from_jwt(token: str) -> Optional[str]:
-    """
-    Extract user_id from JWT without verifying signature or expiration.
-    This allows us to use expired tokens for internal backend operations.
-    Returns the user_id (sub claim) or None if token is malformed.
-    """
-    try:
-        # Decode without verification to extract claims
-        decoded = jwt.decode(token, options={"verify_signature": False})
-        user_id = decoded.get("sub")
-        return str(user_id) if user_id else None
-    except Exception as e:
-        logger.debug(f"Failed to extract user_id from JWT: {e}")
+def _to_user_payload(user_obj: Any) -> Dict[str, Any]:
+    if isinstance(user_obj, dict):
+        return dict(user_obj)
+
+    data = getattr(user_obj, "__dict__", None)
+    if isinstance(data, dict):
+        return dict(data)
+
+    payload: Dict[str, Any] = {}
+    for key in ("id", "email", "is_anonymous"):
+        payload[key] = getattr(user_obj, key, None)
+    return payload
+
+
+async def get_authenticated_user(
+    authorization: Optional[str] = Header(default=None),
+    supabase: Client = Depends(get_supabase),
+) -> Optional[Dict[str, Any]]:
+    """Return verified Supabase user payload or None when not authenticated."""
+    if not authorization or not authorization.startswith("Bearer "):
         return None
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        return None
+
+    try:
+        response = supabase.auth.get_user(token)
+        if response and response.user:
+            return _to_user_payload(response.user)
+    except Exception as e:
+        logger.warning(f"Auth verification failed: {e}")
+    return None
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────
 
 async def get_current_user(
-    authorization: Optional[str] = Header(default=None),
-    supabase: Client = Depends(get_supabase),
+    auth_user: Optional[Dict[str, Any]] = Depends(get_authenticated_user),
 ) -> str:
     """
     Verifies the Supabase JWT from the Authorization header.
     Returns the user_id (UUID string).
-    
-    Handles both valid and expired tokens by extracting the user_id claim.
-    This allows backend operations to proceed even with expired frontend tokens.
 
-    Raises 401 if token is missing or malformed.
+    Raises 401 if token is missing, malformed, invalid, or expired.
     """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    if not auth_user:
+        raise HTTPException(status_code=401, detail="Token verification failed")
 
-    token = authorization.split(" ", 1)[1]
+    user_id = auth_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Token verification failed")
 
-    try:
-        # First, try to verify with Supabase (handles valid tokens)
-        response = supabase.auth.get_user(token)
-        if response and response.user:
-            return str(response.user.id)
-    except Exception as e:
-        error_msg = str(e).lower()
-        # If token is expired, try to extract user_id from the token itself
-        if "expired" in error_msg or "token is expired" in error_msg:
-            user_id = _extract_user_id_from_jwt(token)
-            if user_id:
-                logger.debug(f"Using expired token for user {user_id}")
-                return user_id
-        logger.warning(f"Auth verification failed: {e}")
-    
-    raise HTTPException(status_code=401, detail="Token verification failed")
+    return str(user_id)
 
 
 async def get_optional_user(
-    authorization: Optional[str] = Header(default=None),
-    supabase: Client = Depends(get_supabase),
+    auth_user: Optional[Dict[str, Any]] = Depends(get_authenticated_user),
 ) -> Optional[str]:
     """
     Same as get_current_user but returns None instead of raising 401.
     Use for endpoints that support both authenticated and guest access.
-    
-    Also handles expired tokens by extracting user_id from the token itself.
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    if not auth_user:
         return None
-    try:
-        token = authorization.split(" ", 1)[1]
-        response = supabase.auth.get_user(token)
-        if response and response.user:
-            return str(response.user.id)
-    except Exception as e:
-        error_msg = str(e).lower()
-        # If token is expired, try to extract user_id from the token itself
-        if "expired" in error_msg or "token is expired" in error_msg:
-            user_id = _extract_user_id_from_jwt(token)
-            if user_id:
-                logger.debug(f"Using expired token for optional user {user_id}")
-                return user_id
-    return None
+    user_id = auth_user.get("id")
+    return str(user_id) if user_id else None
+
+
+async def enforce_guest_read_only(
+    request: Request,
+    auth_user: Optional[Dict[str, Any]] = Depends(get_authenticated_user),
+) -> None:
+    """
+    Feature-flagged guard: when enabled, guest users cannot mutate resources.
+    Safe by default because the flag is disabled unless explicitly configured.
+    """
+    if not GUEST_READ_ONLY_MODE:
+        return
+
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+
+    if auth_user and bool(auth_user.get("is_anonymous")):
+        raise HTTPException(
+            status_code=403,
+            detail="Guest sessions are read-only. Please sign in to continue.",
+        )

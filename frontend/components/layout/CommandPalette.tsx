@@ -13,6 +13,7 @@ import {
   CommandShortcut,
 } from '@/components/ui/command';
 import { listRepos } from '@/lib/api';
+import { auditLogout } from '@/lib/auth-api';
 import { createClient } from '@/lib/supabase/client';
 import type { Repo } from '@/lib/types';
 import { FolderGit2, LayoutDashboard, LogOut, Plus, Search, Settings } from 'lucide-react';
@@ -78,6 +79,15 @@ export function CommandPalette() {
   }, []);
 
   async function handleSignOut() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    await auditLogout({
+      token: session?.access_token,
+      email: session?.user?.email,
+      sessionId: session?.access_token?.slice(-16),
+    }).catch(() => undefined);
+
     await supabase.auth.signOut();
     runCommand(() => {
       router.push('/');

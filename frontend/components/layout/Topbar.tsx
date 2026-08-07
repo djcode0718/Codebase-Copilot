@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import Breadcrumbs from '@/components/layout/Breadcrumbs';
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
 import { createClient } from '@/lib/supabase/client';
+import { auditLogout } from '@/lib/auth-api';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +37,16 @@ export default function Topbar({ userEmail, repoCount = 0, onToggleSidebar }: To
   }, [userMenuOpen]);
 
   async function handleSignOut() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    await auditLogout({
+      token: session?.access_token,
+      email: session?.user?.email,
+      sessionId: session?.access_token?.slice(-16),
+    }).catch(() => undefined);
+
     await supabase.auth.signOut();
     setUserMenuOpen(false);
     router.push('/auth/sign-in');

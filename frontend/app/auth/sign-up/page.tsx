@@ -11,10 +11,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { buildOAuthRedirectUrl, createClient } from '@/lib/supabase/client';
+import { normalizeEmail, preflightRegister } from '@/lib/auth-api';
 import { toast } from 'sonner';
 import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/components/auth/AuthExperienceShell';
 
-type InlineErrors = { email?: string; password?: string; form?: string };
+type InlineErrors = { email?: string; password?: string; confirmPassword?: string; form?: string };
 
 type PasswordStrength = {
   score: number;
@@ -27,7 +28,7 @@ type PasswordStrength = {
   };
 };
 
-function validateSignUp(email: string, password: string): InlineErrors {
+function validateSignUp(email: string, password: string, confirmPassword: string): InlineErrors {
   const errors: InlineErrors = {};
   if (!email.trim()) {
     errors.email = 'Email is required.';
@@ -38,6 +39,11 @@ function validateSignUp(email: string, password: string): InlineErrors {
     errors.password = 'Password is required.';
   } else if (password.length < 8) {
     errors.password = 'Use at least 8 characters.';
+  }
+  if (!confirmPassword.trim()) {
+    errors.confirmPassword = 'Please confirm your password.';
+  } else if (password !== confirmPassword) {
+    errors.confirmPassword = 'Passwords do not match.';
   }
   return errors;
 }
@@ -62,6 +68,7 @@ export default function SignUpPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingProvider, setLoadingProvider] = useState<OAuthProvider | null>(null);
@@ -75,7 +82,8 @@ export default function SignUpPage() {
     e.preventDefault();
     if (loading) return;
 
-    const nextErrors = validateSignUp(email, password);
+    const normalizedEmail = normalizeEmail(email);
+    const nextErrors = validateSignUp(normalizedEmail, password, confirmPassword);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
       formErrorRef.current?.focus();
@@ -83,14 +91,40 @@ export default function SignUpPage() {
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.signUp({ email: email.trim(), password });
+    try {
+      const preflight = await preflightRegister(normalizedEmail, password);
+      if (!preflight.ok) {
+        const providerGuidance = preflight.providers.length > 0
+          ? ` Continue with ${preflight.providers.map((p) => p[0].toUpperCase() + p.slice(1)).join(', ')}.`
+          : ' Please sign in using your existing account.';
+        const message = `${preflight.message}${providerGuidance}`;
+        setErrors({ form: message });
+        formErrorRef.current?.focus();
+        setLoading(false);
+        return;
+      }
+    } catch {
+      setErrors({ form: 'Unable to validate this email right now. Please try again.' });
+      formErrorRef.current?.focus();
+      setLoading(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.signUp({ email: normalizedEmail, password });
     setLoading(false);
 
     if (error) {
-      setErrors({ form: 'Unable to create your account. Please try again.' });
+      if (/already|exists|registered/i.test(error.message)) {
+        setErrors({
+          form: 'This email is already registered with Codebase Copilot. Please sign in using your existing account.',
+        });
+      } else {
+        setErrors({ form: 'Unable to create your account. Please try again.' });
+      }
       formErrorRef.current?.focus();
       toast.error('Unable to create your account.');
     } else {
+      setEmail(normalizedEmail);
       setDone(true);
     }
   }
@@ -178,6 +212,7 @@ export default function SignUpPage() {
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onBlur={() => setEmail((prev) => normalizeEmail(prev))}
             required
             autoComplete="email"
             aria-invalid={Boolean(errors.email)}
@@ -229,9 +264,9 @@ export default function SignUpPage() {
             </p>
           ) : null}
 
-          <div className="rounded-xl border border-border/80 bg-background/70 p-3" aria-live="polite">
+          <div className="rounded-xl border border-border bg-card/95 p-3.5 shadow-sm" aria-live="polite">
             <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="font-medium text-muted-foreground">Password strength</span>
+              <span className="font-semibold text-foreground/85">Password strength</span>
               <span className="font-semibold text-foreground">{password ? passwordStrength.label : 'Add a password'}</span>
             </div>
             <div className="grid grid-cols-4 gap-1">
@@ -242,24 +277,45 @@ export default function SignUpPage() {
                     'h-1.5 rounded-full transition-colors duration-200',
                     password && segment < passwordStrength.score
                       ? passwordStrength.score <= 1
-                        ? 'bg-red-400'
+                        ? 'bg-red-500'
                         : passwordStrength.score === 2
-                        ? 'bg-amber-400'
+                        ? 'bg-amber-500'
                         : passwordStrength.score === 3
-                        ? 'bg-blue-400'
+                        ? 'bg-blue-500'
                         : 'bg-brand'
-                      : 'bg-border',
+                      : 'bg-border/90',
                   ].join(' ')}
                 />
               ))}
             </div>
-            <div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
-              <p className={passwordStrength.checks.length ? 'text-brand' : undefined}>- At least 8 characters</p>
-              <p className={passwordStrength.checks.uppercase ? 'text-brand' : undefined}>- One uppercase letter</p>
-              <p className={passwordStrength.checks.number ? 'text-brand' : undefined}>- One number</p>
-              <p className={passwordStrength.checks.symbol ? 'text-brand' : undefined}>- One symbol</p>
+            <div className="mt-2 grid gap-1 text-[11px] text-foreground/70 sm:grid-cols-2">
+              <p className={passwordStrength.checks.length ? 'text-brand font-medium' : undefined}>- At least 8 characters</p>
+              <p className={passwordStrength.checks.uppercase ? 'text-brand font-medium' : undefined}>- One uppercase letter</p>
+              <p className={passwordStrength.checks.number ? 'text-brand font-medium' : undefined}>- One number</p>
+              <p className={passwordStrength.checks.symbol ? 'text-brand font-medium' : undefined}>- One symbol</p>
             </div>
           </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="confirm-password">Confirm password</Label>
+          <Input
+            id="confirm-password"
+            type={showPassword ? 'text' : 'password'}
+            placeholder="Re-enter your password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
+            autoComplete="new-password"
+            aria-invalid={Boolean(errors.confirmPassword)}
+            aria-describedby={errors.confirmPassword ? 'confirm-password-error' : undefined}
+            className="h-11 bg-background border-border focus-visible:ring-brand"
+          />
+          {errors.confirmPassword ? (
+            <p id="confirm-password-error" className="text-xs text-destructive" role="alert">
+              {errors.confirmPassword}
+            </p>
+          ) : null}
         </div>
 
         <Button
@@ -287,6 +343,7 @@ export default function SignUpPage() {
       transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
     >
       <AuthExperienceShell
+        showBrand={false}
         heading="Create account"
         subtitle="Set up your AI Engineering Workspace in seconds. Minimal setup, enterprise-grade outcomes."
         authCard={card}

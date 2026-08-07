@@ -100,6 +100,14 @@ STREAM_FIRST_TOKEN_TIMEOUT_SECONDS = float(os.getenv("STREAM_FIRST_TOKEN_TIMEOUT
 # Optional override for the startup-time fallback text.
 STREAM_FIRST_TOKEN_FALLBACK_TEXT = os.getenv("STREAM_FIRST_TOKEN_FALLBACK_TEXT", "").strip()
 
+# -- Auth hardening controls --------------------------------------------------
+AUTH_MAX_FAILED_LOGINS = int(os.getenv("AUTH_MAX_FAILED_LOGINS", "5"))
+AUTH_LOCKOUT_MINUTES = int(os.getenv("AUTH_LOCKOUT_MINUTES", "15"))
+AUTH_RATE_LIMIT_PER_MINUTE = int(os.getenv("AUTH_RATE_LIMIT_PER_MINUTE", "60"))
+AUTH_REQUIRE_EMAIL_VERIFICATION = os.getenv("AUTH_REQUIRE_EMAIL_VERIFICATION", "true").lower() == "true"
+AUTH_LOGIN_HISTORY_LIMIT = int(os.getenv("AUTH_LOGIN_HISTORY_LIMIT", "50"))
+GUEST_READ_ONLY_MODE = os.getenv("GUEST_READ_ONLY_MODE", "false").lower() == "true"
+
 # -- Startup prewarm controls -------------------------------------------------
 # Disable by default to keep API startup fast in local dev.
 LLAMAINDEX_PREWARM_ON_STARTUP = os.getenv("LLAMAINDEX_PREWARM_ON_STARTUP", "false").lower() == "true"

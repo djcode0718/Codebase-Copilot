@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
+import { auditLogout } from '@/lib/auth-api';
 import { toast } from 'sonner';
 import type { Session, User } from '@supabase/supabase-js';
 
@@ -112,6 +113,15 @@ export function LandingAuthActions({
   }, [oauthCode, oauthNext, router, supabase]);
 
   async function handleSignOut() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    await auditLogout({
+      token: session?.access_token,
+      email: session?.user?.email,
+      sessionId: session?.access_token?.slice(-16),
+    }).catch(() => undefined);
+
     setSigningOut(true);
     const { error } = await supabase.auth.signOut();
     setSigningOut(false);

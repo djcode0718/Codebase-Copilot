@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi import HTTPException
+from starlette.requests import Request
 
 
 # â”€â”€â”€ get_supabase â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -77,90 +78,40 @@ class TestGetCurrentUser:
     async def test_no_auth_header_raises_401(self):
         from api.dependencies import get_current_user
 
-        mock_supabase = MagicMock()
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(authorization=None, supabase=mock_supabase)
+            await get_current_user(auth_user=None)
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_malformed_header_raises_401(self):
         from api.dependencies import get_current_user
-
-        mock_supabase = MagicMock()
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(authorization="Token abc", supabase=mock_supabase)
+            await get_current_user(auth_user={})
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_valid_token_returns_user_id(self):
         from api.dependencies import get_current_user
 
-        mock_supabase = MagicMock()
-        mock_user = MagicMock()
-        mock_user.id = "user-uuid-123"
-        mock_response = MagicMock()
-        mock_response.user = mock_user
-        mock_supabase.auth.get_user.return_value = mock_response
-
-        result = await get_current_user(
-            authorization="Bearer valid-token",
-            supabase=mock_supabase,
-        )
+        result = await get_current_user(auth_user={"id": "user-uuid-123"})
         assert result == "user-uuid-123"
 
     @pytest.mark.asyncio
     async def test_invalid_token_raises_401(self):
         from api.dependencies import get_current_user
 
-        mock_supabase = MagicMock()
-        mock_response = MagicMock()
-        mock_response.user = None
-        mock_supabase.auth.get_user.return_value = mock_response
-
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(
-                authorization="Bearer bad-token",
-                supabase=mock_supabase,
-            )
+            await get_current_user(auth_user=None)
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_supabase_exception_raises_401(self):
+    async def test_expired_token_raises_401(self):
+        """Expired tokens must not be accepted by backend dependencies."""
         from api.dependencies import get_current_user
-
-        mock_supabase = MagicMock()
-        mock_supabase.auth.get_user.side_effect = Exception("Connection refused")
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(
-                authorization="Bearer some-token",
-                supabase=mock_supabase,
-            )
+            await get_current_user(auth_user=None)
         assert exc_info.value.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_expired_token_uses_jwt_extraction(self):
-        """When token is expired, extract user_id from JWT claims."""
-        from api.dependencies import get_current_user
-        import jwt
-        
-        # Create a mock expired token
-        fake_user_id = "user-uuid-123"
-        expired_token = jwt.encode(
-            {"sub": fake_user_id, "exp": 0},  # exp=0 means expired
-            "secret",
-            algorithm="HS256"
-        )
-        
-        mock_supabase = MagicMock()
-        # Simulate expired token error
-        mock_supabase.auth.get_user.side_effect = Exception("invalid JWT: unable to parse or verify signature, token has invalid claims: token is expired")
-
-        result = await get_current_user(
-            authorization=f"Bearer {expired_token}",
-            supabase=mock_supabase,
-        )
-        assert result == fake_user_id
 
 
 # â”€â”€â”€ get_optional_user â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -170,60 +121,68 @@ class TestGetOptionalUser:
     async def test_no_header_returns_none(self):
         from api.dependencies import get_optional_user
 
-        mock_supabase = MagicMock()
-        result = await get_optional_user(authorization=None, supabase=mock_supabase)
+        result = await get_optional_user(auth_user=None)
         assert result is None
 
     @pytest.mark.asyncio
     async def test_valid_token_returns_user_id(self):
         from api.dependencies import get_optional_user
 
-        mock_supabase = MagicMock()
-        mock_user = MagicMock()
-        mock_user.id = "user-uuid-123"
-        mock_response = MagicMock()
-        mock_response.user = mock_user
-        mock_supabase.auth.get_user.return_value = mock_response
-
-        result = await get_optional_user(
-            authorization="Bearer valid-token",
-            supabase=mock_supabase,
-        )
+        result = await get_optional_user(auth_user={"id": "user-uuid-123"})
         assert result == "user-uuid-123"
 
     @pytest.mark.asyncio
     async def test_exception_returns_none(self):
         from api.dependencies import get_optional_user
 
-        mock_supabase = MagicMock()
-        mock_supabase.auth.get_user.side_effect = Exception("Error")
-
-        result = await get_optional_user(
-            authorization="Bearer bad",
-            supabase=mock_supabase,
-        )
+        result = await get_optional_user(auth_user=None)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_expired_token_uses_jwt_extraction(self):
-        """When token is expired in optional user, extract user_id from JWT claims."""
+    async def test_expired_token_returns_none(self):
+        """Optional auth must return None for expired/invalid tokens."""
         from api.dependencies import get_optional_user
-        import jwt
-        
-        # Create a mock expired token
-        fake_user_id = "user-uuid-456"
-        expired_token = jwt.encode(
-            {"sub": fake_user_id, "exp": 0},  # exp=0 means expired
-            "secret",
-            algorithm="HS256"
-        )
-        
-        mock_supabase = MagicMock()
-        # Simulate expired token error
-        mock_supabase.auth.get_user.side_effect = Exception("invalid JWT: token is expired")
 
-        result = await get_optional_user(
-            authorization=f"Bearer {expired_token}",
-            supabase=mock_supabase,
-        )
-        assert result == fake_user_id
+        result = await get_optional_user(auth_user=None)
+        assert result is None
+
+
+class TestGuestReadOnlyGuard:
+    @pytest.mark.asyncio
+    async def test_guest_mutation_blocked_when_flag_enabled(self):
+        import api.dependencies as dep_module
+
+        original_flag = dep_module.GUEST_READ_ONLY_MODE
+        dep_module.GUEST_READ_ONLY_MODE = True
+        try:
+            request = Request({"type": "http", "method": "POST", "headers": []})
+            with pytest.raises(HTTPException) as exc_info:
+                await dep_module.enforce_guest_read_only(request, auth_user={"id": "u1", "is_anonymous": True})
+            assert exc_info.value.status_code == 403
+        finally:
+            dep_module.GUEST_READ_ONLY_MODE = original_flag
+
+    @pytest.mark.asyncio
+    async def test_guest_read_allowed_when_flag_enabled(self):
+        import api.dependencies as dep_module
+
+        original_flag = dep_module.GUEST_READ_ONLY_MODE
+        dep_module.GUEST_READ_ONLY_MODE = True
+        try:
+            request = Request({"type": "http", "method": "GET", "headers": []})
+            await dep_module.enforce_guest_read_only(request, auth_user={"id": "u1", "is_anonymous": True})
+        finally:
+            dep_module.GUEST_READ_ONLY_MODE = original_flag
+
+    @pytest.mark.asyncio
+    async def test_guest_write_allowed_when_flag_disabled(self):
+        import api.dependencies as dep_module
+
+        original_flag = dep_module.GUEST_READ_ONLY_MODE
+        dep_module.GUEST_READ_ONLY_MODE = False
+        try:
+            request = Request({"type": "http", "method": "POST", "headers": []})
+            await dep_module.enforce_guest_read_only(request, auth_user={"id": "u1", "is_anonymous": True})
+        finally:
+            dep_module.GUEST_READ_ONLY_MODE = original_flag
+
