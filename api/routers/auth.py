@@ -68,6 +68,7 @@ def _enforce_rate_limit(request: Request, route_key: str) -> None:
 async def register_preflight(
     body: RegisterPreflightRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     _enforce_rate_limit(request, "register-preflight")
@@ -126,6 +127,7 @@ async def register_preflight(
 async def login_preflight(
     body: LoginPreflightRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     _enforce_rate_limit(request, "login-preflight")
@@ -165,6 +167,7 @@ async def login_preflight(
 async def login_audit(
     body: LoginAuditRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     _enforce_rate_limit(request, "login-audit")
@@ -250,6 +253,7 @@ async def logout_audit(
 async def password_reset_audit_request(
     body: PasswordResetAuditRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     _enforce_rate_limit(request, "password-reset-request")

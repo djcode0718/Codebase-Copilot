@@ -344,6 +344,121 @@ def print_pipeline_summary(file_count: int, node_count: int, all_steps_start: fl
     print(f"{GREEN}{'═'*78}{RESET}\n")
 
 
+def _handle_repl_command(raw: str, last_mode) -> bool:
+    command = raw.lower()
+
+    if command in (":quit", ":q", "exit", "quit"):
+        print(f"\n{DIM}Goodbye!{RESET}\n")
+        return True
+
+    if command == ":mode":
+        mode_name = last_mode.value if last_mode else "not set yet"
+        print(f"  {DIM}Current query mode: {CYAN}{mode_name}{RESET}\n")
+        return True
+
+    if command == ":files":
+        from app.config import REPOS_DIR
+        repo_path = os.path.join(REPOS_DIR, INDEX_NAME)
+        from app.ingestion.file_filter import filter_files
+        files = filter_files(repo_path)
+        print(f"  {DIM}Indexed files ({len(files)}):{RESET}")
+        for f in files:
+            print(f"    {DIM}{os.path.relpath(f, repo_path)}{RESET}")
+        print()
+        return True
+
+    return False
+
+
+def _build_retriever_for_mode(query_mode, vector_index, bm25_retriever, top_k_chunks: int):
+    from llama_index.core.retrievers import QueryFusionRetriever
+    from app.retrieval.query_router import QueryMode
+
+    if query_mode == QueryMode.CODE_LOOKUP and bm25_retriever is not None:
+        retriever = QueryFusionRetriever(
+            retrievers=[
+                bm25_retriever,
+                vector_index.as_retriever(similarity_top_k=top_k_chunks),
+            ],
+            similarity_top_k=top_k_chunks,
+            num_queries=1,
+            mode="reciprocal_rerank",
+            use_async=False,
+        )
+        retriever_type = f"BM25 + Dense (RRF fusion, top_k={top_k_chunks})"
+        return retriever, retriever_type
+
+    retriever = vector_index.as_retriever(similarity_top_k=top_k_chunks + 5)
+    retriever_type = f"Dense only (top_k={top_k_chunks + 5})"
+    return retriever, retriever_type
+
+
+def _print_retrieved_nodes(nodes: list) -> None:
+    divider()
+    print(f"     {DIM}│  Retrieved chunks (passed to LLM):{RESET}")
+    for i, node in enumerate(nodes):
+        path  = node.node.metadata.get("path", "unknown")
+        score = node.score or 0.0
+        chars = len(node.node.get_content())
+        preview = node.node.get_content()[:120].replace("\n", " ")
+        print(f"     {DIM}│  [{i+1}] {CYAN}{path}{RESET}  {DIM}score={score:.4f}  {chars} chars{RESET}")
+        print(f"     {DIM}│      ↳ {preview}…{RESET}")
+
+
+def _build_history_string(memory) -> str:
+    try:
+        history_msgs = memory.get()
+        history_str = ""
+        for msg in history_msgs[-6:]:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role and content:
+                history_str += f"{role.upper()}: {content}\n"
+        return history_str
+    except Exception:
+        return ""
+
+
+def _build_prompt(system_prompt: str, nodes: list, raw: str, history_str: str) -> str:
+    context_str = "\n\n".join([
+        f"[{n.node.metadata.get('path', 'unknown')}]\n{n.node.get_content()}"
+        for n in nodes
+    ])
+    return (
+        f"{system_prompt}\n\n"
+        + (f"CONVERSATION HISTORY:\n{history_str}" if history_str else "")
+        + f"Context:\n{context_str}\n\n"
+        + f"Question: {raw}\n\nAnswer:"
+    )
+
+
+def _stream_llm_response(full_prompt: str, settings_llm):
+    t_llm_start = time.time()
+    full_response = ""
+    try:
+        stream = settings_llm.stream_complete(full_prompt)
+        for chunk in stream:
+            delta = chunk.delta or ""
+            if delta:
+                print(delta, end="", flush=True)
+                full_response += delta
+    except Exception as e:
+        print(f"\n  {RED}LLM error: {e}{RESET}")
+    return full_response, time.time() - t_llm_start
+
+
+def _print_turn_latency(t_route: float, t_ret: float, t_rerank: float, t_llm: float, t_total: float, response_len: int, turn_count: int, query_mode) -> None:
+    print(f"\n\n  {DIM}{'─'*68}{RESET}")
+    print(f"  {DIM}⏱  Routing: {t_route*1000:.0f}ms  │  "
+          f"Retrieval: {t_ret*1000:.0f}ms  │  "
+          f"Rerank: {t_rerank*1000:.0f}ms  │  "
+          f"LLM: {t_llm*1000:.0f}ms  │  "
+          f"Total: {t_total*1000:.0f}ms{RESET}")
+    print(f"  {DIM}📝  Response: {response_len:,} chars  │  "
+          f"Turn: #{turn_count}  │  "
+          f"Mode: {CYAN}{query_mode.value}{RESET}\n")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 6 — INTERACTIVE CHAT REPL
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,7 +466,6 @@ def print_pipeline_summary(file_count: int, node_count: int, all_steps_start: fl
 def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
     from llama_index.core import Settings
     from llama_index.core.memory import ChatMemoryBuffer
-    from llama_index.core.retrievers import QueryFusionRetriever
     from app.retrieval.query_router import classify_query, QueryMode
     from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
     from app.config import TOP_K_CHUNKS, TOP_K_RERANK
@@ -373,25 +487,9 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
         if not raw:
             continue
 
-        # ── Commands ──────────────────────────────────────────────────────
-        if raw.lower() in (":quit", ":q", "exit", "quit"):
-            print(f"\n{DIM}Goodbye!{RESET}\n")
-            break
-
-        if raw.lower() == ":mode":
-            mode_name = last_mode.value if last_mode else "not set yet"
-            print(f"  {DIM}Current query mode: {CYAN}{mode_name}{RESET}\n")
-            continue
-
-        if raw.lower() == ":files":
-            from app.config import REPOS_DIR
-            repo_path = os.path.join(REPOS_DIR, INDEX_NAME)
-            from app.ingestion.file_filter import filter_files
-            files = filter_files(repo_path)
-            print(f"  {DIM}Indexed files ({len(files)}):{RESET}")
-            for f in files:
-                print(f"    {DIM}{os.path.relpath(f, repo_path)}{RESET}")
-            print()
+        if _handle_repl_command(raw, last_mode):
+            if raw.lower() in (":quit", ":q", "exit", "quit"):
+                break
             continue
 
         # ── Classify query ────────────────────────────────────────────────
@@ -408,21 +506,7 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
         step_start("Retrieval", f"top_k={TOP_K_CHUNKS}")
         t_ret_start = time.time()
 
-        if query_mode == QueryMode.CODE_LOOKUP and bm25_retriever is not None:
-            retriever = QueryFusionRetriever(
-                retrievers=[
-                    bm25_retriever,
-                    vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS),
-                ],
-                similarity_top_k=TOP_K_CHUNKS,
-                num_queries=1,
-                mode="reciprocal_rerank",
-                use_async=False,
-            )
-            retriever_type = f"BM25 + Dense (RRF fusion, top_k={TOP_K_CHUNKS})"
-        else:
-            retriever = vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS + 5)
-            retriever_type = f"Dense only (top_k={TOP_K_CHUNKS + 5})"
+        retriever, retriever_type = _build_retriever_for_mode(query_mode, vector_index, bm25_retriever, TOP_K_CHUNKS)
 
         raw_nodes = retriever.retrieve(raw)
         t_ret = time.time() - t_ret_start
@@ -450,41 +534,12 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
         metric("Rerank time",         f"{t_rerank*1000:.0f}ms")
 
         # ── Show retrieved chunks ─────────────────────────────────────────
-        divider()
-        print(f"     {DIM}│  Retrieved chunks (passed to LLM):{RESET}")
-        for i, node in enumerate(reranked_nodes):
-            path  = node.node.metadata.get("path", "unknown")
-            score = node.score or 0.0
-            chars = len(node.node.get_content())
-            preview = node.node.get_content()[:120].replace("\n", " ")
-            print(f"     {DIM}│  [{i+1}] {CYAN}{path}{RESET}  {DIM}score={score:.4f}  {chars} chars{RESET}")
-            print(f"     {DIM}│      ↳ {preview}…{RESET}")
+        _print_retrieved_nodes(reranked_nodes)
 
         # ── Build prompt ──────────────────────────────────────────────────
         system_prompt = CODE_LOOKUP_PROMPT if query_mode == QueryMode.CODE_LOOKUP else ARCHITECTURAL_PROMPT
-        context_str = "\n\n".join([
-            f"[{n.node.metadata.get('path', 'unknown')}]\n{n.node.get_content()}"
-            for n in reranked_nodes
-        ])
-
-        # History from memory
-        try:
-            history_msgs = memory.get()
-            history_str = ""
-            for msg in history_msgs[-6:]:
-                role    = msg.get("role", "")
-                content = msg.get("content", "")
-                if role and content:
-                    history_str += f"{role.upper()}: {content}\n"
-        except Exception:
-            history_str = ""
-
-        full_prompt = (
-            f"{system_prompt}\n\n"
-            + (f"CONVERSATION HISTORY:\n{history_str}" if history_str else "")
-            + f"Context:\n{context_str}\n\n"
-            + f"Question: {raw}\n\nAnswer:"
-        )
+        history_str = _build_history_string(memory)
+        full_prompt = _build_prompt(system_prompt, reranked_nodes, raw, history_str)
 
         prompt_chars = len(full_prompt)
         prompt_tokens = prompt_chars // 4
@@ -498,20 +553,7 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
         print(f"  {BOLD}{GREEN}Assistant ▶{RESET}")
         print()
 
-        t_llm_start = time.time()
-        full_response = ""
-
-        try:
-            stream = Settings.llm.stream_complete(full_prompt)
-            for chunk in stream:
-                delta = chunk.delta or ""
-                if delta:
-                    print(delta, end="", flush=True)
-                    full_response += delta
-        except Exception as e:
-            print(f"\n  {RED}LLM error: {e}{RESET}")
-
-        t_llm = time.time() - t_llm_start
+        full_response, t_llm = _stream_llm_response(full_prompt, Settings.llm)
         t_total = time.time() - t_query_start
 
         # Update memory
@@ -525,15 +567,7 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
         last_mode = query_mode
 
         # ── Latency summary ───────────────────────────────────────────────
-        print(f"\n\n  {DIM}{'─'*68}{RESET}")
-        print(f"  {DIM}⏱  Routing: {t_route*1000:.0f}ms  │  "
-              f"Retrieval: {t_ret*1000:.0f}ms  │  "
-              f"Rerank: {t_rerank*1000:.0f}ms  │  "
-              f"LLM: {t_llm*1000:.0f}ms  │  "
-              f"Total: {t_total*1000:.0f}ms{RESET}")
-        print(f"  {DIM}📝  Response: {len(full_response):,} chars  │  "
-              f"Turn: #{turn_count}  │  "
-              f"Mode: {CYAN}{query_mode.value}{RESET}\n")
+        _print_turn_latency(t_route, t_ret, t_rerank, t_llm, t_total, len(full_response), turn_count, query_mode)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

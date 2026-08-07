@@ -2,8 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { motion } from 'framer-motion';
-import { Loader2, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,6 +9,7 @@ import { createClient } from '@/lib/supabase/client';
 import { auditPasswordResetComplete } from '@/lib/auth-api';
 import { toast } from 'sonner';
 import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
+import { AuthBusyLabel, AuthScreenMotion, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
 
 export default function ResetPasswordPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -56,13 +55,11 @@ export default function ResetPasswordPage() {
   }
 
   const card = done ? (
-    <div className="rounded-2xl border border-border bg-background/60 px-4 py-8 text-center">
-      <CheckCircle2 size={20} className="mx-auto text-brand" />
-      <p className="mt-3 text-sm text-muted-foreground">Your password has been updated successfully.</p>
-      <Button asChild variant="outline" className="mt-4 border-border">
-        <Link href="/auth/sign-in">Continue to sign in</Link>
-      </Button>
-    </div>
+    <AuthSuccessPanel
+      message="Your password has been updated successfully."
+      ctaHref="/auth/sign-in"
+      ctaLabel="Continue to sign in"
+    />
   ) : (
     <form onSubmit={handleSubmit} className="space-y-4" noValidate>
       <div className="space-y-1.5">
@@ -94,18 +91,13 @@ export default function ResetPasswordPage() {
         disabled={loading}
         className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200"
       >
-        {loading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
-        Update password
+        <AuthBusyLabel loading={loading} idleLabel="Update password" />
       </Button>
     </form>
   );
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
-    >
+    <AuthScreenMotion>
       <AuthExperienceShell
         heading="Set new password"
         subtitle="Create a new secure password for your Codebase Copilot account."
@@ -119,7 +111,7 @@ export default function ResetPasswordPage() {
           </p>
         )}
       />
-    </motion.div>
+    </AuthScreenMotion>
   );
 }
 

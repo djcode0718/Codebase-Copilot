@@ -12,11 +12,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { buildOAuthRedirectUrl, createClient } from '@/lib/supabase/client';
 import { auditLoginAttempt, linkOAuthIdentity, normalizeEmail, preflightLogin } from '@/lib/auth-api';
+import { AUTH_SIGNIN_MARKER_STORAGE_ID, REMEMBER_EMAIL_STORAGE_ID } from '@/lib/auth-storage';
 import { toast } from 'sonner';
 import { Suspense } from 'react';
 import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/components/auth/AuthExperienceShell';
-
-const REMEMBER_EMAIL_KEY = 'codebase-copilot.remember-email.v1';
 
 type InlineErrors = { email?: string; password?: string; form?: string };
 
@@ -174,16 +173,17 @@ function SubmitButton({ loading }: { loading: boolean }) {
 }
 
 function validateSignIn(email: string, password: string): InlineErrors {
-  const errors: InlineErrors = {};
-  if (!email.trim()) {
-    errors.email = 'Email is required.';
-  } else if (!/^\S+@\S+\.\S+$/.test(email)) {
-    errors.email = 'Enter a valid email address.';
-  }
-  if (!password.trim()) {
-    errors.password = 'Password is required.';
-  }
-  return errors;
+  const emailError = !email.trim()
+    ? 'Email is required.'
+    : !/^\S+@\S+\.\S+$/.test(email)
+      ? 'Enter a valid email address.'
+      : undefined;
+  const passwordError = !password.trim() ? 'Password is required.' : undefined;
+
+  return {
+    ...(emailError ? { email: emailError } : {}),
+    ...(passwordError ? { password: passwordError } : {}),
+  };
 }
 
 function SignInForm() {
@@ -198,7 +198,7 @@ function SignInForm() {
   const [email, setEmail] = useState(() => {
     if (typeof window === 'undefined') return '';
     try {
-      return window.localStorage.getItem(REMEMBER_EMAIL_KEY) ?? '';
+      return window.localStorage.getItem(REMEMBER_EMAIL_STORAGE_ID) ?? '';
     } catch {
       return '';
     }
@@ -211,7 +211,7 @@ function SignInForm() {
   const [rememberMe, setRememberMe] = useState(() => {
     if (typeof window === 'undefined') return false;
     try {
-      return Boolean(window.localStorage.getItem(REMEMBER_EMAIL_KEY));
+      return Boolean(window.localStorage.getItem(REMEMBER_EMAIL_STORAGE_ID));
     } catch {
       return false;
     }
@@ -340,11 +340,11 @@ function SignInForm() {
 
     try {
       if (rememberMe) {
-        window.localStorage.setItem(REMEMBER_EMAIL_KEY, normalizedEmail);
+        window.localStorage.setItem(REMEMBER_EMAIL_STORAGE_ID, normalizedEmail);
       } else {
-        window.localStorage.removeItem(REMEMBER_EMAIL_KEY);
+        window.localStorage.removeItem(REMEMBER_EMAIL_STORAGE_ID);
       }
-      sessionStorage.setItem('codebase-copilot.auth.just-signed-in', '1');
+      sessionStorage.setItem(AUTH_SIGNIN_MARKER_STORAGE_ID, '1');
     } catch {
       // Ignore storage write failures.
     }
@@ -385,7 +385,7 @@ function SignInForm() {
     setLoadingProvider(provider);
     try {
       try {
-        sessionStorage.setItem('codebase-copilot.auth.just-signed-in', '1');
+        sessionStorage.setItem(AUTH_SIGNIN_MARKER_STORAGE_ID, '1');
       } catch {
         // Ignore storage write failures.
       }

@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { buildOAuthRedirectUrl, createClient } from '@/lib/supabase/client';
 import { normalizeEmail, preflightRegister } from '@/lib/auth-api';
+import { AUTH_SIGNIN_MARKER_STORAGE_ID } from '@/lib/auth-storage';
 import { toast } from 'sonner';
 import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/components/auth/AuthExperienceShell';
 
@@ -29,23 +30,27 @@ type PasswordStrength = {
 };
 
 function validateSignUp(email: string, password: string, confirmPassword: string): InlineErrors {
-  const errors: InlineErrors = {};
-  if (!email.trim()) {
-    errors.email = 'Email is required.';
-  } else if (!/^\S+@\S+\.\S+$/.test(email)) {
-    errors.email = 'Enter a valid email address.';
-  }
-  if (!password.trim()) {
-    errors.password = 'Password is required.';
-  } else if (password.length < 8) {
-    errors.password = 'Use at least 8 characters.';
-  }
-  if (!confirmPassword.trim()) {
-    errors.confirmPassword = 'Please confirm your password.';
-  } else if (password !== confirmPassword) {
-    errors.confirmPassword = 'Passwords do not match.';
-  }
-  return errors;
+  const emailError = !email.trim()
+    ? 'Email is required.'
+    : !/^\S+@\S+\.\S+$/.test(email)
+      ? 'Enter a valid email address.'
+      : undefined;
+  const passwordError = !password.trim()
+    ? 'Password is required.'
+    : password.length < 8
+      ? 'Use at least 8 characters.'
+      : undefined;
+  const confirmPasswordError = !confirmPassword.trim()
+    ? 'Please confirm your password.'
+    : password !== confirmPassword
+      ? 'Passwords do not match.'
+      : undefined;
+
+  return {
+    ...(emailError ? { email: emailError } : {}),
+    ...(passwordError ? { password: passwordError } : {}),
+    ...(confirmPasswordError ? { confirmPassword: confirmPasswordError } : {}),
+  };
 }
 
 function getPasswordStrength(password: string): PasswordStrength {
@@ -134,7 +139,7 @@ export default function SignUpPage() {
     setLoadingProvider(provider);
     try {
       try {
-        sessionStorage.setItem('codebase-copilot.auth.just-signed-in', '1');
+        sessionStorage.setItem(AUTH_SIGNIN_MARKER_STORAGE_ID, '1');
       } catch {
         // Ignore storage write failures.
       }
