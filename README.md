@@ -29,6 +29,7 @@
 | **Backend resilience** | `get_repository_review_by_id` and `insert_repository_review` now bypass the stale schema cache and update it on success |
 | **Maintainability refactor** | Shared router access guard (`api/routers/_repo_access.py`) removes duplicated ownership checks across evaluation and health routers; frontend explorer/sidebar/indexing stream were split into smaller units for readability with no API or route contract changes |
 | **Branch Workspace** | Added branch-aware repository workspace with searchable branch selector, branch status, checkout/pull/default-branch actions, and branch comparison/merge-readiness APIs (`/api/repo/{repo_id}/branches/*`) while preserving existing workflows |
+| **Authentication UX** | Enterprise-grade Sign In / Sign Up refresh with GitHub-first OAuth, Google/Microsoft OAuth options, premium guest-mode entry, caps-lock + inline validation feedback, feature/trust previews, and first-run Instant Workspace onboarding while preserving existing auth/session flows |
 
 The system combines:
 
@@ -171,6 +172,7 @@ A complete production frontend — an **Enterprise Repository Intelligence Works
 
 * Next.js 16 (App Router) + React 19 + TypeScript
 * Supabase Auth (sign up / sign in) with session middleware
+* **Enterprise authentication journey** with GitHub-first OAuth, Google/Microsoft OAuth options, premium guest access flow, and first-run Instant Workspace next-step chooser
 * Dashboard for managing indexed repositories
 * Live indexing progress view (SSE-driven pipeline steps)
 * **Repository overview with Health Score (0–100, graded A–F)**

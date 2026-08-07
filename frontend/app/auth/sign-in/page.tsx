@@ -2,36 +2,22 @@
 /**
  * app/auth/sign-in/page.tsx
  */
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { createClient } from '@/lib/supabase/client';
+import { buildOAuthRedirectUrl, createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import { Suspense } from 'react';
+import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/components/auth/AuthExperienceShell';
 
-type AuthHandlers = {
-  handleSignIn: (e: React.FormEvent) => Promise<void>;
-  handleGuestAccess: () => Promise<void>;
-};
+const REMEMBER_EMAIL_KEY = 'codebase-copilot.remember-email.v1';
 
-function LogoHeader() {
-  return (
-    <div className="text-center mb-8">
-      <Link href="/" className="inline-flex items-center gap-2">
-        <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center">
-          <span className="font-code font-bold text-sm text-green-950">CC</span>
-        </div>
-        <span className="font-heading font-semibold text-lg tracking-tight">Codebase Copilot</span>
-      </Link>
-      <p className="text-muted-foreground text-sm mt-2">Sign in to your account</p>
-    </div>
-  );
-}
+type InlineErrors = { email?: string; password?: string; form?: string };
 
 function PasswordVisibilityButton({
   showPassword,
@@ -55,9 +41,11 @@ function PasswordVisibilityButton({
 function EmailField({
   email,
   onChange,
+  error,
 }: {
   email: string;
   onChange: (value: string) => void;
+  error?: string;
 }) {
   return (
     <div className="space-y-1.5">
@@ -70,8 +58,15 @@ function EmailField({
         onChange={(e) => onChange(e.target.value)}
         required
         autoComplete="email"
-        className="bg-background border-border focus-visible:ring-brand"
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? 'email-error' : undefined}
+        className="h-11 bg-background border-border focus-visible:ring-brand"
       />
+      {error ? (
+        <p id="email-error" className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -81,11 +76,17 @@ function PasswordField({
   showPassword,
   onChange,
   onToggle,
+  onCapsLock,
+  error,
+  capsLockOn,
 }: {
   password: string;
   showPassword: boolean;
   onChange: (value: string) => void;
   onToggle: () => void;
+  onCapsLock: (enabled: boolean) => void;
+  error?: string;
+  capsLockOn: boolean;
 }) {
   return (
     <div className="space-y-1.5">
@@ -105,12 +106,26 @@ function PasswordField({
           placeholder="••••••••"
           value={password}
           onChange={(e) => onChange(e.target.value)}
+          onKeyUp={(e) => onCapsLock(e.getModifierState('CapsLock'))}
+          onKeyDown={(e) => onCapsLock(e.getModifierState('CapsLock'))}
           required
           autoComplete="current-password"
-          className="bg-background border-border focus-visible:ring-brand pr-10"
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? 'password-error' : capsLockOn ? 'caps-lock-hint' : undefined}
+          className="h-11 bg-background border-border focus-visible:ring-brand pr-10"
         />
         <PasswordVisibilityButton showPassword={showPassword} onToggle={onToggle} />
       </div>
+      {capsLockOn ? (
+        <p id="caps-lock-hint" className="text-xs text-amber-500" role="status">
+          Caps Lock is on.
+        </p>
+      ) : null}
+      {error ? (
+        <p id="password-error" className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -134,122 +149,272 @@ function SubmitButton({ loading }: { loading: boolean }) {
   );
 }
 
-
-function useAuthActions(
-  supabase: ReturnType<typeof createClient>,
-  router: ReturnType<typeof useRouter>,
-  next: string,
-  email: string,
-  password: string,
-  setLoading: (loading: boolean) => void,
-  setGuestLoading: (loading: boolean) => void,
-): AuthHandlers {
-  async function handleSignIn(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) {
-      toast.error(error.message);
-    } else {
-      router.push(next);
-      router.refresh();
-    }
+function validateSignIn(email: string, password: string): InlineErrors {
+  const errors: InlineErrors = {};
+  if (!email.trim()) {
+    errors.email = 'Email is required.';
+  } else if (!/^\S+@\S+\.\S+$/.test(email)) {
+    errors.email = 'Enter a valid email address.';
   }
-
-  async function handleGuestAccess() {
-    setGuestLoading(true);
-    const { error } = await supabase.auth.signInAnonymously();
-    setGuestLoading(false);
-    if (error) {
-      toast.error('Guest access unavailable: ' + error.message);
-    } else {
-      router.push('/dashboard');
-      router.refresh();
-    }
+  if (!password.trim()) {
+    errors.password = 'Password is required.';
   }
-
-  return { handleSignIn, handleGuestAccess };
+  return errors;
 }
 
 function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get('next') ?? '/dashboard';
-  const supabase = createClient();
+  const authProvider = searchParams.get('auth_provider');
+  const oauthCode = searchParams.get('code');
+  const supabase = useMemo(() => createClient(), []);
 
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return window.localStorage.getItem(REMEMBER_EMAIL_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [guestLoading, setGuestLoading] = useState(false);
+  const [loadingProvider, setLoadingProvider] = useState<OAuthProvider | null>(null);
+  const [rememberMe, setRememberMe] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return Boolean(window.localStorage.getItem(REMEMBER_EMAIL_KEY));
+    } catch {
+      return false;
+    }
+  });
+  const [capsLockOn, setCapsLockOn] = useState(false);
+  const [errors, setErrors] = useState<InlineErrors>({});
+  const formErrorRef = useRef<HTMLDivElement | null>(null);
+  const [resolvingOAuthCallback, setResolvingOAuthCallback] = useState(Boolean(authProvider || oauthCode));
 
-  const { handleSignIn, handleGuestAccess } = useAuthActions(
-    supabase,
-    router,
-    next,
-    email,
-    password,
-    setLoading,
-    setGuestLoading,
-  );
+  useEffect(() => {
+    const nextPath = next.startsWith('/') ? next : '/dashboard';
 
-  const guestButton = (
-    <Button
-      variant="outline"
-      className="w-full border-border hover:border-brand/50 hover:bg-accent transition-all duration-200 cursor-pointer"
-      onClick={handleGuestAccess}
-      disabled={guestLoading}
-    >
-      {guestLoading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
-      Continue as Guest
-    </Button>
+    async function redirectIfAuthenticated() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user && !user.is_anonymous) {
+        router.replace(nextPath);
+        router.refresh();
+        return;
+      }
+
+      setResolvingOAuthCallback(false);
+    }
+
+    // OAuth callbacks can land here depending on provider/site-url setup.
+    if (authProvider || oauthCode) {
+      void redirectIfAuthenticated();
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user && !session.user.is_anonymous) {
+        router.replace(nextPath);
+        router.refresh();
+        return;
+      }
+
+      if (authProvider || oauthCode) {
+        setResolvingOAuthCallback(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [authProvider, oauthCode, next, router, supabase]);
+
+
+  async function handleSignIn(e: React.FormEvent) {
+    e.preventDefault();
+    if (loading) return;
+
+    const nextErrors = validateSignIn(email, password);
+    setErrors(nextErrors);
+
+    if (Object.keys(nextErrors).length > 0) {
+      formErrorRef.current?.focus();
+      return;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setLoading(false);
+
+    if (error) {
+      setErrors({ form: 'Unable to sign in. Check your credentials and try again.' });
+      formErrorRef.current?.focus();
+      toast.error('Unable to sign in.');
+      return;
+    }
+
+    try {
+      if (rememberMe) {
+        window.localStorage.setItem(REMEMBER_EMAIL_KEY, email.trim());
+      } else {
+        window.localStorage.removeItem(REMEMBER_EMAIL_KEY);
+      }
+      sessionStorage.setItem('codebase-copilot.auth.just-signed-in', '1');
+    } catch {
+      // Ignore storage write failures.
+    }
+
+    router.push(next);
+    router.refresh();
+  }
+
+  async function handleGuestAccess() {
+    if (guestLoading) return;
+    setGuestLoading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (user) {
+      const { error: signOutError } = await supabase.auth.signOut();
+      if (signOutError) {
+        setGuestLoading(false);
+        toast.error('Unable to start a guest session right now.');
+        return;
+      }
+    }
+
+    const { error } = await supabase.auth.signInAnonymously();
+    setGuestLoading(false);
+    if (error) {
+      toast.error('Guest access unavailable. Please try again.');
+      return;
+    }
+    router.push('/dashboard');
+    router.refresh();
+  }
+
+  async function handleOAuth(provider: OAuthProvider) {
+    if (loadingProvider || loading) return;
+    setLoadingProvider(provider);
+    try {
+      try {
+        sessionStorage.setItem('codebase-copilot.auth.just-signed-in', '1');
+      } catch {
+        // Ignore storage write failures.
+      }
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: buildOAuthRedirectUrl(next, provider),
+        },
+      });
+      if (error) {
+        toast.error('OAuth sign-in is unavailable for this provider right now.');
+      }
+    } finally {
+      setLoadingProvider(null);
+    }
+  }
+
+  const card = resolvingOAuthCallback ? (
+    <div className="rounded-2xl border border-border bg-background/60 px-4 py-8 text-center">
+      <Loader2 size={20} className="mx-auto animate-spin text-brand" />
+      <p className="mt-3 text-sm text-muted-foreground">Finalizing secure sign-in...</p>
+    </div>
+  ) : (
+    <div className="space-y-5">
+      <OAuthButtons loadingProvider={loadingProvider} onOAuth={handleOAuth} />
+
+      <div className="flex items-center gap-3">
+        <div className="h-px flex-1 bg-border" />
+        <span className="text-xs text-muted-foreground">or continue with email</span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+
+      <form onSubmit={handleSignIn} className="space-y-4" noValidate>
+        {errors.form ? (
+          <div
+            ref={formErrorRef}
+            tabIndex={-1}
+            role="alert"
+            className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive focus:outline-none focus:ring-2 focus:ring-destructive/40"
+          >
+            <AlertCircle size={14} aria-hidden="true" />
+            <span>{errors.form}</span>
+          </div>
+        ) : null}
+
+        <EmailField email={email} onChange={setEmail} error={errors.email} />
+        <PasswordField
+          password={password}
+          showPassword={showPassword}
+          onChange={setPassword}
+          onToggle={() => setShowPassword(!showPassword)}
+          onCapsLock={setCapsLockOn}
+          capsLockOn={capsLockOn}
+          error={errors.password}
+        />
+
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <label htmlFor="remember-me" className="flex items-center gap-2 text-muted-foreground">
+            <input
+              id="remember-me"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-4 w-4 rounded border-border accent-[hsl(var(--brand))]"
+            />
+            Remember me
+          </label>
+        </div>
+
+        <SubmitButton loading={loading} />
+      </form>
+
+      <Button
+        variant="outline"
+        className="w-full border-border hover:border-brand/50 hover:bg-accent transition-all duration-200 cursor-pointer"
+        onClick={handleGuestAccess}
+        disabled={guestLoading}
+      >
+        {guestLoading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
+        Explore Demo Workspace
+      </Button>
+
+      <p className="text-center text-xs text-muted-foreground">
+        No account required. Experience repository intelligence instantly.
+      </p>
+    </div>
   );
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      {/* Background grid */}
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(51,65,85,0.15)_1px,transparent_1px),linear-gradient(90deg,rgba(51,65,85,0.15)_1px,transparent_1px)] bg-[size:48px_48px] pointer-events-none" />
-
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
-        className="relative w-full max-w-sm"
-      >
-        {/* Logo */}
-        <LogoHeader />
-
-        {/* Card */}
-        <div className="bg-card border border-border rounded-xl p-6 space-y-5">
-          <form onSubmit={handleSignIn} className="space-y-4">
-            <EmailField email={email} onChange={setEmail} />
-            <PasswordField
-              password={password}
-              showPassword={showPassword}
-              onChange={setPassword}
-              onToggle={() => setShowPassword(!showPassword)}
-            />
-            <SubmitButton loading={loading} />
-          </form>
-
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-xs text-muted-foreground">or</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
-          {guestButton}
-        </div>
-
-        <p className="text-center text-sm text-muted-foreground mt-5">
-          Don&apos;t have an account?{' '}
-          <Link href="/auth/sign-up" className="text-brand hover:underline">
-            Sign up
-          </Link>
-        </p>
-      </motion.div>
-    </div>
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+    >
+      <AuthExperienceShell
+        heading="Sign in"
+        subtitle="Access your AI Engineering Workspace to chat with repositories, run reviews, and ship with confidence."
+        authCard={card}
+        footer={(
+          <p className="text-center text-sm text-muted-foreground">
+            Don&apos;t have an account?{' '}
+            <Link href="/auth/sign-up" className="text-brand hover:underline">
+              Sign up
+            </Link>
+          </p>
+        )}
+      />
+    </motion.div>
   );
 }
 

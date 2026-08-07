@@ -55,7 +55,8 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  if (isAuth && user) {
+  // Allow anonymous (guest) users to access auth pages so they can upgrade accounts.
+  if (isAuth && user && !user.is_anonymous) {
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = '/dashboard';
     return NextResponse.redirect(redirectUrl);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
@@ -25,6 +25,7 @@ export function LandingAuthActions({
   initialEmail,
 }: LandingAuthActionsProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = useMemo(() => createClient(), []);
   const [authState, setAuthState] = useState<AuthState>({
     signedIn: initialSignedIn,
@@ -33,6 +34,8 @@ export function LandingAuthActions({
   });
   const [isResolving, setIsResolving] = useState(!initialSignedIn);
   const [signingOut, setSigningOut] = useState(false);
+  const oauthCode = searchParams.get('code');
+  const oauthNext = searchParams.get('next') ?? '/dashboard';
 
   const applySession = useCallback((session: Session | null) => {
     setAuthState({
@@ -79,10 +82,34 @@ export function LandingAuthActions({
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       applySession(session);
+
+      if (oauthCode && session?.user && !session.user.is_anonymous) {
+        const targetPath = oauthNext.startsWith('/') ? oauthNext : '/dashboard';
+        router.replace(targetPath);
+        router.refresh();
+      }
     });
 
     return () => subscription.unsubscribe();
-  }, [supabase, applySession]);
+  }, [supabase, applySession, oauthCode, oauthNext, router]);
+
+  useEffect(() => {
+    if (!oauthCode) return;
+
+    async function handleRootOAuthCallback() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user && !user.is_anonymous) {
+        const targetPath = oauthNext.startsWith('/') ? oauthNext : '/dashboard';
+        router.replace(targetPath);
+        router.refresh();
+      }
+    }
+
+    void handleRootOAuthCallback();
+  }, [oauthCode, oauthNext, router, supabase]);
 
   async function handleSignOut() {
     setSigningOut(true);
@@ -151,5 +178,3 @@ export function LandingAuthActions({
     </div>
   );
 }
-
-

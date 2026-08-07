@@ -3,10 +3,10 @@
  * app/dashboard/page.tsx
  * Main dashboard: quick-index input, repo grid, empty state.
  */
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Plus, Loader2, GitBranch, ArrowRight, Activity, Layers, FileCode2, CircleAlert, CircleCheck, Clock3 } from 'lucide-react';
+import { Plus, Loader2, GitBranch, ArrowRight, Activity, Layers, FileCode2, CircleAlert, CircleCheck, Clock3, Sparkles, MessageSquare, FolderGit2, Compass, Lock } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -194,6 +194,91 @@ function EmptyStateCard() {
   );
 }
 
+function ProgressiveAuthNotice({
+  onSignIn,
+}: {
+  onSignIn: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-brand/25 bg-brand/8 px-4 py-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-muted-foreground">
+          You are exploring in demo mode. Sign in to persist repository indexing, saved chats, exports, and evaluations.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          className="border-brand/40 text-brand hover:bg-brand/10"
+          onClick={onSignIn}
+        >
+          <Lock size={14} className="mr-2" />
+          Sign in to persist workspace data
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function InstantWorkspaceCard({
+  greetingName,
+  fromGitHub,
+  onIndex,
+  onConnect,
+  onExploreDemo,
+  onTour,
+}: {
+  greetingName?: string;
+  fromGitHub: boolean;
+  onIndex: () => void;
+  onConnect: () => void;
+  onExploreDemo: () => void;
+  onTour: () => void;
+}) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
+    >
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background/60 px-2.5 py-1">
+          <Sparkles size={12} className="text-brand" /> Instant Workspace
+        </span>
+        {fromGitHub ? <span className="rounded-full border border-brand/35 bg-brand/10 px-2.5 py-1 text-brand">GitHub connected</span> : null}
+      </div>
+      <h2 className="mt-3 font-heading text-2xl font-semibold tracking-tight">
+        Welcome{greetingName ? `, ${greetingName}` : ''}
+      </h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Choose your next step to get value in seconds.
+      </p>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <button type="button" onClick={onIndex} className="rounded-2xl border border-border bg-background/70 p-4 text-left transition-colors hover:bg-accent">
+          <FolderGit2 size={16} className="text-brand" />
+          <p className="mt-2 text-sm font-medium">Index a Repository</p>
+          <p className="mt-1 text-xs text-muted-foreground">Paste a GitHub URL and start ingestion.</p>
+        </button>
+        <button type="button" onClick={onConnect} className="rounded-2xl border border-border bg-background/70 p-4 text-left transition-colors hover:bg-accent">
+          <GitBranch size={16} className="text-brand" />
+          <p className="mt-2 text-sm font-medium">Import from GitHub</p>
+          <p className="mt-1 text-xs text-muted-foreground">Connect public or private repositories (optional).</p>
+        </button>
+        <button type="button" onClick={onExploreDemo} className="rounded-2xl border border-border bg-background/70 p-4 text-left transition-colors hover:bg-accent">
+          <Compass size={16} className="text-brand" />
+          <p className="mt-2 text-sm font-medium">Explore Demo Workspace</p>
+          <p className="mt-1 text-xs text-muted-foreground">No setup needed. Start exploring instantly.</p>
+        </button>
+        <button type="button" onClick={onTour} className="rounded-2xl border border-border bg-background/70 p-4 text-left transition-colors hover:bg-accent md:col-span-2 xl:col-span-1">
+          <MessageSquare size={16} className="text-brand" />
+          <p className="mt-2 text-sm font-medium">View Product Tour</p>
+          <p className="mt-1 text-xs text-muted-foreground">See architecture, review, and security workflows.</p>
+        </button>
+      </div>
+    </motion.section>
+  );
+}
+
 async function getToken(): Promise<string> {
   const supabase = createClient();
   const { data } = await supabase.auth.getSession();
@@ -202,8 +287,45 @@ async function getToken(): Promise<string> {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [url, setUrl] = useState('');
+  const [isGuest, setIsGuest] = useState(false);
+  const [greetingName, setGreetingName] = useState<string | undefined>(undefined);
+
+  const fromGitHubOAuth = searchParams.get('auth_provider') === 'github';
+
+  async function handleUpgradeSignIn() {
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.is_anonymous) {
+        await supabase.auth.signOut();
+      }
+    } catch {
+      // Keep navigation resilient even if session cleanup fails.
+    }
+    router.push('/auth/sign-in?next=/dashboard');
+  }
+
+  useEffect(() => {
+    void (async () => {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      setIsGuest(Boolean(user?.is_anonymous));
+      const fallbackName = user?.email?.split('@')[0] ?? undefined;
+      const metadataName = typeof user?.user_metadata?.full_name === 'string'
+        ? user.user_metadata.full_name
+        : typeof user?.user_metadata?.name === 'string'
+          ? user.user_metadata.name
+          : undefined;
+      setGreetingName(metadataName ?? fallbackName);
+    })();
+  }, []);
 
   const { data: repos = [], isLoading } = useQuery<Repo[]>({
     queryKey: ['repos'],
@@ -245,6 +367,13 @@ export default function DashboardPage() {
     e.preventDefault();
     const trimmed = url.trim();
     if (!trimmed) return;
+    if (isGuest) {
+      const wantsSignIn = window.confirm('Sign in now to persist indexing, chats, and workspace history? Select Cancel to continue in demo mode.');
+      if (wantsSignIn) {
+        void handleUpgradeSignIn();
+        return;
+      }
+    }
     indexMutation.mutate(trimmed);
   }
 
@@ -252,6 +381,22 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {isGuest ? <ProgressiveAuthNotice onSignIn={() => void handleUpgradeSignIn()} /> : null}
+
+      {repos.length === 0 ? (
+        <InstantWorkspaceCard
+          greetingName={greetingName}
+          fromGitHub={fromGitHubOAuth}
+          onIndex={() => {
+            const input = document.querySelector<HTMLInputElement>('input[type="url"]');
+            input?.focus();
+          }}
+          onConnect={() => toast.info('GitHub repository picker is rolling out soon. You can paste any GitHub URL below right now.')}
+          onExploreDemo={() => router.push('/')}
+          onTour={() => router.push('/#how-it-works')}
+        />
+      ) : null}
+
       <motion.section
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}

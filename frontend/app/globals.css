@@ -209,6 +209,14 @@
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
 
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Custom focus ring consistent with brand */
   .focus-brand:focus-visible {
     outline: 2px solid #22C55E;
@@ -234,6 +242,21 @@
       0 18px 45px rgba(15, 23, 42, 0.11),
       inset 0 1px 0 rgba(255, 255, 255, 0.2);
   }
+
+  .auth-elevate:hover {
+    transform: translateY(-1px);
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.05),
+      0 10px 24px rgba(15, 23, 42, 0.1);
+  }
+
+  .auth-tech-chip {
+    will-change: transform;
+  }
+
+  .auth-tech-float {
+    animation: auth-tech-float 8s ease-in-out infinite;
+  }
 }
 
 /* ── Animations ──────────────────────────────────────── */
@@ -248,6 +271,10 @@
 @keyframes count-up {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes auth-tech-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
 }
 
 /* ── Prose (markdown in chat) ─────────────────────────── */

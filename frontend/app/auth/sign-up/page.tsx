@@ -2,16 +2,59 @@
 /**
  * app/auth/sign-up/page.tsx
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
+import { Loader2, Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { createClient } from '@/lib/supabase/client';
+import { buildOAuthRedirectUrl, createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
+import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/components/auth/AuthExperienceShell';
+
+type InlineErrors = { email?: string; password?: string; form?: string };
+
+type PasswordStrength = {
+  score: number;
+  label: 'Weak' | 'Fair' | 'Strong' | 'Excellent';
+  checks: {
+    length: boolean;
+    uppercase: boolean;
+    number: boolean;
+    symbol: boolean;
+  };
+};
+
+function validateSignUp(email: string, password: string): InlineErrors {
+  const errors: InlineErrors = {};
+  if (!email.trim()) {
+    errors.email = 'Email is required.';
+  } else if (!/^\S+@\S+\.\S+$/.test(email)) {
+    errors.email = 'Enter a valid email address.';
+  }
+  if (!password.trim()) {
+    errors.password = 'Password is required.';
+  } else if (password.length < 8) {
+    errors.password = 'Use at least 8 characters.';
+  }
+  return errors;
+}
+
+function getPasswordStrength(password: string): PasswordStrength {
+  const checks = {
+    length: password.length >= 8,
+    uppercase: /[A-Z]/.test(password),
+    number: /[0-9]/.test(password),
+    symbol: /[^A-Za-z0-9]/.test(password),
+  };
+  const score = Object.values(checks).filter(Boolean).length;
+  if (score <= 1) return { score, label: 'Weak', checks };
+  if (score === 2) return { score, label: 'Fair', checks };
+  if (score === 3) return { score, label: 'Strong', checks };
+  return { score, label: 'Excellent', checks };
+}
 
 export default function SignUpPage() {
   const router = useRouter();
@@ -21,17 +64,57 @@ export default function SignUpPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingProvider, setLoadingProvider] = useState<OAuthProvider | null>(null);
+  const [capsLockOn, setCapsLockOn] = useState(false);
+  const [errors, setErrors] = useState<InlineErrors>({});
   const [done, setDone] = useState(false);
+  const formErrorRef = useRef<HTMLDivElement | null>(null);
+  const passwordStrength = getPasswordStrength(password);
 
   async function handleSignUp(e: React.FormEvent) {
     e.preventDefault();
+    if (loading) return;
+
+    const nextErrors = validateSignUp(email, password);
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      formErrorRef.current?.focus();
+      return;
+    }
+
     setLoading(true);
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { error } = await supabase.auth.signUp({ email: email.trim(), password });
     setLoading(false);
+
     if (error) {
-      toast.error(error.message);
+      setErrors({ form: 'Unable to create your account. Please try again.' });
+      formErrorRef.current?.focus();
+      toast.error('Unable to create your account.');
     } else {
       setDone(true);
+    }
+  }
+
+  async function handleOAuth(provider: OAuthProvider) {
+    if (loadingProvider || loading) return;
+    setLoadingProvider(provider);
+    try {
+      try {
+        sessionStorage.setItem('codebase-copilot.auth.just-signed-in', '1');
+      } catch {
+        // Ignore storage write failures.
+      }
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: buildOAuthRedirectUrl('/dashboard', provider),
+        },
+      });
+      if (error) {
+        toast.error('OAuth sign-up is unavailable for this provider right now.');
+      }
+    } finally {
+      setLoadingProvider(null);
     }
   }
 
@@ -49,6 +132,9 @@ export default function SignUpPage() {
             We sent a confirmation link to <strong className="text-foreground">{email}</strong>.
             Click it to activate your account.
           </p>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Tip: GitHub sign-in can automatically connect to your engineering workspace profile.
+          </p>
           <Button
             variant="outline"
             className="mt-6 border-border cursor-pointer"
@@ -61,93 +147,158 @@ export default function SignUpPage() {
     );
   }
 
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(51,65,85,0.15)_1px,transparent_1px),linear-gradient(90deg,rgba(51,65,85,0.15)_1px,transparent_1px)] bg-[size:48px_48px] pointer-events-none" />
+  const card = (
+    <div className="space-y-5">
+      <OAuthButtons loadingProvider={loadingProvider} onOAuth={handleOAuth} />
 
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
-        className="relative w-full max-w-sm"
-      >
-        <div className="text-center mb-8">
-          <Link href="/" className="inline-flex items-center gap-2">
-            <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center">
-              <span className="font-code font-bold text-sm text-green-950">CC</span>
-            </div>
-            <span className="font-heading font-semibold text-lg tracking-tight">
-              Codebase Copilot
-            </span>
-          </Link>
-          <p className="text-muted-foreground text-sm mt-2">Create your account</p>
+      <div className="flex items-center gap-3">
+        <div className="h-px flex-1 bg-border" />
+        <span className="text-xs text-muted-foreground">or create an account with email</span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+
+      <form onSubmit={handleSignUp} className="space-y-4" noValidate>
+        {errors.form ? (
+          <div
+            ref={formErrorRef}
+            tabIndex={-1}
+            role="alert"
+            className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive focus:outline-none focus:ring-2 focus:ring-destructive/40"
+          >
+            <AlertCircle size={14} aria-hidden="true" />
+            <span>{errors.form}</span>
+          </div>
+        ) : null}
+
+        <div className="space-y-1.5">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="email"
+            aria-invalid={Boolean(errors.email)}
+            aria-describedby={errors.email ? 'email-error' : undefined}
+            className="h-11 bg-background border-border focus-visible:ring-brand"
+          />
+          {errors.email ? (
+            <p id="email-error" className="text-xs text-destructive" role="alert">
+              {errors.email}
+            </p>
+          ) : null}
         </div>
 
-        <div className="bg-card border border-border rounded-xl p-6 space-y-5">
-          <form onSubmit={handleSignUp} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                className="bg-background border-border focus-visible:ring-brand"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="Min 8 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={8}
-                  autoComplete="new-password"
-                  className="bg-background border-border focus-visible:ring-brand pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-
-            <Button
-              type="submit"
-              className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200 cursor-pointer"
-              disabled={loading}
+        <div className="space-y-1.5">
+          <Label htmlFor="password">Password</Label>
+          <div className="relative">
+            <Input
+              id="password"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="Min 8 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyUp={(e) => setCapsLockOn(e.getModifierState('CapsLock'))}
+              onKeyDown={(e) => setCapsLockOn(e.getModifierState('CapsLock'))}
+              required
+              minLength={8}
+              autoComplete="new-password"
+              aria-invalid={Boolean(errors.password)}
+              aria-describedby={errors.password ? 'password-error' : capsLockOn ? 'caps-lock-hint' : undefined}
+              className="h-11 bg-background border-border focus-visible:ring-brand pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
-              {loading ? (
-                <>
-                  <Loader2 size={16} className="animate-spin mr-2" />
-                  Creating account…
-                </>
-              ) : (
-                'Create account'
-              )}
-            </Button>
-          </form>
+              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          {capsLockOn ? (
+            <p id="caps-lock-hint" className="text-xs text-amber-500" role="status">
+              Caps Lock is on.
+            </p>
+          ) : null}
+          {errors.password ? (
+            <p id="password-error" className="text-xs text-destructive" role="alert">
+              {errors.password}
+            </p>
+          ) : null}
+
+          <div className="rounded-xl border border-border/80 bg-background/70 p-3" aria-live="polite">
+            <div className="mb-2 flex items-center justify-between text-xs">
+              <span className="font-medium text-muted-foreground">Password strength</span>
+              <span className="font-semibold text-foreground">{password ? passwordStrength.label : 'Add a password'}</span>
+            </div>
+            <div className="grid grid-cols-4 gap-1">
+              {[0, 1, 2, 3].map((segment) => (
+                <span
+                  key={segment}
+                  className={[
+                    'h-1.5 rounded-full transition-colors duration-200',
+                    password && segment < passwordStrength.score
+                      ? passwordStrength.score <= 1
+                        ? 'bg-red-400'
+                        : passwordStrength.score === 2
+                        ? 'bg-amber-400'
+                        : passwordStrength.score === 3
+                        ? 'bg-blue-400'
+                        : 'bg-brand'
+                      : 'bg-border',
+                  ].join(' ')}
+                />
+              ))}
+            </div>
+            <div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
+              <p className={passwordStrength.checks.length ? 'text-brand' : undefined}>- At least 8 characters</p>
+              <p className={passwordStrength.checks.uppercase ? 'text-brand' : undefined}>- One uppercase letter</p>
+              <p className={passwordStrength.checks.number ? 'text-brand' : undefined}>- One number</p>
+              <p className={passwordStrength.checks.symbol ? 'text-brand' : undefined}>- One symbol</p>
+            </div>
+          </div>
         </div>
 
-        <p className="text-center text-sm text-muted-foreground mt-5">
-          Already have an account?{' '}
-          <Link href="/auth/sign-in" className="text-brand hover:underline">
-            Sign in
-          </Link>
-        </p>
-      </motion.div>
+        <Button
+          type="submit"
+          className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200 cursor-pointer"
+          disabled={loading}
+        >
+          {loading ? (
+            <>
+              <Loader2 size={16} className="animate-spin mr-2" />
+              Creating account…
+            </>
+          ) : (
+            'Create account'
+          )}
+        </Button>
+      </form>
     </div>
+  );
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+    >
+      <AuthExperienceShell
+        heading="Create account"
+        subtitle="Set up your AI Engineering Workspace in seconds. Minimal setup, enterprise-grade outcomes."
+        authCard={card}
+        footer={(
+          <p className="text-center text-sm text-muted-foreground">
+            Already have an account?{' '}
+            <Link href="/auth/sign-in" className="text-brand hover:underline">
+              Sign in
+            </Link>
+          </p>
+        )}
+      />
+    </motion.div>
   );
 }
