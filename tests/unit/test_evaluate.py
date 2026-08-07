@@ -198,4 +198,3 @@ def test_run_evaluation_rejects_empty_index_name(ev):
 def test_run_evaluation_rejects_whitespace_index_name(ev):
     with pytest.raises(ValueError, match="index_name cannot be empty"):
         ev.run_evaluation("   ")
-
