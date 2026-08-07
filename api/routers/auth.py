@@ -71,6 +71,11 @@ async def register_preflight(
     _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
+    """
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
+    Validates email availability before registration.
+    Protected by per-IP rate limiting.
+    """
     _enforce_rate_limit(request, "register-preflight")
 
     try:
@@ -130,6 +135,11 @@ async def login_preflight(
     _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
+    """
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
+    Checks login eligibility and account status before password verification.
+    Protected by per-IP rate limiting.
+    """
     _enforce_rate_limit(request, "login-preflight")
 
     try:
@@ -170,6 +180,11 @@ async def login_audit(
     _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
+    """
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
+    Records login success/failure events for security auditing and rate limiting.
+    Protected by per-IP rate limiting.
+    """
     _enforce_rate_limit(request, "login-audit")
 
     try:
@@ -222,6 +237,13 @@ async def logout_audit(
     user_id: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
+    """
+    SEMI-PUBLIC ENDPOINT (optional authentication).
+    Records logout events for security auditing. Can be called by:
+    - Authenticated users (session.user_id is captured)
+    - Anonymous/guest users (provided email for audit trail)
+    No rate limit enforced here; relies on Supabase auth session expiration.
+    """
     normalized_email: Optional[str] = None
     if body.email:
         try:

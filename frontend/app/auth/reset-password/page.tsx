@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createClient } from '@/lib/supabase/client';
 import { auditPasswordResetComplete } from '@/lib/auth-api';
-import { toast } from 'sonner';
+import { validatePasswordForReset, validatePasswordsMatch, showPasswordRecoveryError } from '@/lib/auth-recovery-utils';
 import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
 import { AuthBusyLabel, AuthScreenMotion, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
 
@@ -22,13 +22,13 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     if (loading) return;
 
-    if (!password.trim() || password.length < 8) {
-      toast.error('Use at least 8 characters for your new password.');
+    const passwordValidation = validatePasswordForReset(password);
+    if (!passwordValidation.valid) {
       return;
     }
 
-    if (password !== confirmPassword) {
-      toast.error('Passwords do not match.');
+    const matchValidation = validatePasswordsMatch(password, confirmPassword);
+    if (!matchValidation.valid) {
       return;
     }
 
@@ -47,7 +47,7 @@ export default function ResetPasswordPage() {
     setLoading(false);
 
     if (error) {
-      toast.error('Unable to update password. Request a new reset link and try again.');
+      showPasswordRecoveryError('reset');
       return;
     }
 

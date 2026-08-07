@@ -463,17 +463,130 @@ def _print_turn_latency(t_route: float, t_ret: float, t_rerank: float, t_llm: fl
 # STEP 6 — INTERACTIVE CHAT REPL
 # ─────────────────────────────────────────────────────────────────────────────
 
-def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
+def _classify_and_route_query(raw: str, t_query_start: float):
+    """Classify query and measure routing time."""
+    from app.retrieval.query_router import classify_query
+    
+    print(f"\n  {DIM}{'─'*68}{RESET}")
+    step_start("Query routing", f'"{raw[:60]}{"…" if len(raw)>60 else ""}"')
+    query_mode = classify_query(raw)
+    t_route = time.time() - t_query_start
+    step_done("Query routing", f"→ {CYAN}{query_mode.value.upper()}{RESET}  {DIM}({t_route*1000:.0f}ms){RESET}")
+    return query_mode, t_route
+
+
+def _retrieve_candidate_nodes(query_mode, query_text: str, vector_index, bm25_retriever, top_k_chunks: int):
+    """Retrieve raw nodes and measure retrieval time."""
+    from app.config import TOP_K_CHUNKS
+    
+    step_start("Retrieval", f"top_k={TOP_K_CHUNKS}")
+    t_ret_start = time.time()
+
+    retriever, retriever_type = _build_retriever_for_mode(query_mode, vector_index, bm25_retriever, top_k_chunks)
+    raw_nodes = retriever.retrieve(query_text)
+    t_ret = time.time() - t_ret_start
+    
+    step_done("Retrieval", f"{retriever_type}")
+    metric("Retriever type",   retriever_type)
+    metric("Raw nodes retrieved", len(raw_nodes))
+    metric("Retrieval time",   f"{t_ret*1000:.0f}ms")
+    
+    return raw_nodes, t_ret, retriever_type
+
+
+def _rerank_nodes(query_text: str, raw_nodes: list, use_colbert: bool, top_k_rerank: int):
+    """Rerank nodes using ColBERT or score sorting."""
+    from app.config import TOP_K_RERANK
+    
+    step_start("Reranking", f"ColBERT={'ON' if use_colbert else 'OFF'}")
+    t_rerank_start = time.time()
+
+    if use_colbert and raw_nodes:
+        from app.retrieval.reranker import rerank_with_colbert
+        reranked_nodes = rerank_with_colbert(query_text, raw_nodes, top_k=TOP_K_RERANK)
+        rerank_method = f"ColBERT (colbertv2.0) → top {TOP_K_RERANK}"
+    else:
+        reranked_nodes = sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
+        rerank_method = f"RRF score sort → top {TOP_K_RERANK}"
+
+    t_rerank = time.time() - t_rerank_start
+    step_done("Reranking")
+    metric("Rerank method",       rerank_method)
+    metric("Nodes after rerank",  len(reranked_nodes))
+    metric("Rerank time",         f"{t_rerank*1000:.0f}ms")
+    
+    return reranked_nodes, t_rerank, rerank_method
+
+
+def _generate_and_stream_response(full_prompt: str, settings_llm, query_mode):
+    """Build prompt and stream LLM response."""
+    divider()
+    prompt_chars = len(full_prompt)
+    prompt_tokens = prompt_chars // 4
+    metric("Prompt length",        f"{prompt_chars:,} chars (~{prompt_tokens:,} tokens)")
+    metric("System prompt mode",   query_mode.value)
+
+    print(f"\n  {DIM}{'─'*68}{RESET}")
+    print(f"  {BOLD}{GREEN}Assistant ▶{RESET}")
+    print()
+
+    full_response, t_llm = _stream_llm_response(full_prompt, settings_llm)
+    return full_response, t_llm
+
+
+def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_mode, turn_count: int, use_colbert: bool):
+    """Process a single query turn through the entire pipeline."""
     from llama_index.core import Settings
-    from llama_index.core.memory import ChatMemoryBuffer
-    from app.retrieval.query_router import classify_query, QueryMode
+    from llama_index.core.base.llms.types import ChatMessage
+    from app.retrieval.query_router import QueryMode
     from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
     from app.config import TOP_K_CHUNKS, TOP_K_RERANK
+
+    t_query_start = time.time()
+
+    # Route query
+    query_mode, t_route = _classify_and_route_query(raw, t_query_start)
+
+    # Retrieve
+    raw_nodes, t_ret, retriever_type = _retrieve_candidate_nodes(
+        query_mode, raw, vector_index, bm25_retriever, TOP_K_CHUNKS
+    )
+
+    # Rerank
+    reranked_nodes, t_rerank, rerank_method = _rerank_nodes(raw, raw_nodes, use_colbert, TOP_K_RERANK)
+
+    # Show retrieved chunks
+    _print_retrieved_nodes(reranked_nodes)
+
+    # Build and execute prompt
+    system_prompt = CODE_LOOKUP_PROMPT if query_mode == QueryMode.CODE_LOOKUP else ARCHITECTURAL_PROMPT
+    history_str = _build_history_string(memory)
+    full_prompt = _build_prompt(system_prompt, reranked_nodes, raw, history_str)
+
+    # Generate response
+    full_response, t_llm = _generate_and_stream_response(full_prompt, Settings.llm, query_mode)
+    t_total = time.time() - t_query_start
+
+    # Update memory
+    try:
+        memory.put(ChatMessage(role="user", content=raw))
+        memory.put(ChatMessage(role="assistant", content=full_response))
+    except Exception:
+        pass
+
+    # Print latency summary
+    _print_turn_latency(t_route, t_ret, t_rerank, t_llm, t_total, len(full_response), turn_count, query_mode)
+    
+    return query_mode
+
+
+def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
+    """Interactive chat REPL with query routing, retrieval, and generation."""
+    from llama_index.core.memory import ChatMemoryBuffer
 
     chat_header()
 
     memory       = ChatMemoryBuffer.from_defaults(token_limit=4096)
-    chat_engine  = None
     last_mode    = None
     turn_count   = 0
 
@@ -492,82 +605,8 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
                 break
             continue
 
-        # ── Classify query ────────────────────────────────────────────────
         turn_count += 1
-        t_query_start = time.time()
-
-        print(f"\n  {DIM}{'─'*68}{RESET}")
-        step_start("Query routing", f'"{raw[:60]}{"…" if len(raw)>60 else ""}"')
-        query_mode = classify_query(raw)
-        t_route = time.time() - t_query_start
-        step_done("Query routing", f"→ {CYAN}{query_mode.value.upper()}{RESET}  {DIM}({t_route*1000:.0f}ms){RESET}")
-
-        # ── Retrieve nodes ────────────────────────────────────────────────
-        step_start("Retrieval", f"top_k={TOP_K_CHUNKS}")
-        t_ret_start = time.time()
-
-        retriever, retriever_type = _build_retriever_for_mode(query_mode, vector_index, bm25_retriever, TOP_K_CHUNKS)
-
-        raw_nodes = retriever.retrieve(raw)
-        t_ret = time.time() - t_ret_start
-        step_done("Retrieval", f"{retriever_type}")
-        metric("Retriever type",   retriever_type)
-        metric("Raw nodes retrieved", len(raw_nodes))
-        metric("Retrieval time",   f"{t_ret*1000:.0f}ms")
-
-        # ── Reranking (ColBERT or RRF sort) ──────────────────────────────
-        step_start("Reranking", f"ColBERT={'ON' if use_colbert else 'OFF'}")
-        t_rerank_start = time.time()
-
-        if use_colbert and raw_nodes:
-            from app.retrieval.reranker import rerank_with_colbert
-            reranked_nodes = rerank_with_colbert(raw, raw_nodes, top_k=TOP_K_RERANK)
-            rerank_method = f"ColBERT (colbertv2.0) → top {TOP_K_RERANK}"
-        else:
-            reranked_nodes = sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
-            rerank_method = f"RRF score sort → top {TOP_K_RERANK}"
-
-        t_rerank = time.time() - t_rerank_start
-        step_done("Reranking")
-        metric("Rerank method",       rerank_method)
-        metric("Nodes after rerank",  len(reranked_nodes))
-        metric("Rerank time",         f"{t_rerank*1000:.0f}ms")
-
-        # ── Show retrieved chunks ─────────────────────────────────────────
-        _print_retrieved_nodes(reranked_nodes)
-
-        # ── Build prompt ──────────────────────────────────────────────────
-        system_prompt = CODE_LOOKUP_PROMPT if query_mode == QueryMode.CODE_LOOKUP else ARCHITECTURAL_PROMPT
-        history_str = _build_history_string(memory)
-        full_prompt = _build_prompt(system_prompt, reranked_nodes, raw, history_str)
-
-        prompt_chars = len(full_prompt)
-        prompt_tokens = prompt_chars // 4
-
-        divider()
-        metric("Prompt length",        f"{prompt_chars:,} chars (~{prompt_tokens:,} tokens)")
-        metric("System prompt mode",   query_mode.value)
-
-        # ── Stream LLM response ───────────────────────────────────────────
-        print(f"\n  {DIM}{'─'*68}{RESET}")
-        print(f"  {BOLD}{GREEN}Assistant ▶{RESET}")
-        print()
-
-        full_response, t_llm = _stream_llm_response(full_prompt, Settings.llm)
-        t_total = time.time() - t_query_start
-
-        # Update memory
-        try:
-            from llama_index.core.base.llms.types import ChatMessage
-            memory.put(ChatMessage(role="user", content=raw))
-            memory.put(ChatMessage(role="assistant", content=full_response))
-        except Exception:
-            pass
-
-        last_mode = query_mode
-
-        # ── Latency summary ───────────────────────────────────────────────
-        _print_turn_latency(t_route, t_ret, t_rerank, t_llm, t_total, len(full_response), turn_count, query_mode)
+        last_mode = _process_single_query(raw, vector_index, bm25_retriever, memory, last_mode, turn_count, use_colbert)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

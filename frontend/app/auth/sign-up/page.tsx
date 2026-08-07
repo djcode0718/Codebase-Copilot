@@ -67,6 +67,72 @@ function getPasswordStrength(password: string): PasswordStrength {
   return { score, label: 'Excellent', checks };
 }
 
+function PasswordStrengthIndicator({ password, strength }: { password: string; strength: PasswordStrength }) {
+  return (
+    <div className="rounded-xl border border-border bg-card/95 p-3.5 shadow-sm" aria-live="polite">
+      <div className="mb-2 flex items-center justify-between text-xs">
+        <span className="font-semibold text-foreground/85">Password strength</span>
+        <span className="font-semibold text-foreground">{password ? strength.label : 'Add a password'}</span>
+      </div>
+      <div className="grid grid-cols-4 gap-1">
+        {[0, 1, 2, 3].map((segment) => (
+          <span
+            key={segment}
+            className={[
+              'h-1.5 rounded-full transition-colors duration-200',
+              password && segment < strength.score
+                ? strength.score <= 1
+                  ? 'bg-red-500'
+                  : strength.score === 2
+                  ? 'bg-amber-500'
+                  : strength.score === 3
+                  ? 'bg-blue-500'
+                  : 'bg-brand'
+                : 'bg-border/90',
+            ].join(' ')}
+          />
+        ))}
+      </div>
+      <div className="mt-2 grid gap-1 text-[11px] text-foreground/70 sm:grid-cols-2">
+        <p className={strength.checks.length ? 'text-brand font-medium' : undefined}>- At least 8 characters</p>
+        <p className={strength.checks.uppercase ? 'text-brand font-medium' : undefined}>- One uppercase letter</p>
+        <p className={strength.checks.number ? 'text-brand font-medium' : undefined}>- One number</p>
+        <p className={strength.checks.symbol ? 'text-brand font-medium' : undefined}>- One symbol</p>
+      </div>
+    </div>
+  );
+}
+
+function SignUpSuccessCard({ email }: { email: string }) {
+  const router = useRouter();
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="text-center max-w-sm"
+      >
+        <CheckCircle2 size={48} className="text-brand mx-auto mb-4" />
+        <h2 className="font-heading text-xl font-semibold mb-2">Check your email</h2>
+        <p className="text-muted-foreground text-sm">
+          We sent a confirmation link to <strong className="text-foreground">{email}</strong>.
+          Click it to activate your account.
+        </p>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Tip: GitHub sign-in can automatically connect to your engineering workspace profile.
+        </p>
+        <Button
+          variant="outline"
+          className="mt-6 border-border cursor-pointer"
+          onClick={() => router.push('/auth/sign-in')}
+        >
+          Back to sign in
+        </Button>
+      </motion.div>
+    </div>
+  );
+}
+
 export default function SignUpPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -158,32 +224,7 @@ export default function SignUpPage() {
   }
 
   if (done) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="text-center max-w-sm"
-        >
-          <CheckCircle2 size={48} className="text-brand mx-auto mb-4" />
-          <h2 className="font-heading text-xl font-semibold mb-2">Check your email</h2>
-          <p className="text-muted-foreground text-sm">
-            We sent a confirmation link to <strong className="text-foreground">{email}</strong>.
-            Click it to activate your account.
-          </p>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Tip: GitHub sign-in can automatically connect to your engineering workspace profile.
-          </p>
-          <Button
-            variant="outline"
-            className="mt-6 border-border cursor-pointer"
-            onClick={() => router.push('/auth/sign-in')}
-          >
-            Back to sign in
-          </Button>
-        </motion.div>
-      </div>
-    );
+    return <SignUpSuccessCard email={email} />;
   }
 
   const card = (
@@ -269,37 +310,7 @@ export default function SignUpPage() {
             </p>
           ) : null}
 
-          <div className="rounded-xl border border-border bg-card/95 p-3.5 shadow-sm" aria-live="polite">
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="font-semibold text-foreground/85">Password strength</span>
-              <span className="font-semibold text-foreground">{password ? passwordStrength.label : 'Add a password'}</span>
-            </div>
-            <div className="grid grid-cols-4 gap-1">
-              {[0, 1, 2, 3].map((segment) => (
-                <span
-                  key={segment}
-                  className={[
-                    'h-1.5 rounded-full transition-colors duration-200',
-                    password && segment < passwordStrength.score
-                      ? passwordStrength.score <= 1
-                        ? 'bg-red-500'
-                        : passwordStrength.score === 2
-                        ? 'bg-amber-500'
-                        : passwordStrength.score === 3
-                        ? 'bg-blue-500'
-                        : 'bg-brand'
-                      : 'bg-border/90',
-                  ].join(' ')}
-                />
-              ))}
-            </div>
-            <div className="mt-2 grid gap-1 text-[11px] text-foreground/70 sm:grid-cols-2">
-              <p className={passwordStrength.checks.length ? 'text-brand font-medium' : undefined}>- At least 8 characters</p>
-              <p className={passwordStrength.checks.uppercase ? 'text-brand font-medium' : undefined}>- One uppercase letter</p>
-              <p className={passwordStrength.checks.number ? 'text-brand font-medium' : undefined}>- One number</p>
-              <p className={passwordStrength.checks.symbol ? 'text-brand font-medium' : undefined}>- One symbol</p>
-            </div>
-          </div>
+          <PasswordStrengthIndicator password={password} strength={passwordStrength} />
         </div>
 
         <div className="space-y-1.5">

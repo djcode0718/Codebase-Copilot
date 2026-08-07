@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createClient } from '@/lib/supabase/client';
 import { auditPasswordResetRequest, normalizeEmail } from '@/lib/auth-api';
-import { toast } from 'sonner';
+import { validateEmailForRecovery, getPasswordResetRedirectUrl, showPasswordRecoveryError } from '@/lib/auth-recovery-utils';
 import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
 import { AuthBusyLabel, AuthScreenMotion, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
 
@@ -22,20 +22,20 @@ export default function ForgotPasswordPage() {
     if (loading) return;
 
     const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail || !/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
-      toast.error('Enter a valid email address.');
+    const validation = validateEmailForRecovery(normalizedEmail);
+    if (!validation.valid) {
       return;
     }
 
     setLoading(true);
 
-    const redirectTo = `${window.location.origin}/auth/reset-password`;
+    const redirectTo = getPasswordResetRedirectUrl();
     const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, { redirectTo });
     await auditPasswordResetRequest(normalizedEmail).catch(() => undefined);
     setLoading(false);
 
     if (error) {
-      toast.error('Unable to start password reset right now. Please try again.');
+      showPasswordRecoveryError('forgot');
       return;
     }
 
