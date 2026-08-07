@@ -2,7 +2,7 @@
 
 /* eslint-disable react/no-unescaped-entities */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -1145,6 +1145,198 @@ function TreeNodeItem({
   );
 }
 
+type ExplorerRibbonActionArgs = {
+  token: string;
+  repoId: string;
+  activeFilePath: string;
+  activeFile: ExplorerFileDetails | null;
+  ribbonReview: ExplorerReviewResult | null;
+  ribbonFix: ExplorerFixProposal | null;
+  setActiveFile: Dispatch<SetStateAction<ExplorerFileDetails | null>>;
+  setRibbonAction: Dispatch<SetStateAction<string | null>>;
+  setRibbonReview: Dispatch<SetStateAction<ExplorerReviewResult | null>>;
+  setRibbonFix: Dispatch<SetStateAction<ExplorerFixProposal | null>>;
+  setRibbonTests: Dispatch<SetStateAction<ExplorerTestRunResult | null>>;
+  setRibbonHistory: Dispatch<SetStateAction<string>>;
+  setShowDiff: Dispatch<SetStateAction<boolean>>;
+};
+
+function useExplorerRibbonActions(args: ExplorerRibbonActionArgs) {
+  const {
+    token,
+    repoId,
+    activeFilePath,
+    activeFile,
+    ribbonReview,
+    ribbonFix,
+    setActiveFile,
+    setRibbonAction,
+    setRibbonReview,
+    setRibbonFix,
+    setRibbonTests,
+    setRibbonHistory,
+    setShowDiff,
+  } = args;
+
+  const runReview = async (type: string) => {
+    if (!token || !activeFilePath) return;
+    try {
+      setRibbonAction(type);
+      const result = await runExplorerFileReview(token, repoId, { path: activeFilePath, review_type: type });
+      setRibbonReview(result);
+      toast.success(`${type.replace('_', ' ')} complete`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Action failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  };
+
+  const handleGenerateTests = async () => {
+    if (!token || !activeFilePath) return;
+    try {
+      setRibbonAction('generate_tests');
+      const discovered = await discoverExplorerTests(token, repoId, [activeFilePath]);
+      setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
+      toast.success('Generated test candidates');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Generate tests failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  };
+
+  const handleRunTests = async () => {
+    if (!token || !activeFilePath) return;
+    try {
+      setRibbonAction('run_tests');
+      const discovered = await discoverExplorerTests(token, repoId, [activeFilePath]);
+
+      const testsToRun = discovered.tests.slice(0, 12);
+      const normalizedActivePath = activeFilePath.replace(/\\/g, '/');
+      const isSelectedTestFile = /(^|\/)tests?\//.test(normalizedActivePath) && /(^|\/)test_[^/]+\.py$/i.test(normalizedActivePath);
+      if (isSelectedTestFile && !testsToRun.includes(normalizedActivePath)) {
+        testsToRun.unshift(normalizedActivePath);
+      }
+
+      if (testsToRun.length === 0) {
+        setRibbonTests({
+          status: 'skipped',
+          tests: [],
+          passed: 0,
+          failed: 0,
+          duration_seconds: 0,
+          coverage: null,
+          output: 'No impacted tests discovered for this file.',
+        });
+        toast.message('No tests found for selected file');
+        return;
+      }
+
+      const run = await runExplorerTests(token, repoId, testsToRun, 55);
+      setRibbonTests(run);
+      if (run.status === 'failed' && run.passed === 0 && run.failed === 0) {
+        toast.error('Test run failed before execution. Open History/output for details.');
+      } else {
+        toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Run tests failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  };
+
+  const handleGenerateFix = async () => {
+    if (!token || !activeFilePath) return;
+    const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness';
+    const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
+    try {
+      setRibbonAction('generate_fix');
+      const fix = await generateExplorerFix(token, repoId, { path: activeFilePath, finding, recommendation });
+      setRibbonFix(fix);
+      setShowDiff(true);
+      toast.success('Fix generated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Generate fix failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  };
+
+  const handleApplyFix = async () => {
+    if (!token || !activeFilePath || !ribbonFix) return;
+    if (!window.confirm('Apply this fix?')) return;
+    try {
+      setRibbonAction('apply_fix');
+      await applyExplorerFix(token, repoId, {
+        fix_id: ribbonFix.fix_id,
+        expected_sha256: activeFile?.sha256,
+        run_validation: true,
+      });
+      const refreshed = await getExplorerFile(token, repoId, activeFilePath);
+      setActiveFile({
+        ...refreshed,
+        content: maybeRepairMojibake(refreshed.content),
+      });
+      toast.success('Fix applied');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Apply fix failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  };
+
+  const handleHistory = async () => {
+    if (!token || !activeFilePath) return;
+    try {
+      setRibbonAction('history');
+      const history = await getExplorerHistory(token, repoId, activeFilePath);
+      setRibbonHistory(
+        [
+          `Reviews: ${history.reviews.length}`,
+          `Fixes: ${history.fixes.length}`,
+          `Applied: ${history.applied_fixes.length}`,
+          `Tests: ${history.test_runs.length}`,
+        ].join(' • ')
+      );
+      toast.success('History loaded');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'History load failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  };
+
+  const handleAskAi = async () => {
+    if (!token || !activeFilePath) return;
+    try {
+      setRibbonAction('ask_ai');
+      await addExplorerConversationEntry(token, repoId, {
+        path: activeFilePath,
+        role: 'user',
+        content: `Open AI conversation for ${activeFilePath}`,
+      });
+      window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
+      toast.success('AI chat context queued');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Ask AI failed');
+    } finally {
+      setRibbonAction(null);
+    }
+  };
+
+  return {
+    runReview,
+    handleGenerateTests,
+    handleRunTests,
+    handleGenerateFix,
+    handleApplyFix,
+    handleHistory,
+    handleAskAi,
+  };
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function RepositoryExplorerPage() {
   const { id: repoId } = useParams<{ id: string }>();
@@ -1367,154 +1559,29 @@ export default function RepositoryExplorerPage() {
     URL.revokeObjectURL(url);
   }
 
-  // ─── Review actions ──────────────────────────────────────────────────────────
-  async function runReview(type: string) {
-    if (!token || !activeFilePath) return;
-    try {
-      setRibbonAction(type);
-      const result = await runExplorerFileReview(token, repoId, { path: activeFilePath, review_type: type });
-      setRibbonReview(result);
-      toast.success(`${type.replace('_', ' ')} complete`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Action failed');
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function handleGenerateTests() {
-    if (!token || !activeFilePath) return;
-    try {
-      setRibbonAction('generate_tests');
-      const discovered = await discoverExplorerTests(token, repoId, [activeFilePath]);
-      setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
-      toast.success('Generated test candidates');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Generate tests failed');
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function handleRunTests() {
-    if (!token || !activeFilePath) return;
-    try {
-      setRibbonAction('run_tests');
-      const discovered = await discoverExplorerTests(token, repoId, [activeFilePath]);
-
-      const testsToRun = discovered.tests.slice(0, 12);
-      const normalizedActivePath = activeFilePath.replace(/\\/g, '/');
-      const isSelectedTestFile = /(^|\/)tests?\//.test(normalizedActivePath) && /(^|\/)test_[^/]+\.py$/i.test(normalizedActivePath);
-      if (isSelectedTestFile && !testsToRun.includes(normalizedActivePath)) {
-        testsToRun.unshift(normalizedActivePath);
-      }
-
-      if (testsToRun.length === 0) {
-        setRibbonTests({
-          status: 'skipped',
-          tests: [],
-          passed: 0,
-          failed: 0,
-          duration_seconds: 0,
-          coverage: null,
-          output: 'No impacted tests discovered for this file.',
-        });
-        toast.message('No tests found for selected file');
-        return;
-      }
-
-      const run = await runExplorerTests(token, repoId, testsToRun, 55);
-      setRibbonTests(run);
-      if (run.status === 'failed' && run.passed === 0 && run.failed === 0) {
-        toast.error('Test run failed before execution. Open History/output for details.');
-      } else {
-        toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Run tests failed');
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function handleGenerateFix() {
-    if (!token || !activeFilePath) return;
-    const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness';
-    const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
-    try {
-      setRibbonAction('generate_fix');
-      const fix = await generateExplorerFix(token, repoId, { path: activeFilePath, finding, recommendation });
-      setRibbonFix(fix);
-      setShowDiff(true);
-      toast.success('Fix generated');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Generate fix failed');
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function handleApplyFix() {
-    if (!token || !activeFilePath || !ribbonFix) return;
-    if (!window.confirm('Apply this fix?')) return;
-    try {
-      setRibbonAction('apply_fix');
-      await applyExplorerFix(token, repoId, {
-        fix_id: ribbonFix.fix_id,
-        expected_sha256: activeFile?.sha256,
-        run_validation: true,
-      });
-      const refreshed = await getExplorerFile(token, repoId, activeFilePath);
-      setActiveFile({
-        ...refreshed,
-        content: maybeRepairMojibake(refreshed.content),
-      });
-      toast.success('Fix applied');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Apply fix failed');
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function handleHistory() {
-    if (!token || !activeFilePath) return;
-    try {
-      setRibbonAction('history');
-      const history = await getExplorerHistory(token, repoId, activeFilePath);
-      setRibbonHistory(
-        [
-          `Reviews: ${history.reviews.length}`,
-          `Fixes: ${history.fixes.length}`,
-          `Applied: ${history.applied_fixes.length}`,
-          `Tests: ${history.test_runs.length}`,
-        ].join(' • ')
-      );
-      toast.success('History loaded');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'History load failed');
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function handleAskAi() {
-    if (!token || !activeFilePath) return;
-    try {
-      setRibbonAction('ask_ai');
-      await addExplorerConversationEntry(token, repoId, {
-        path: activeFilePath,
-        role: 'user',
-        content: `Open AI conversation for ${activeFilePath}`,
-      });
-      window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
-      toast.success('AI chat context queued');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Ask AI failed');
-    } finally {
-      setRibbonAction(null);
-    }
-  }
+  const {
+    runReview,
+    handleGenerateTests,
+    handleRunTests,
+    handleGenerateFix,
+    handleApplyFix,
+    handleHistory,
+    handleAskAi,
+  } = useExplorerRibbonActions({
+    token,
+    repoId,
+    activeFilePath,
+    activeFile,
+    ribbonReview,
+    ribbonFix,
+    setActiveFile,
+    setRibbonAction,
+    setRibbonReview,
+    setRibbonFix,
+    setRibbonTests,
+    setRibbonHistory,
+    setShowDiff,
+  });
 
   // ─── Filtered tree nodes ─────────────────────────────────────────────────────
   const searchableNodes = useMemo(() => {

@@ -8,8 +8,7 @@ import { Label } from '@/components/ui/label';
 import { createClient } from '@/lib/supabase/client';
 import { auditPasswordResetRequest, normalizeEmail } from '@/lib/auth-api';
 import { validateEmailForRecovery, getPasswordResetRedirectUrl, showPasswordRecoveryError } from '@/lib/auth-recovery-utils';
-import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
-import { AuthBusyLabel, AuthScreenMotion, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
+import { AuthBusyLabel, AuthRecoveryPageFrame, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
 
 export default function ForgotPasswordPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -75,21 +74,19 @@ export default function ForgotPasswordPage() {
   );
 
   return (
-    <AuthScreenMotion>
-      <AuthExperienceShell
-        heading="Reset password"
-        subtitle="Recover your account with a secure one-time reset link."
-        authCard={card}
-        footer={(
-          <p className="text-center text-sm text-muted-foreground">
-            Remembered your password?{' '}
-            <Link href="/auth/sign-in" className="text-brand hover:underline">
-              Sign in
-            </Link>
-          </p>
-        )}
-      />
-    </AuthScreenMotion>
+    <AuthRecoveryPageFrame
+      heading="Reset password"
+      subtitle="Recover your account with a secure one-time reset link."
+      authCard={card}
+      footer={(
+        <p className="text-center text-sm text-muted-foreground">
+          Remembered your password?{' '}
+          <Link href="/auth/sign-in" className="text-brand hover:underline">
+            Sign in
+          </Link>
+        </p>
+      )}
+    />
   );
 }
 

@@ -180,6 +180,129 @@ function FileActionRibbon({
   );
 }
 
+type ReviewRibbonActionsArgs = {
+  token: string;
+  repoId: string;
+  selectedFilePath: string;
+  selectedFile: ExplorerFileDetails | null;
+  ribbonReview: ExplorerReviewResult | null;
+  ribbonFix: ExplorerFixProposal | null;
+  setRibbonAction: Dispatch<SetStateAction<string | null>>;
+  setRibbonReview: Dispatch<SetStateAction<ExplorerReviewResult | null>>;
+  setRibbonFix: Dispatch<SetStateAction<ExplorerFixProposal | null>>;
+  setRibbonTests: Dispatch<SetStateAction<ExplorerTestRunResult | null>>;
+  setRibbonHistory: Dispatch<SetStateAction<string>>;
+  setShowRibbonDiff: Dispatch<SetStateAction<boolean>>;
+  setSelectedFile: Dispatch<SetStateAction<ExplorerFileDetails | null>>;
+};
+
+function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
+  const {
+    token,
+    repoId,
+    selectedFilePath,
+    selectedFile,
+    ribbonReview,
+    ribbonFix,
+    setRibbonAction,
+    setRibbonReview,
+    setRibbonFix,
+    setRibbonTests,
+    setRibbonHistory,
+    setShowRibbonDiff,
+    setSelectedFile,
+  } = args;
+
+  const runRibbonAction = useCallback(async <T,>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> => {
+    if (!token || !selectedFilePath) return undefined;
+    try {
+      setRibbonAction(actionName);
+      const result = await fn();
+      if (successMsg) toast.success(successMsg);
+      return result;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `${actionName.replace('_', ' ')} failed`);
+      return undefined;
+    } finally {
+      setRibbonAction(null);
+    }
+  }, [selectedFilePath, setRibbonAction, token]);
+
+  const runRibbonReview = useCallback(async (type: string) => {
+    const result = await runRibbonAction(type, () =>
+      runExplorerFileReview(token, repoId, { path: selectedFilePath, review_type: type }),
+      `${type.replace('_', ' ')} complete`
+    );
+    if (result) setRibbonReview(result);
+  }, [repoId, runRibbonAction, selectedFilePath, setRibbonReview, token]);
+
+  const runRibbonGenerateTests = useCallback(async () => {
+    await runRibbonAction('generate_tests', async () => {
+      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
+      setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
+    }, 'Generated test candidates');
+  }, [repoId, runRibbonAction, selectedFilePath, setRibbonHistory, token]);
+
+  const runRibbonTests = useCallback(async () => {
+    await runRibbonAction('run_tests', async () => {
+      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
+      const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
+      setRibbonTests(run);
+      toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
+    });
+  }, [repoId, runRibbonAction, selectedFilePath, setRibbonTests, token]);
+
+  const runRibbonGenerateFix = useCallback(async () => {
+    const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
+    const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
+    const fix = await runRibbonAction('generate_fix', () =>
+      generateExplorerFix(token, repoId, { path: selectedFilePath, finding, recommendation }),
+      'Fix generated'
+    );
+    if (fix) {
+      setRibbonFix(fix);
+      setShowRibbonDiff(true);
+    }
+  }, [repoId, ribbonReview, runRibbonAction, selectedFilePath, setRibbonFix, setShowRibbonDiff, token]);
+
+  const runRibbonApplyFix = useCallback(async () => {
+    if (!ribbonFix) return;
+    if (!window.confirm('Apply this fix? Validation checks will run before acceptance.')) return;
+    await runRibbonAction('apply_fix', async () => {
+      await applyExplorerFix(token, repoId, { fix_id: ribbonFix.fix_id, expected_sha256: selectedFile?.sha256, run_validation: true });
+      const refreshed = await getExplorerFile(token, repoId, selectedFilePath);
+      setSelectedFile(refreshed);
+    }, 'Fix applied');
+  }, [repoId, ribbonFix, runRibbonAction, selectedFile?.sha256, selectedFilePath, setSelectedFile, token]);
+
+  const runRibbonHistory = useCallback(async () => {
+    await runRibbonAction('history', async () => {
+      const h = await getExplorerHistory(token, repoId, selectedFilePath);
+      setRibbonHistory(
+        [`Reviews: ${h.reviews.length}`, `Fixes: ${h.fixes.length}`, `Applied: ${h.applied_fixes.length}`,
+         `Rejected: ${h.rejected_fixes.length}`, `Tests: ${h.test_runs.length}`, `Conversations: ${h.conversations.length}`].join(' | ')
+      );
+    }, 'History loaded');
+  }, [repoId, runRibbonAction, selectedFilePath, setRibbonHistory, token]);
+
+  const runRibbonAskAi = useCallback(async () => {
+    await runRibbonAction('ask_ai', async () => {
+      await addExplorerConversationEntry(token, repoId, { path: selectedFilePath, role: 'user', content: `Open AI conversation for ${selectedFilePath}` });
+      window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
+    }, 'AI chat context queued');
+  }, [repoId, runRibbonAction, selectedFilePath, token]);
+
+  return {
+    runRibbonReview,
+    runRibbonGenerateTests,
+    runRibbonTests,
+    runRibbonGenerateFix,
+    runRibbonApplyFix,
+    runRibbonHistory,
+    runRibbonAskAi,
+  };
+}
+
 
 export default function RepositoryReviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
@@ -282,82 +405,29 @@ export default function RepositoryReviewPage() {
   const ribbonHealthScore = useMemo(() => {
     return computeRibbonHealthScore(selectedFile);
   }, [selectedFile]);
-
-  async function runRibbonAction<T>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> {
-    if (!token || !selectedFilePath) return undefined;
-    try {
-      setRibbonAction(actionName);
-      const result = await fn();
-      if (successMsg) toast.success(successMsg);
-      return result;
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : `${actionName.replace('_', ' ')} failed`);
-      return undefined;
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function runRibbonReview(type: string) {
-    const result = await runRibbonAction(type, () =>
-      runExplorerFileReview(token, repoId, { path: selectedFilePath, review_type: type }),
-      `${type.replace('_', ' ')} complete`
-    );
-    if (result) setRibbonReview(result);
-  }
-
-  async function runRibbonGenerateTests() {
-    await runRibbonAction('generate_tests', async () => {
-      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
-      setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
-    }, 'Generated test candidates');
-  }
-
-  async function runRibbonTests() {
-    await runRibbonAction('run_tests', async () => {
-      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
-      const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
-      setRibbonTests(run);
-      toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
-    });
-  }
-
-  async function runRibbonGenerateFix() {
-    const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
-    const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
-    const fix = await runRibbonAction('generate_fix', () =>
-      generateExplorerFix(token, repoId, { path: selectedFilePath, finding, recommendation }),
-      'Fix generated'
-    );
-    if (fix) { setRibbonFix(fix); setShowRibbonDiff(true); }
-  }
-
-  async function runRibbonApplyFix() {
-    if (!ribbonFix) return;
-    if (!window.confirm('Apply this fix? Validation checks will run before acceptance.')) return;
-    await runRibbonAction('apply_fix', async () => {
-      await applyExplorerFix(token, repoId, { fix_id: ribbonFix.fix_id, expected_sha256: selectedFile?.sha256, run_validation: true });
-      const refreshed = await getExplorerFile(token, repoId, selectedFilePath);
-      setSelectedFile(refreshed);
-    }, 'Fix applied');
-  }
-
-  async function runRibbonHistory() {
-    await runRibbonAction('history', async () => {
-      const h = await getExplorerHistory(token, repoId, selectedFilePath);
-      setRibbonHistory(
-        [`Reviews: ${h.reviews.length}`, `Fixes: ${h.fixes.length}`, `Applied: ${h.applied_fixes.length}`,
-         `Rejected: ${h.rejected_fixes.length}`, `Tests: ${h.test_runs.length}`, `Conversations: ${h.conversations.length}`].join(' | ')
-      );
-    }, 'History loaded');
-  }
-
-  async function runRibbonAskAi() {
-    await runRibbonAction('ask_ai', async () => {
-      await addExplorerConversationEntry(token, repoId, { path: selectedFilePath, role: 'user', content: `Open AI conversation for ${selectedFilePath}` });
-      window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
-    }, 'AI chat context queued');
-  }
+  const {
+    runRibbonReview,
+    runRibbonGenerateTests,
+    runRibbonTests,
+    runRibbonGenerateFix,
+    runRibbonApplyFix,
+    runRibbonHistory,
+    runRibbonAskAi,
+  } = useReviewRibbonActions({
+    token,
+    repoId,
+    selectedFilePath,
+    selectedFile,
+    ribbonReview,
+    ribbonFix,
+    setRibbonAction,
+    setRibbonReview,
+    setRibbonFix,
+    setRibbonTests,
+    setRibbonHistory,
+    setShowRibbonDiff,
+    setSelectedFile,
+  });
 
   useEffect(() => {
     if (!selectedFilePath) return;

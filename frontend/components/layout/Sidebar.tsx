@@ -5,7 +5,7 @@
  */
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useRef, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useMemo, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import {
   Archive,
   Clock3,
@@ -80,6 +80,47 @@ function downloadTextFile(filename: string, content: string, contentType: string
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+}
+
+async function runChatContextAction(args: {
+  action: 'open' | 'pin' | 'archive' | 'rename' | 'delete' | 'download';
+  chat: Chat;
+  repoId: string;
+  token: string;
+  fetchChats: (repoId: string) => Promise<Chat[] | undefined>;
+  setRepoChats: Dispatch<SetStateAction<Record<string, Chat[]>>>;
+}) {
+  const { action, chat, repoId, token, fetchChats, setRepoChats } = args;
+
+  if (action === 'pin') {
+    await updateChatSession(token, chat.id, { is_pinned: !chat.is_pinned });
+    toast.success(chat.is_pinned ? 'Unpinned' : 'Pinned');
+    await fetchChats(repoId);
+    return;
+  }
+
+  if (action === 'archive') {
+    await updateChatSession(token, chat.id, { is_archived: !chat.is_archived });
+    toast.success(chat.is_archived ? 'Unarchived' : 'Archived');
+    await fetchChats(repoId);
+    return;
+  }
+
+  if (action === 'delete') {
+    await deleteChat(token, chat.id);
+    setRepoChats((prev) => ({
+      ...prev,
+      [repoId]: (prev[repoId] ?? []).filter((c) => c.id !== chat.id),
+    }));
+    toast.success('Conversation deleted');
+    return;
+  }
+
+  if (action === 'download') {
+    const payload = await exportRepositoryMemory(token, repoId, 'md', [chat.id]);
+    downloadTextFile(payload.filename, payload.content, payload.content_type || 'text/markdown');
+    toast.success('Exported');
+  }
 }
 
 // ── Chat context menu ─────────────────────────────────────────────────────────
@@ -322,30 +363,14 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
     if (!token) { toast.error('Not authenticated'); return; }
 
     try {
-      if (action === 'pin') {
-        await updateChatSession(token, chat.id, { is_pinned: !chat.is_pinned });
-        toast.success(chat.is_pinned ? 'Unpinned' : 'Pinned');
-        await fetchChats(repoId);
-      } else if (action === 'archive') {
-        await updateChatSession(token, chat.id, { is_archived: !chat.is_archived });
-        toast.success(chat.is_archived ? 'Unarchived' : 'Archived');
-        await fetchChats(repoId);
-      } else if (action === 'delete') {
-        await deleteChat(token, chat.id);
-        // Remove from local state immediately and do NOT refetch
-        // The soft-delete is persistent on backend, so refresh page won't show deleted chats
-        setRepoChats((prev) => ({
-          ...prev,
-          [repoId]: (prev[repoId] ?? []).filter((c) => c.id !== chat.id),
-        }));
-        toast.success('Conversation deleted');
-      } else if (action === 'download') {
-        try {
-          const payload = await exportRepositoryMemory(token, repoId, 'md', [chat.id]);
-          downloadTextFile(payload.filename, payload.content, payload.content_type || 'text/markdown');
-          toast.success('Exported');
-        } catch { toast.error('Export failed'); }
-      }
+      await runChatContextAction({
+        action,
+        chat,
+        repoId,
+        token,
+        fetchChats,
+        setRepoChats,
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed');
     }

@@ -8,8 +8,7 @@ import { Label } from '@/components/ui/label';
 import { createClient } from '@/lib/supabase/client';
 import { auditPasswordResetComplete } from '@/lib/auth-api';
 import { validatePasswordForReset, validatePasswordsMatch, showPasswordRecoveryError } from '@/lib/auth-recovery-utils';
-import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
-import { AuthBusyLabel, AuthScreenMotion, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
+import { AuthBusyLabel, AuthRecoveryPageFrame, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
 
 export default function ResetPasswordPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -97,21 +96,19 @@ export default function ResetPasswordPage() {
   );
 
   return (
-    <AuthScreenMotion>
-      <AuthExperienceShell
-        heading="Set new password"
-        subtitle="Create a new secure password for your Codebase Copilot account."
-        authCard={card}
-        footer={(
-          <p className="text-center text-sm text-muted-foreground">
-            Need a fresh link?{' '}
-            <Link href="/auth/forgot-password" className="text-brand hover:underline">
-              Request password reset
-            </Link>
-          </p>
-        )}
-      />
-    </AuthScreenMotion>
+    <AuthRecoveryPageFrame
+      heading="Set new password"
+      subtitle="Create a new secure password for your Codebase Copilot account."
+      authCard={card}
+      footer={(
+        <p className="text-center text-sm text-muted-foreground">
+          Need a fresh link?{' '}
+          <Link href="/auth/forgot-password" className="text-brand hover:underline">
+            Request password reset
+          </Link>
+        </p>
+      )}
+    />
   );
 }
 

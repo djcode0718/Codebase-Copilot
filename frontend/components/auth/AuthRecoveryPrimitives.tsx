@@ -1,9 +1,11 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
 
-export function AuthScreenMotion({ children }: { children: React.ReactNode }) {
+export function AuthScreenMotion({ children }: { children: ReactNode }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -41,6 +43,29 @@ export function AuthBusyLabel({ loading, idleLabel }: { loading: boolean; idleLa
       {loading ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
       {idleLabel}
     </>
+  );
+}
+
+export function AuthRecoveryPageFrame({
+  heading,
+  subtitle,
+  authCard,
+  footer,
+}: {
+  heading: string;
+  subtitle: string;
+  authCard: ReactNode;
+  footer: ReactNode;
+}) {
+  return (
+    <AuthScreenMotion>
+      <AuthExperienceShell
+        heading={heading}
+        subtitle={subtitle}
+        authCard={authCard}
+        footer={footer}
+      />
+    </AuthScreenMotion>
   );
 }
 
