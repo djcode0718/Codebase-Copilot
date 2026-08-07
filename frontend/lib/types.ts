@@ -17,6 +17,70 @@ export interface Repo {
   llm_provider?: string;
   created_at: string;
   indexed_at?: string;
+  active_branch?: string;
+  default_branch?: string;
+  active_commit_sha?: string;
+}
+
+export interface BranchListResponse {
+  current_branch: string;
+  default_branch: string;
+  recent_branches: string[];
+  local_branches: string[];
+  remote_branches: string[];
+}
+
+export interface BranchStatus {
+  current_branch: string;
+  default_branch: string;
+  last_commit: string;
+  author: string;
+  commit_sha: string;
+  short_commit_sha: string;
+  ahead: number;
+  behind: number;
+  changed_files: number;
+  changed_paths: string[];
+  captured_at: string;
+  indexed_at?: string | null;
+  index_status: string;
+  evaluation_status: string;
+  health_score?: number | null;
+}
+
+export interface BranchActionResponse {
+  message: string;
+  current_branch: string;
+  commit_sha: string;
+  status: BranchStatus;
+}
+
+export interface MergeReadiness {
+  overall_score: number;
+  blocking_issues: string[];
+  warnings: string[];
+  suggested_reviewers: string[];
+  estimated_review_time_minutes: number;
+  deployment_risk: string;
+  safe_to_merge: boolean;
+}
+
+export interface BranchComparison {
+  base_branch: string;
+  target_branch: string;
+  changed_files: number;
+  sample_changed_files: string[];
+  architecture_changes: number;
+  security_changes: number;
+  performance_changes: number;
+  technical_debt_changes: number;
+  api_changes: number;
+  database_changes: number;
+  business_logic_changes: number;
+  dependency_changes: number;
+  risk_assessment: string;
+  merge_readiness: MergeReadiness;
+  ai_executive_summary: string;
 }
 
 // ── Indexing SSE ───────────────────────────────────────────────────────────

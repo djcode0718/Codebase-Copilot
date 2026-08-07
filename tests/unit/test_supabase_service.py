@@ -162,6 +162,50 @@ class TestDeleteRepo:
         mock.table.return_value.delete.assert_called_once()
 
 
+class TestRepoWorkspaceContext:
+    def test_updates_workspace_context_in_memory(self):
+        mock = MagicMock()
+        chain = MagicMock()
+        mock.table.return_value.update.return_value.eq.return_value = chain
+
+        supabase_service.update_repo_workspace_context(
+            mock,
+            "repo-ctx-1",
+            active_branch="feature/payment",
+            default_branch="main",
+            active_commit_sha="abc123",
+            recent_branch="feature/payment",
+        )
+
+        ctx = supabase_service.get_repo_workspace_context({"id": "repo-ctx-1"})
+        assert ctx["active_branch"] == "feature/payment"
+        assert ctx["default_branch"] == "main"
+        assert ctx["active_commit_sha"] == "abc123"
+        assert ctx["recent_branches"][0] == "feature/payment"
+
+    def test_uses_in_memory_when_columns_missing(self):
+        class MissingColumnError(Exception):
+            def __str__(self):
+                return "column repositories.active_branch does not exist"
+
+        mock = MagicMock()
+        update_chain = MagicMock()
+        update_chain.execute.side_effect = MissingColumnError()
+        mock.table.return_value.update.return_value.eq.return_value = update_chain
+
+        supabase_service.update_repo_workspace_context(
+            mock,
+            "repo-ctx-2",
+            active_branch="hotfix/login",
+            default_branch="main",
+            active_commit_sha="def456",
+            recent_branch="hotfix/login",
+        )
+
+        ctx = supabase_service.get_repo_workspace_context({"id": "repo-ctx-2"})
+        assert ctx["active_branch"] == "hotfix/login"
+
+
 # â”€â”€ Chats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestCreateChat:

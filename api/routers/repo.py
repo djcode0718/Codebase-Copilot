@@ -13,21 +13,73 @@ Repository endpoints:
 
 import os
 import shutil
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from supabase import Client
 
 from api.dependencies import get_current_user, get_supabase
-from api.models.repo import IndexRepoRequest, IndexRepoResponse, RepoStatusResponse
-from api.services import supabase_service
+from api.models.repo import (
+    IndexRepoRequest,
+    IndexRepoResponse,
+    RepoStatusResponse,
+    BranchCheckoutRequest,
+    BranchPullRequest,
+    BranchListResponse,
+    BranchStatusResponse,
+    BranchActionResponse,
+    BranchComparisonResponse,
+)
+from api.routers._repo_access import ensure_repo_access
+from api.services import supabase_service, repo_branch_service
 from api.services.indexing_service import indexing_event_generator
 from app.config import LLM_PROVIDER, INDEX_DIR, REPOS_DIR
 from app.utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _build_branch_status_response(repo: dict, status: dict) -> BranchStatusResponse:
+    return BranchStatusResponse(
+        current_branch=status.get("current_branch", "unknown"),
+        default_branch=status.get("default_branch", "main"),
+        last_commit=status.get("last_commit", ""),
+        author=status.get("author", ""),
+        commit_sha=status.get("commit_sha", "unknown"),
+        short_commit_sha=status.get("short_commit_sha", "unknown"),
+        ahead=int(status.get("ahead", 0) or 0),
+        behind=int(status.get("behind", 0) or 0),
+        changed_files=int(status.get("changed_files", 0) or 0),
+        changed_paths=list(status.get("changed_paths") or []),
+        captured_at=status.get("captured_at", ""),
+        indexed_at=status.get("indexed_at"),
+        index_status=status.get("index_status", "unknown"),
+        evaluation_status=status.get("evaluation_status", "unknown"),
+        health_score=status.get("health_score"),
+    )
+
+
+def _enrich_branch_status_with_repo_metrics(supabase: Client, repo_id: str, status: dict) -> dict:
+    out = dict(status)
+    try:
+        latest_eval = supabase_service.get_latest_evaluation(supabase, repo_id)
+        out["evaluation_status"] = "ready" if latest_eval else "not_run"
+    except Exception:
+        out["evaluation_status"] = "unknown"
+
+    try:
+        repo = supabase_service.get_repo(supabase, repo_id)
+        user_id = (repo or {}).get("user_id")
+        if user_id:
+            latest_health = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
+            if latest_health:
+                out["health_score"] = latest_health.get("repository_health")
+    except Exception:
+        out["health_score"] = None
+
+    return out
 
 
 def _remove_repo_artifacts(index_name: str) -> None:
@@ -226,3 +278,192 @@ async def delete_repository(
     supabase_service.delete_repo(supabase, repo_id)
 
     return {"message": f"Repository '{index_name}' deleted successfully."}
+
+
+@router.get("/{repo_id}/branches", response_model=BranchListResponse)
+async def list_repository_branches(
+    repo_id: str,
+    q: str = Query(default="", alias="query"),
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    try:
+        payload = repo_branch_service.list_branches(repo, query=q)
+        supabase_service.update_repo_workspace_context(
+            supabase,
+            repo_id,
+            active_branch=payload.get("current_branch"),
+            default_branch=payload.get("default_branch"),
+            recent_branch=payload.get("current_branch"),
+        )
+        context = supabase_service.get_repo_workspace_context(repo)
+        recent = context.get("recent_branches") or payload.get("recent_branches") or []
+        return BranchListResponse(
+            current_branch=payload["current_branch"],
+            default_branch=payload["default_branch"],
+            recent_branches=recent[:8],
+            local_branches=payload["local_branches"],
+            remote_branches=payload["remote_branches"],
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{repo_id}/branches/refresh", response_model=BranchListResponse)
+async def refresh_repository_branches(
+    repo_id: str,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    try:
+        payload = repo_branch_service.list_branches(repo, query="")
+        return BranchListResponse(**payload)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{repo_id}/branches/status", response_model=BranchStatusResponse)
+async def get_repository_branch_status(
+    repo_id: str,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    try:
+        status = repo_branch_service.get_branch_status(repo)
+        status = _enrich_branch_status_with_repo_metrics(supabase, repo_id, status)
+        supabase_service.update_repo_workspace_context(
+            supabase,
+            repo_id,
+            active_branch=status.get("current_branch"),
+            default_branch=status.get("default_branch"),
+            active_commit_sha=status.get("commit_sha"),
+            recent_branch=status.get("current_branch"),
+        )
+        return _build_branch_status_response(repo, status)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{repo_id}/branches/pull", response_model=BranchActionResponse)
+async def pull_repository_branch(
+    repo_id: str,
+    body: Optional[BranchPullRequest] = None,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    try:
+        pull = repo_branch_service.pull_latest(repo, branch=(body.branch if body else None))
+        status = repo_branch_service.get_branch_status(repo)
+        status = _enrich_branch_status_with_repo_metrics(supabase, repo_id, status)
+        supabase_service.update_repo_workspace_context(
+            supabase,
+            repo_id,
+            active_branch=status.get("current_branch"),
+            default_branch=status.get("default_branch"),
+            active_commit_sha=status.get("commit_sha"),
+            recent_branch=status.get("current_branch"),
+        )
+        return BranchActionResponse(
+            message=pull.get("message", "Branch pulled."),
+            current_branch=status.get("current_branch", "unknown"),
+            commit_sha=status.get("commit_sha", "unknown"),
+            status=_build_branch_status_response(repo, status),
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{repo_id}/branches/checkout", response_model=BranchActionResponse)
+async def checkout_repository_branch(
+    repo_id: str,
+    body: BranchCheckoutRequest,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    try:
+        result = repo_branch_service.checkout_branch(repo, body.branch, pull_after_checkout=body.pull_latest)
+        status = _enrich_branch_status_with_repo_metrics(supabase, repo_id, result["status"])
+        supabase_service.update_repo_workspace_context(
+            supabase,
+            repo_id,
+            active_branch=status.get("current_branch"),
+            default_branch=status.get("default_branch"),
+            active_commit_sha=status.get("commit_sha"),
+            recent_branch=status.get("current_branch"),
+        )
+        return BranchActionResponse(
+            message=result.get("message", f"Checked out {body.branch}."),
+            current_branch=status.get("current_branch", "unknown"),
+            commit_sha=status.get("commit_sha", "unknown"),
+            status=_build_branch_status_response(repo, status),
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        detail = str(e)
+        lowered = detail.lower()
+        if "conflict" in lowered or "would be overwritten" in lowered:
+            raise HTTPException(status_code=409, detail=f"Checkout blocked by local changes: {detail}")
+        raise HTTPException(status_code=400, detail=detail)
+
+
+@router.post("/{repo_id}/branches/return-default", response_model=BranchActionResponse)
+async def return_repository_default_branch(
+    repo_id: str,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    try:
+        result = repo_branch_service.return_to_default_branch(repo, pull_after_checkout=True)
+        status = _enrich_branch_status_with_repo_metrics(supabase, repo_id, result["status"])
+        supabase_service.update_repo_workspace_context(
+            supabase,
+            repo_id,
+            active_branch=status.get("current_branch"),
+            default_branch=status.get("default_branch"),
+            active_commit_sha=status.get("commit_sha"),
+            recent_branch=status.get("current_branch"),
+        )
+        return BranchActionResponse(
+            message=result.get("message", "Returned to default branch."),
+            current_branch=status.get("current_branch", "unknown"),
+            commit_sha=status.get("commit_sha", "unknown"),
+            status=_build_branch_status_response(repo, status),
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{repo_id}/branches/compare", response_model=BranchComparisonResponse)
+async def compare_repository_branches(
+    repo_id: str,
+    base_branch: str = Query(..., min_length=1),
+    target_branch: str = Query(..., min_length=1),
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    repo = ensure_repo_access(supabase, repo_id, user_id)
+    try:
+        payload = repo_branch_service.compare_branches(repo, base_branch=base_branch, target_branch=target_branch)
+        return BranchComparisonResponse(**payload)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+

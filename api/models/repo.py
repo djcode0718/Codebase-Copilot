@@ -38,6 +38,91 @@ class RepoStatusResponse(BaseModel):
     llm_provider: Optional[str] = None
     created_at: Optional[datetime] = None
     indexed_at: Optional[datetime] = None
+    active_branch: Optional[str] = None
+    default_branch: Optional[str] = None
+    active_commit_sha: Optional[str] = None
+
+
+class BranchCheckoutRequest(BaseModel):
+    branch: str
+    pull_latest: bool = True
+
+    @field_validator("branch")
+    @classmethod
+    def branch_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("branch must not be empty")
+        return v.strip()
+
+
+class BranchPullRequest(BaseModel):
+    branch: Optional[str] = None
+
+
+class BranchListResponse(BaseModel):
+    current_branch: str
+    default_branch: str
+    recent_branches: list[str]
+    local_branches: list[str]
+    remote_branches: list[str]
+
+
+class BranchStatusResponse(BaseModel):
+    current_branch: str
+    default_branch: str
+    last_commit: str
+    author: str
+    commit_sha: str
+    short_commit_sha: str
+    ahead: int
+    behind: int
+    changed_files: int
+    changed_paths: list[str]
+    captured_at: str
+    indexed_at: Optional[str] = None
+    index_status: str
+    evaluation_status: str = "unknown"
+    health_score: Optional[float] = None
+
+
+class BranchActionResponse(BaseModel):
+    message: str
+    current_branch: str
+    commit_sha: str
+    status: BranchStatusResponse
+
+
+class BranchComparisonRequest(BaseModel):
+    base_branch: str
+    target_branch: str
+
+
+class MergeReadinessResponse(BaseModel):
+    overall_score: float
+    blocking_issues: list[str]
+    warnings: list[str]
+    suggested_reviewers: list[str]
+    estimated_review_time_minutes: int
+    deployment_risk: str
+    safe_to_merge: bool
+
+
+class BranchComparisonResponse(BaseModel):
+    base_branch: str
+    target_branch: str
+    changed_files: int
+    sample_changed_files: list[str]
+    architecture_changes: int
+    security_changes: int
+    performance_changes: int
+    technical_debt_changes: int
+    api_changes: int
+    database_changes: int
+    business_logic_changes: int
+    dependency_changes: int
+    risk_assessment: str
+    merge_readiness: MergeReadinessResponse
+    ai_executive_summary: str
 
 
 class IndexProgressEvent(BaseModel):

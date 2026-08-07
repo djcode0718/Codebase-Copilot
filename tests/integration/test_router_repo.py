@@ -266,3 +266,98 @@ class TestDeleteRepository:
         # shutil.rmtree should have been called for index and repo dirs
         assert mock_rmtree.call_count == 2
 
+
+class TestBranchWorkspace:
+    def test_list_branches_success(self, client, mock_supabase, fake_repo, fake_repo_id):
+        select_chain = MagicMock()
+        select_chain.execute.return_value = MagicMock(data=[fake_repo])
+        mock_supabase.table.return_value.select.return_value.eq.return_value = select_chain
+
+        with patch("api.routers.repo.repo_branch_service.list_branches", return_value={
+            "current_branch": "feature/payment",
+            "default_branch": "main",
+            "recent_branches": ["feature/payment", "main"],
+            "local_branches": ["main", "feature/payment"],
+            "remote_branches": ["main", "feature/payment"],
+        }):
+            resp = client.get(f"/api/repo/{fake_repo_id}/branches?query=feature")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["current_branch"] == "feature/payment"
+        assert "feature/payment" in body["local_branches"]
+
+    def test_get_branch_status_success(self, client, mock_supabase, fake_repo, fake_repo_id):
+        select_chain = MagicMock()
+        select_chain.execute.return_value = MagicMock(data=[fake_repo])
+        mock_supabase.table.return_value.select.return_value.eq.return_value = select_chain
+
+        payload = {
+            "current_branch": "main",
+            "default_branch": "main",
+            "last_commit": "Initial commit",
+            "author": "Dev",
+            "commit_sha": "abc123def456",
+            "short_commit_sha": "abc123def456",
+            "ahead": 0,
+            "behind": 0,
+            "changed_files": 0,
+            "changed_paths": [],
+            "captured_at": "2026-08-07T00:00:00Z",
+            "indexed_at": None,
+            "index_status": "ready",
+            "evaluation_status": "ready",
+            "health_score": 95,
+        }
+
+        with (
+            patch("api.routers.repo.repo_branch_service.get_branch_status", return_value=payload),
+            patch("api.routers.repo._enrich_branch_status_with_repo_metrics", return_value=payload),
+        ):
+            resp = client.get(f"/api/repo/{fake_repo_id}/branches/status")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["current_branch"] == "main"
+        assert body["health_score"] == 95
+
+    def test_compare_branches_success(self, client, mock_supabase, fake_repo, fake_repo_id):
+        select_chain = MagicMock()
+        select_chain.execute.return_value = MagicMock(data=[fake_repo])
+        mock_supabase.table.return_value.select.return_value.eq.return_value = select_chain
+
+        compare_payload = {
+            "base_branch": "main",
+            "target_branch": "feature/payment",
+            "changed_files": 5,
+            "sample_changed_files": ["api/routers/repo.py"],
+            "architecture_changes": 1,
+            "security_changes": 0,
+            "performance_changes": 1,
+            "technical_debt_changes": 0,
+            "api_changes": 1,
+            "database_changes": 0,
+            "business_logic_changes": 1,
+            "dependency_changes": 0,
+            "risk_assessment": "Low",
+            "merge_readiness": {
+                "overall_score": 92,
+                "blocking_issues": [],
+                "warnings": [],
+                "suggested_reviewers": ["Backend Lead"],
+                "estimated_review_time_minutes": 40,
+                "deployment_risk": "Low",
+                "safe_to_merge": True,
+            },
+            "ai_executive_summary": "Ready to merge.",
+        }
+
+        with patch("api.routers.repo.repo_branch_service.compare_branches", return_value=compare_payload):
+            resp = client.get(f"/api/repo/{fake_repo_id}/branches/compare?base_branch=main&target_branch=feature/payment")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["base_branch"] == "main"
+        assert body["merge_readiness"]["safe_to_merge"] is True
+
+

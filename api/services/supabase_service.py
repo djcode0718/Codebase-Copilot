@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 _HEALTH_SCHEMA_CHECK_TTL_SECONDS = 60
 _REVIEW_SCHEMA_CHECK_TTL_SECONDS = 60
 _MISSING_REPO_MEMORY_TABLE_WARNED: Set[str] = set()
+_REPO_WORKSPACE_CONTEXT_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _is_missing_column_error(err: Exception, columns: List[str]) -> bool:
@@ -192,10 +193,76 @@ def reset_repo_for_reindex(supabase: Client, repo_id: str) -> None:
     }).eq("id", repo_id).execute()
 
 
+def get_repo_workspace_context(repo: Dict[str, Any]) -> Dict[str, Any]:
+    repo_id = str(repo.get("id") or "")
+    cached = _REPO_WORKSPACE_CONTEXT_CACHE.get(repo_id, {})
+    return {
+        "active_branch": repo.get("active_branch") or cached.get("active_branch"),
+        "default_branch": repo.get("default_branch") or cached.get("default_branch"),
+        "active_commit_sha": repo.get("active_commit_sha") or cached.get("active_commit_sha"),
+        "recent_branches": list(cached.get("recent_branches") or []),
+    }
+
+
+def update_repo_workspace_context(
+    supabase: Client,
+    repo_id: str,
+    *,
+    active_branch: Optional[str] = None,
+    default_branch: Optional[str] = None,
+    active_commit_sha: Optional[str] = None,
+    recent_branch: Optional[str] = None,
+) -> None:
+    cached = dict(_REPO_WORKSPACE_CONTEXT_CACHE.get(repo_id, {}))
+    if active_branch:
+        cached["active_branch"] = active_branch
+    if default_branch:
+        cached["default_branch"] = default_branch
+    if active_commit_sha:
+        cached["active_commit_sha"] = active_commit_sha
+    if recent_branch:
+        recents = [recent_branch, *[b for b in cached.get("recent_branches", []) if b != recent_branch]]
+        cached["recent_branches"] = recents[:8]
+    _REPO_WORKSPACE_CONTEXT_CACHE[repo_id] = cached
+
+    update_payload: Dict[str, Any] = {}
+    if active_branch is not None:
+        update_payload["active_branch"] = active_branch
+    if default_branch is not None:
+        update_payload["default_branch"] = default_branch
+    if active_commit_sha is not None:
+        update_payload["active_commit_sha"] = active_commit_sha
+    if not update_payload:
+        return
+
+    try:
+        supabase.table("repositories").update(update_payload).eq("id", repo_id).execute()
+    except Exception as e:
+        if _is_missing_column_error(e, ["active_branch", "default_branch", "active_commit_sha"]):
+            logger.info("Repository branch workspace columns missing; using in-memory context fallback.")
+            return
+        logger.warning(f"Failed to persist repository workspace context for repo_id='{repo_id}': {e}")
+
+
+def _apply_repo_workspace_context(repo: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(repo, dict):
+        return repo
+    context = get_repo_workspace_context(repo)
+    if context.get("active_branch"):
+        repo["active_branch"] = context["active_branch"]
+    if context.get("default_branch"):
+        repo["default_branch"] = context["default_branch"]
+    if context.get("active_commit_sha"):
+        repo["active_commit_sha"] = context["active_commit_sha"]
+    return repo
+
+
 def get_repo(supabase: Client, repo_id: str) -> Optional[Dict[str, Any]]:
     try:
         result = supabase.table("repositories").select("*").eq("id", repo_id).execute()
-        return result.data[0] if result.data else None
+        if not result.data:
+            return None
+        return _apply_repo_workspace_context(result.data[0])
     except Exception as e:
         logger.warning(f"get_repo failed for id='{repo_id}': {e}")
         return None
@@ -210,7 +277,8 @@ def get_repos_for_user(supabase: Client, user_id: str) -> List[Dict[str, Any]]:
             .order("created_at", desc=True)
             .execute()
         )
-        return result.data or []
+        rows = result.data or []
+        return [_apply_repo_workspace_context(dict(row)) for row in rows]
     except Exception as e:
         logger.warning(f"get_repos_for_user failed for user_id='{user_id}': {e}")
         return []

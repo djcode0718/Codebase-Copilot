@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   MessageSquare, BarChart2, Trash2, FileCode2,
-  Layers, GitBranch, ExternalLink, Clock, Cpu, Activity, ArrowRight, ShieldCheck, Sparkles, Brain, RotateCcw,
+  Layers, GitBranch, ExternalLink, Clock, Cpu, Activity, ArrowRight, ShieldCheck, Sparkles, RotateCcw,
 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,7 @@ import type { Repo } from '@/lib/types';
 import RepositoryHealthDashboard from '@/components/repo/RepositoryHealthDashboard';
 import IntelligenceActions from '@/components/repo/IntelligenceActions';
 import ExportMenu from '@/components/repo/ExportMenu';
+import BranchWorkspacePanel from '@/components/repo/BranchWorkspacePanel';
 
 // Detect tech stack from index_name (simple heuristic for display)
 const TECH_CHIPS: Record<string, { label: string; color: string }> = {
@@ -406,6 +407,13 @@ function RepoOverviewPage() {
       />
 
       <RepoKpiRow repo={repo} />
+
+      <BranchWorkspacePanel
+        token={token}
+        repoId={repoId}
+        repo={repo}
+        onRepoUpdated={setRepo}
+      />
 
       {/* Repository Intelligence Summary */}
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.25fr_0.85fr]">

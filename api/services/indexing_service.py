@@ -395,6 +395,9 @@ def _load_pipeline_dependencies(emit):
 
 
 def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
+    # Emit immediately so UI never appears stalled while pre-flight checks/imports run.
+    emit("cloning", "Preparing indexing environment...", 1)
+
     if not _check_ollama_running():
         emit(
             "error",
@@ -576,6 +579,14 @@ async def indexing_event_generator(
     # Mark this repo as in-flight
     _indexing_in_flight.add(repo_id)
     _indexing_sources_in_flight.add(source_key)
+
+    # First event is emitted before pipeline thread starts to avoid a silent 0% UI.
+    bootstrap_event = {
+        "step": "cloning",
+        "message": "Initialising indexing stream...",
+        "progress": 1,
+    }
+    yield f"data: {json.dumps(bootstrap_event)}\n\n"
 
     progress_queue: asyncio.Queue = asyncio.Queue()
 

@@ -5,6 +5,10 @@
  */
 import type {
   Repo,
+  BranchListResponse,
+  BranchStatus,
+  BranchActionResponse,
+  BranchComparison,
   IndexRepoResponse,
   Chat,
   Message,
@@ -171,6 +175,106 @@ export async function refreshRepo(
 /** Returns the URL for the indexing SSE stream — open with EventSource or fetch */
 export function indexProgressUrl(repoId: string): string {
   return apiUrl(`/api/repo/${repoId}/index-progress`);
+}
+
+export async function listRepoBranches(token: string, repoId: string, query = ''): Promise<BranchListResponse> {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set('query', query.trim());
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/branches${suffix}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to load branches');
+  }
+  return res.json();
+}
+
+export async function refreshRepoBranches(token: string, repoId: string): Promise<BranchListResponse> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/branches/refresh`), {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to refresh branches');
+  }
+  return res.json();
+}
+
+export async function getRepoBranchStatus(token: string, repoId: string): Promise<BranchStatus> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/branches/status`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to load branch status');
+  }
+  return res.json();
+}
+
+export async function checkoutRepoBranch(
+  token: string,
+  repoId: string,
+  branch: string,
+  pullLatest = true
+): Promise<BranchActionResponse> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/branches/checkout`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ branch, pull_latest: pullLatest }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to checkout branch');
+  }
+  return res.json();
+}
+
+export async function pullRepoBranch(token: string, repoId: string, branch?: string): Promise<BranchActionResponse> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/branches/pull`), {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ branch }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to pull latest');
+  }
+  return res.json();
+}
+
+export async function returnRepoDefaultBranch(token: string, repoId: string): Promise<BranchActionResponse> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/branches/return-default`), {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to return to default branch');
+  }
+  return res.json();
+}
+
+export async function compareRepoBranches(
+  token: string,
+  repoId: string,
+  baseBranch: string,
+  targetBranch: string
+): Promise<BranchComparison> {
+  const params = new URLSearchParams({ base_branch: baseBranch, target_branch: targetBranch });
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/branches/compare?${params.toString()}`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to compare branches');
+  }
+  return res.json();
 }
 
 // ── Chat endpoints ────────────────────────────────────────────────────────

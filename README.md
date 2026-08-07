@@ -28,6 +28,7 @@
 | **Review UX** | Per-finding loading state, active selection highlight, branded fix output, toast feedback for all actions |
 | **Backend resilience** | `get_repository_review_by_id` and `insert_repository_review` now bypass the stale schema cache and update it on success |
 | **Maintainability refactor** | Shared router access guard (`api/routers/_repo_access.py`) removes duplicated ownership checks across evaluation and health routers; frontend explorer/sidebar/indexing stream were split into smaller units for readability with no API or route contract changes |
+| **Branch Workspace** | Added branch-aware repository workspace with searchable branch selector, branch status, checkout/pull/default-branch actions, and branch comparison/merge-readiness APIs (`/api/repo/{repo_id}/branches/*`) while preserving existing workflows |
 
 The system combines:
 
