@@ -13,9 +13,9 @@ function GithubIcon({ size = 16 }: { size?: number }) {
 }
 
 const stats = [
-	{ value: '18+', label: 'Intelligence capabilities' },
+	{ value: '20+', label: 'Intelligence workflows' },
 	{ value: '< 2s', label: 'Avg retrieval latency' },
-	{ value: '100%', label: 'Grounded responses' },
+	{ value: 'Thread-first', label: 'Workspace layout' },
 	{ value: '4 LLMs', label: 'Provider support' },
 ];
 
@@ -35,6 +35,10 @@ const techBadges = [
 	{
 		label: 'LlamaIndex',
 		color: 'from-violet-500/20 to-violet-600/10 border-violet-500/30 text-violet-600 dark:text-violet-400',
+	},
+	{
+		label: 'SSE Streaming',
+		color: 'from-amber-500/20 to-amber-600/10 border-amber-500/30 text-amber-600 dark:text-amber-300',
 	},
 	{ label: 'RAG', color: 'from-brand/20 to-brand/10 border-brand/30 text-brand' },
 	{
@@ -89,9 +93,9 @@ export function Hero({ signedIn }: { signedIn?: boolean }) {
 					</h1>
 
 					<p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground md:text-xl leading-relaxed">
-						AI-powered RAG system for any GitHub repository. Get grounded,
-						inspectable answers backed by real code retrieval — with architecture
-						discovery, security analysis, and health scoring built in.
+						AI-powered RAG workspace for any GitHub repository. Get grounded,
+						inspectable answers with a thread-first chat, right-rail AI inspector,
+						and one-click chat exports for sharing decisions with your team.
 					</p>
 				</motion.div>
 

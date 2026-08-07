@@ -4,7 +4,7 @@
  * Chat screen — 60/40 split: message thread | AI Inspector.
  * Creates a new chat session on mount and handles full SSE streaming.
  */
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, useLayoutEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus, Wrench, Search, Pin, PinOff, Trash2, Archive, Pencil, Check, X, Download, ChevronDown } from 'lucide-react';
@@ -46,6 +46,166 @@ function buildThreadStats(messages: Message[], suggestions: string[], inspectedI
     { label: 'Suggestions', value: suggestions.length },
     { label: 'Inspector', value: inspectedIndex !== null ? 'Open' : 'Idle' },
   ];
+}
+
+type HeaderChip = {
+  key: string;
+  priority: number;
+  kind: 'overview' | 'stat' | 'context';
+  label: string;
+  value?: string | number;
+};
+
+function PrioritizedHeaderChips({
+  repoId,
+  threadStats,
+}: {
+  repoId: string;
+  threadStats: { label: string; value: string | number }[];
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const measureRef = useRef<HTMLDivElement | null>(null);
+  const [visibleCount, setVisibleCount] = useState(4);
+
+  const chips = useMemo<HeaderChip[]>(() => {
+    const statPriority: Record<string, number> = {
+      Messages: 90,
+      Inspector: 80,
+      Suggestions: 70,
+    };
+
+    return [
+      { key: 'context', priority: 20, kind: 'context', label: 'Thread-first workspace' },
+      { key: 'overview', priority: 100, kind: 'overview', label: 'Repository overview' },
+      ...threadStats.map((stat) => ({
+        key: `stat-${stat.label.toLowerCase()}`,
+        priority: statPriority[stat.label] ?? 50,
+        kind: 'stat' as const,
+        label: stat.label,
+        value: stat.value,
+      })),
+    ].sort((a, b) => b.priority - a.priority);
+  }, [threadStats]);
+
+  const renderChip = useCallback((chip: HeaderChip, forMeasure = false) => {
+    if (chip.kind === 'overview') {
+      const className = 'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 text-[11px] text-muted-foreground';
+      if (forMeasure) {
+        return (
+          <span key={chip.key} className={className}>
+            <ArrowLeft size={12} />
+            {chip.label}
+          </span>
+        );
+      }
+      return (
+        <Link key={chip.key} href={`/repo/${repoId}`} className={`${className} transition-colors hover:text-foreground`}>
+          <ArrowLeft size={12} />
+          {chip.label}
+        </Link>
+      );
+    }
+
+    if (chip.kind === 'context') {
+      return (
+        <span key={chip.key} className="inline-flex h-7 shrink-0 items-center rounded-full border border-border bg-background/70 px-2.5 text-[11px] text-muted-foreground">
+          {chip.label}
+        </span>
+      );
+    }
+
+    return (
+      <span
+        key={chip.key}
+        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-background/70 px-2.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+      >
+        {chip.label}
+        <span className="font-heading text-[11px] normal-case tracking-normal text-foreground">{chip.value}</span>
+      </span>
+    );
+  }, [repoId]);
+
+  useLayoutEffect(() => {
+    function recalculateVisible() {
+      const container = containerRef.current;
+      const measure = measureRef.current;
+      if (!container || !measure) {
+        setVisibleCount(chips.length);
+        return;
+      }
+
+      const measuredChildren = Array.from(measure.children) as HTMLElement[];
+      if (!measuredChildren.length) {
+        setVisibleCount(chips.length);
+        return;
+      }
+
+      const widths = measuredChildren.slice(0, chips.length).map((el) => el.offsetWidth);
+      const overflowPillWidth = measuredChildren[chips.length]?.offsetWidth ?? 42;
+      const availableWidth = container.clientWidth;
+
+      let used = 0;
+      let count = 0;
+      for (let i = 0; i < widths.length; i += 1) {
+        const remaining = widths.length - (i + 1);
+        const reserve = remaining > 0 ? overflowPillWidth : 0;
+        if (used + widths[i] + reserve <= availableWidth) {
+          used += widths[i];
+          count += 1;
+        } else {
+          break;
+        }
+      }
+
+      setVisibleCount(Math.max(1, count));
+    }
+
+    recalculateVisible();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(recalculateVisible) : null;
+    if (observer && containerRef.current) observer.observe(containerRef.current);
+    window.addEventListener('resize', recalculateVisible);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', recalculateVisible);
+    };
+  }, [chips]);
+
+  const visibleChips = chips.slice(0, Math.min(visibleCount, chips.length));
+  const hiddenCount = Math.max(0, chips.length - visibleChips.length);
+
+  return (
+    <>
+      <div ref={containerRef} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        {visibleChips.map((chip) => renderChip(chip))}
+        {hiddenCount > 0 && (
+          <span className="inline-flex h-7 shrink-0 items-center rounded-full border border-border bg-background/70 px-2.5 text-[10px] font-medium text-muted-foreground">
+            +{hiddenCount}
+          </span>
+        )}
+      </div>
+
+      <div ref={measureRef} className="pointer-events-none absolute -left-[9999px] top-0 flex items-center gap-1.5 opacity-0">
+        {chips.map((chip) => renderChip(chip, true))}
+        <span className="inline-flex h-7 items-center rounded-full border border-border bg-background/70 px-2.5 text-[10px] font-medium">+99</span>
+      </div>
+    </>
+  );
+}
+
+function buildInspectorPayload(
+  inspectedIndex: number | null,
+  pendingMetadata: Omit<StreamedResponse, 'content'> | null,
+  inspectorData: StreamedResponse | null,
+) {
+  if (inspectedIndex !== null) return inspectorData;
+  if (!pendingMetadata) return null;
+  return {
+    queryMode: pendingMetadata.queryMode,
+    retrievedFiles: pendingMetadata.retrievedFiles,
+    latencyRetrievalMs: pendingMetadata.latencyRetrievalMs,
+    latencyLlmMs: pendingMetadata.latencyLlmMs,
+    latencyTotalMs: pendingMetadata.latencyTotalMs,
+  };
 }
 
 function collectReviewTargets(messages: Message[]): string[] {
@@ -391,101 +551,6 @@ function ConversationHistoryPanel({
   );
 }
 
-function ChatHeaderSection({
-  repoId,
-  routedMode,
-  isDev,
-  token,
-  streaming,
-  onCreateQuickAsk,
-  onOpenReview,
-  threadStats,
-  repo,
-  chatId,
-}: {
-  repoId: string;
-  routedMode: QueryMode | null;
-  isDev: boolean;
-  token: string;
-  streaming: boolean;
-  onCreateQuickAsk: () => void;
-  onOpenReview: () => void;
-  threadStats: { label: string; value: string | number }[];
-  repo: Repo | null;
-  chatId: string | null;
-}) {
-  return (
-    <motion.section
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm"
-    >
-      <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={`/repo/${repoId}`}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ArrowLeft size={16} />
-              Repository overview
-            </Link>
-            {isDev && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-violet-50 px-2 py-1 text-[11px] font-medium text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300">
-                mode: {routedMode ?? 'pending'}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border bg-background/70">
-              <MessageSquare size={16} className="text-brand" />
-            </div>
-            <div>
-              <h1 className="font-heading text-2xl font-bold tracking-tight">Repository Chat</h1>
-              <p className="text-sm text-muted-foreground">Grounded answers with inspectable retrieval metadata.</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-border cursor-pointer"
-              onClick={onCreateQuickAsk}
-              disabled={!token || streaming}
-            >
-              <Plus size={13} className="mr-1.5" />
-              New chat
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-border cursor-pointer"
-              onClick={onOpenReview}
-              disabled={!token || streaming}
-            >
-              <Wrench size={13} className="mr-1.5" />
-              Review
-            </Button>
-          </div>
-        </div>
-        <div className="grid grid-cols-3 gap-3 sm:min-w-[22rem]">
-          {threadStats.map((stat) => (
-            <div key={stat.label} className="rounded-2xl border border-border bg-background/70 px-3 py-3">
-              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{stat.label}</div>
-              <div className="mt-2 font-heading text-lg font-semibold">{stat.value}</div>
-            </div>
-          ))}
-        </div>
-        {repo && (
-          <div className="self-start xl:self-auto">
-            <ExportMenu repo={repo} token={token} scope="chat" chatIds={chatId ? [chatId] : []} />
-          </div>
-        )}
-      </div>
-    </motion.section>
-  );
-}
-
 function EmptyThreadState() {
   return (
     <motion.div
@@ -674,6 +739,9 @@ function ChatComposer({
 
 function ChatWorkspace({
   repoId,
+  repo,
+  token,
+  chatId,
   sessionReady,
   showEmptyState,
   messages,
@@ -686,8 +754,6 @@ function ChatWorkspace({
   routedMode,
   input,
   textareaRef,
-  pendingMetadata,
-  inspectorData,
   messagesEndRef,
   onInspect,
   onSuggestion,
@@ -696,8 +762,14 @@ function ChatWorkspace({
   onSubmit,
   onCancel,
   sessionLoading,
+  onCreateQuickAsk,
+  onOpenReview,
+  threadStats,
 }: {
   repoId: string;
+  repo: Repo | null;
+  token: string;
+  chatId: string | null;
   sessionReady: boolean;
   showEmptyState: boolean;
   messages: Message[];
@@ -710,8 +782,6 @@ function ChatWorkspace({
   routedMode: QueryMode | null;
   input: string;
   textareaRef: { current: HTMLTextAreaElement | null };
-  pendingMetadata: Omit<StreamedResponse, 'content'> | null;
-  inspectorData: StreamedResponse | null;
   messagesEndRef: { current: HTMLDivElement | null };
   onInspect: (index: number, msg: Message) => void;
   onSuggestion: (q: string) => void;
@@ -720,35 +790,54 @@ function ChatWorkspace({
   onSubmit: () => void;
   onCancel: () => void;
   sessionLoading?: boolean;
+  onCreateQuickAsk: () => void;
+  onOpenReview: () => void;
+  threadStats: { label: string; value: string | number }[];
 }) {
-  function buildInspectorPayload() {
-    if (inspectedIndex !== null) return inspectorData;
-    if (!pendingMetadata) return null;
-    return {
-      queryMode: pendingMetadata.queryMode,
-      retrievedFiles: pendingMetadata.retrievedFiles,
-      latencyRetrievalMs: pendingMetadata.latencyRetrievalMs,
-      latencyLlmMs: pendingMetadata.latencyLlmMs,
-      latencyTotalMs: pendingMetadata.latencyTotalMs,
-    };
-  }
-
-  const inspectorPayload = buildInspectorPayload();
-
   return (
-    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
-      <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-[calc(100vh-21rem)] xl:flex xl:flex-col">
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Activity size={15} className="text-brand" />
-            Chat thread
-          </div>
-          {(sessionLoading || !sessionReady) && (
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-xs text-muted-foreground">
-              <Loader2 size={12} className="animate-spin" />
-              {sessionLoading ? 'Loading conversation…' : 'Initialising'}
+    <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:flex xl:h-[calc(100dvh-8rem)] xl:flex-col">
+        <div className="sticky top-0 z-30 flex-shrink-0 border-b border-border bg-card px-4 py-2.5 shadow-sm backdrop-blur-sm">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between xl:gap-3">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 py-1">
+                <Activity size={13} className="text-brand" />
+                <span className="text-sm font-medium text-foreground">Chat thread</span>
+              </span>
+              <PrioritizedHeaderChips repoId={repoId} threadStats={threadStats} />
             </div>
-          )}
+
+            <div className="flex shrink-0 items-center gap-1.5">
+              {(sessionLoading || !sessionReady) && (
+                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-xs text-muted-foreground">
+                  <Loader2 size={12} className="animate-spin" />
+                  {sessionLoading ? 'Loading conversation...' : 'Initialising'}
+                </div>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 border-border px-2.5 text-[11px] cursor-pointer"
+                onClick={onCreateQuickAsk}
+                disabled={!token || streaming}
+              >
+                <Plus size={12} className="mr-1" />
+                New chat
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 border-border px-2.5 text-[11px] cursor-pointer"
+                onClick={onOpenReview}
+                disabled={!token || streaming}
+              >
+                <Wrench size={12} className="mr-1" />
+                Review
+              </Button>
+              {repo && chatId && (
+                <ExportMenu repo={repo} token={token} scope="chat" chatIds={[chatId]} />
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="flex h-full min-h-0 flex-col">
@@ -756,7 +845,7 @@ function ChatWorkspace({
             <div className="flex flex-1 items-center justify-center py-20 text-muted-foreground">
               <div className="flex flex-col items-center gap-3">
                 <Loader2 size={22} className="animate-spin text-brand" />
-                <span className="text-sm">Loading conversation…</span>
+                <span className="text-sm">Loading conversation...</span>
               </div>
             </div>
           ) : (
@@ -790,11 +879,6 @@ function ChatWorkspace({
           />
         </div>
       </div>
-
-      <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:sticky xl:top-[4.5rem] xl:h-[calc(100vh-21rem)]">
-        <AIInspector data={inspectorPayload} streaming={streaming} />
-      </div>
-    </div>
   );
 }
 
@@ -1347,25 +1431,15 @@ export default function ChatPage() {
     });
   const isDev = process.env.NODE_ENV !== 'production';
   const displayThreadStats = buildThreadStats(messages, suggestions, inspectedIndex);
+  const inspectorPayload = buildInspectorPayload(inspectedIndex, pendingMetadata, inspectorData);
   return (
-    <div className="space-y-6">
-      <ChatHeaderSection
-        repoId={repoId}
-        routedMode={routedMode}
-        isDev={isDev}
-        token={token}
-        streaming={streaming}
-        onCreateQuickAsk={handleCreateQuickAsk}
-        onOpenReview={handleOpenReview}
-        threadStats={displayThreadStats}
-        repo={repo}
-        chatId={chatId}
-      />
-
-      {/* ConversationHistoryPanel removed — chat history now lives in the sidebar */}
-      <div className="grid grid-cols-1 gap-6">
+    <div className="grid grid-cols-1 gap-4 xl:h-[calc(100dvh-8rem)] xl:grid-cols-[minmax(0,1fr)_21rem] xl:items-start xl:overflow-hidden">
+      <div className="min-w-0 xl:h-full xl:min-h-0">
         <ChatWorkspace
           repoId={repoId}
+          repo={repo}
+          token={token}
+          chatId={chatId}
           sessionReady={sessionReady && !sessionLoading}
           showEmptyState={showEmptyState && !sessionLoading}
           messages={messages}
@@ -1378,8 +1452,6 @@ export default function ChatPage() {
           routedMode={routedMode}
           input={input}
           textareaRef={textareaRef}
-          pendingMetadata={pendingMetadata}
-          inspectorData={inspectorData}
           messagesEndRef={messagesEndRef}
           onInspect={handleInspect}
           onSuggestion={handleSend}
@@ -1388,7 +1460,16 @@ export default function ChatPage() {
           onSubmit={() => handleSend(input)}
           onCancel={cancelStream}
           sessionLoading={sessionLoading}
+          onCreateQuickAsk={handleCreateQuickAsk}
+          onOpenReview={handleOpenReview}
+          threadStats={displayThreadStats}
         />
+      </div>
+
+      <div className="xl:sticky xl:top-0 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden">
+        <div className="min-h-[20rem] overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-full xl:min-h-0 xl:flex-1">
+          <AIInspector data={inspectorPayload} streaming={streaming} />
+        </div>
       </div>
     </div>
   );

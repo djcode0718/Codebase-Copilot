@@ -2,10 +2,16 @@
 import { motion } from 'framer-motion';
 import {
   Search, Activity, Code2, LineChart, Shield, GitBranch,
-  MessageSquare, Zap, Brain, FileCode2, BarChart3, RefreshCw,
+  MessageSquare, Zap, Brain, FileCode2, BarChart3, RefreshCw, FileArchive,
 } from 'lucide-react';
 
 const features = [
+  {
+    title: 'Thread-First Workspace',
+    description: 'The chat thread stays front-and-center while repository context and AI Inspector live in a compact right rail.',
+    icon: MessageSquare,
+    accent: 'text-brand border-brand/20 bg-brand/10',
+  },
   {
     title: 'Grounded Responses',
     description: 'Every answer is backed by exact chunks retrieved from your codebase. Zero hallucinations, full evidence trail.',
@@ -61,6 +67,12 @@ const features = [
     accent: 'text-blue-500 border-blue-500/20 bg-blue-500/10',
   },
   {
+    title: 'In-Thread Chat Export',
+    description: 'Export the active conversation directly from the chat banner to Markdown, JSON, TXT, PDF, or DOCX.',
+    icon: FileArchive,
+    accent: 'text-emerald-500 border-emerald-500/20 bg-emerald-500/10',
+  },
+  {
     title: 'Conversation Memory',
     description: 'Persistent chat history with session summaries, pinned conversations, and semantic search across all chats.',
     icon: MessageSquare,
@@ -82,9 +94,9 @@ const features = [
 
 const workflow = [
   { step: '01', title: 'Index', desc: 'Paste any GitHub URL. The pipeline clones, parses, chunks, and embeds your codebase.' },
-  { step: '02', title: 'Ask', desc: 'Type natural-language questions. Hybrid RAG retrieves the most relevant code chunks.' },
-  { step: '03', title: 'Inspect', desc: 'See matched files, latency, retrieval mode, and full source evidence for every answer.' },
-  { step: '04', title: 'Analyse', desc: 'Run health checks, security scans, architecture discovery, and AI-generated code reviews.' },
+  { step: '02', title: 'Ask', desc: 'Type natural-language questions in a thread-first chat workspace designed for long engineering sessions.' },
+  { step: '03', title: 'Inspect', desc: 'Track retrieval mode, latency, and matched files from the compact right-side AI Inspector rail.' },
+  { step: '04', title: 'Share', desc: 'Export chats in multiple formats and run health checks, security scans, and AI-generated code reviews.' },
 ];
 
 export function FeatureSection() {
@@ -126,7 +138,7 @@ export function FeatureSection() {
         <div className="mx-auto max-w-6xl">
           <div className="mb-16 text-center">
             <div className="mb-3 inline-flex items-center rounded-full border border-border bg-muted/60 px-3 py-1 text-xs text-muted-foreground">
-              12 intelligence categories
+              Latest v2.0 experience
             </div>
             <h2 className="text-3xl font-heading font-bold tracking-tight md:text-4xl">
               Everything you need to understand your codebase
