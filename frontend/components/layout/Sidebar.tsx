@@ -26,6 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getRepoWorkspaceHref, isRepoWorkspaceReady } from '@/lib/repo-routing';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import { listChatSessions, updateChatSession, deleteChat, deleteAllChats, exportRepositoryMemory } from '@/lib/api';
@@ -415,7 +416,8 @@ function RepositoryListSection(props: RepositoryListSectionProps) {
       <div className="space-y-1">
         {recentRepos.map((repo) => {
           const isActive = pathname.startsWith(`/repo/${repo.id}`);
-          const href = repo.status === 'ready' ? `/repo/${repo.id}` : `/repo/${repo.id}/indexing`;
+          const href = getRepoWorkspaceHref(repo);
+          const isWorkspaceReady = isRepoWorkspaceReady(repo);
           const allChats = repoChats[repo.id] ?? [];
           const query = (searchQuery[repo.id] ?? '').trim().toLowerCase();
           const visibleChats = query
@@ -441,7 +443,7 @@ function RepositoryListSection(props: RepositoryListSectionProps) {
                 )}
               </Link>
 
-              {!collapsed && repo.status === 'ready' && (
+              {!collapsed && isWorkspaceReady && (
                 <RepoConversationsSection
                   repo={repo}
                   allChats={allChats}

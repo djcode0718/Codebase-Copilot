@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { GitBranch, FileCode2, Layers, Clock, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getRepoWorkspaceHref, isRepoWorkspaceReady } from '@/lib/repo-routing';
 import { Badge } from '@/components/ui/badge';
 import type { Repo } from '@/lib/types';
 
@@ -35,11 +36,9 @@ interface RepoCardProps {
 }
 
 export default function RepoCard({ repo, onDelete, index = 0 }: RepoCardProps) {
-  const status = STATUS_CONFIG[repo.status] ?? STATUS_CONFIG.indexing;
-  const href =
-    repo.status === 'ready'
-      ? `/repo/${repo.id}`
-      : `/repo/${repo.id}/indexing`;
+  const isReady = isRepoWorkspaceReady(repo);
+  const status = STATUS_CONFIG[isReady ? 'ready' : repo.status] ?? STATUS_CONFIG.indexing;
+  const href = getRepoWorkspaceHref(repo);
 
   const formattedDate = new Date(repo.created_at).toLocaleDateString('en-US', {
     month: 'short',
@@ -55,7 +54,7 @@ export default function RepoCard({ repo, onDelete, index = 0 }: RepoCardProps) {
     >
       <div className="group relative overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-sm shadow-black/5 transition-all duration-200 hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-lg hover:shadow-black/10">
         {/* Top accent line for ready repos */}
-        {repo.status === 'ready' && (
+        {isReady && (
           <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-brand/0 via-brand to-brand/0 opacity-80 transition-opacity duration-300" />
         )}
 
@@ -113,7 +112,7 @@ export default function RepoCard({ repo, onDelete, index = 0 }: RepoCardProps) {
             </div>
           )}
 
-          {repo.status === 'indexing' && (
+          {!isReady && repo.status === 'indexing' && (
             <div className="h-1.5 bg-secondary rounded-full overflow-hidden mt-3">
               <div className="h-full bg-amber-400 rounded-full animate-pulse w-1/3" />
             </div>
