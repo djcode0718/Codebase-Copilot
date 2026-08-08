@@ -90,8 +90,44 @@ Query: {query}
 
 Respond with ONLY the category name: CODE_LOOKUP or ARCHITECTURAL"""
 
+_GENERAL_OOS_PHRASES = {
+    "do you like",
+    "what do you like",
+    "what is your favorite",
+    "what's your favorite",
+    "which do you prefer",
+    "do you prefer",
+    "tell me a joke",
+    "how are you",
+    "who are you",
+    "what is the weather",
+    "what's the weather",
+}
+
 
 import re
+
+
+def is_general_knowledge_or_preference_query(query: str) -> bool:
+    """Detect clearly out-of-scope small-talk, personal preference, or GK asks.
+
+    This keeps broad repository architecture questions working while short-circuiting
+    prompts that should not route into codebase persona responses.
+    """
+    text = (query or "").strip().lower()
+    if not text:
+        return False
+    if any(phrase in text for phrase in _GENERAL_OOS_PHRASES):
+        return True
+
+    # Prefer strict phrase matches first; keep lightweight regexes minimal.
+    if re.match(r"^(do|did|can)\s+you\s+(like|prefer)\b", text):
+        return True
+    if re.match(r"^what\s+is\s+your\s+(favorite|favourite)\b", text):
+        return True
+    if re.match(r"^(who\s+won|capital\s+of|what\s+is\s+the\s+capital\s+of)\b", text):
+        return True
+    return False
 
 def _is_relationship_query(query: str) -> bool:
     q = query.lower()

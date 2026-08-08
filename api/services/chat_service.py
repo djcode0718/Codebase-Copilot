@@ -23,7 +23,7 @@ from llama_index.core import Settings
 from llama_index.core.memory import ChatMemoryBuffer
 
 from app.llm.llm_client import configure_llamaindex_settings
-from app.retrieval.query_router import QueryMode
+from app.retrieval.query_router import QueryMode, is_general_knowledge_or_preference_query
 from app.config import (
     USE_COLBERT,
     TOP_K_CHUNKS,
@@ -727,6 +727,16 @@ async def stream_chat_response(
         t_retrieval_ms = prep["t_retrieval_ms"]
         full_prompt = prep["full_prompt"]
         query_mode_value = query_mode.value
+
+        if is_general_knowledge_or_preference_query(query) or is_general_knowledge_or_preference_query(resolved_query):
+            for evt in _build_no_match_events(
+                t_start=t_start,
+                retrieved_files=retrieved_files,
+                t_retrieval_ms=t_retrieval_ms,
+                query_mode_value=query_mode_value,
+            ):
+                yield evt
+            return
 
         top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
         # No-match guard: only applied for CODE_LOOKUP mode.

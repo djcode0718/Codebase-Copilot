@@ -33,7 +33,7 @@ from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.retrievers.bm25 import BM25Retriever
 
 from app.indexing.index_builder import load_vector_index, build_bm25_retriever
-from app.retrieval.query_router import classify_query, QueryMode
+from app.retrieval.query_router import classify_query, QueryMode, is_general_knowledge_or_preference_query
 from app.retrieval.reranker import rerank_with_colbert
 from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
 from app.ingestion.file_filter import filter_files
@@ -42,6 +42,11 @@ from app.config import INDEX_DIR, REPOS_DIR, TOP_K_CHUNKS, TOP_K_RERANK
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_NO_MATCH_CODE_LOOKUP_RESPONSE = (
+    "I couldn't find that in the retrieved code. "
+    "Try rephrasing or asking about a specific file or function."
+)
 
 
 _RESOLVE_QUERY_PROMPT = """Given a conversation history between a User and an Assistant, and a new follow-up question from the User, rewrite the follow-up question into a clear, self-contained standalone question.
@@ -253,6 +258,12 @@ def handle_user_query(
     resolved_query = resolve_ambiguous_query(query, memory)
     if resolved_query != query:
         logger.info(f"Resolved context-aware query: '{resolved_query}'")
+
+    if is_general_knowledge_or_preference_query(query) or is_general_knowledge_or_preference_query(resolved_query):
+        from llama_index.core.base.llms.types import ChatMessage
+        memory.put(ChatMessage(role="user", content=query))
+        memory.put(ChatMessage(role="assistant", content=_NO_MATCH_CODE_LOOKUP_RESPONSE))
+        return _NO_MATCH_CODE_LOOKUP_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
 
     # ── Route query ────────────────────────────────────────────────────────
     query_mode = classify_query(resolved_query)
