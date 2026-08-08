@@ -1414,19 +1414,9 @@ def get_health_history(
 
             offset += page_size
 
-        # Keep the latest persisted run per UTC date for stable day-wise trends.
-        by_day: Dict[str, Dict[str, Any]] = {}
-        for row in rows:
-            created_at = row.get("created_at")
-            if not created_at:
-                continue
-            day_key = str(created_at)[:10]
-            current = by_day.get(day_key)
-            if not current or str(created_at) > str(current.get("created_at") or ""):
-                by_day[day_key] = row
-
-        ordered = sorted(by_day.values(), key=lambda r: str(r.get("created_at") or ""), reverse=True)
-        return ordered[:limit]
+        ordered = sorted(rows, key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        # Return a wider analysis window so frontend can group by user-local date.
+        return ordered[: max(limit, 100)]
     except Exception as e:
         if _is_missing_health_table_error(e):
             return []
