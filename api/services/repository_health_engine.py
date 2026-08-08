@@ -1204,6 +1204,9 @@ class RepositoryHealthEngine:
             previous_scores,
         )
         overall_score = self._aggregate_score(category_results)
+        if previous_scores:
+            previous_overall = int(round(sum(previous_scores.values()) / max(1, len(previous_scores))))
+            trend_delta = overall_score - previous_overall
         grade = self._grade_for_score(overall_score)
         status = self._status_for_score(overall_score)
         recommendations = self.recommendation_engine.generate(category_results)

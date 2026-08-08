@@ -106,13 +106,6 @@ function localDayKey(value: string): string {
   return `${year}-${month}-${day}`;
 }
 
-function localDayKeyFromDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function isSameLocalDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
@@ -248,24 +241,15 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     );
     if (orderedByDay.length === 0) return [];
 
-    let carryScore = orderedByDay[0].score;
-    const result: { name: string; score: number }[] = [];
-    for (let day = new Date(since); day <= now; day.setDate(day.getDate() + 1)) {
-      const dayKey = localDayKeyFromDate(day);
-      const exact = pointsByDay.get(dayKey);
-      if (exact) {
-        carryScore = exact.score;
-      }
-
-      result.push({
-        name: isSameLocalDay(day, now)
+    return orderedByDay.map((point) => {
+      const date = new Date(point.created_at);
+      return {
+        name: isSameLocalDay(date, now)
           ? 'Today'
-          : day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        score: carryScore,
-      });
-    }
-
-    return result;
+          : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        score: point.score,
+      };
+    });
   }, [normalizedHistoryPoints]);
 
   // Compute trend from the immediately previous analysis when available.

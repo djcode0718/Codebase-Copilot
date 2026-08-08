@@ -61,12 +61,22 @@ function csvToList(csv: string): string[] {
 }
 
 function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null, repoHealthScore: number | null): number | null {
+  void selectedFile;
   if (typeof repoHealthScore === 'number') return repoHealthScore;
-  if (!selectedFile) return null;
-  if (selectedFile.health === 'critical') return 42;
-  if (selectedFile.health === 'review_suggested') return 67;
-  if (selectedFile.health === 'healthy') return 84;
   return null;
+}
+
+function readCachedRepoHealthScore(repoId: string): number | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`codebase:health-latest:${repoId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { top_level?: { repository_health?: unknown } };
+    const value = parsed?.top_level?.repository_health;
+    return typeof value === 'number' ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 interface FileActionRibbonProps {
@@ -599,7 +609,7 @@ export default function RepositoryReviewPage() {
   const [ribbonHistory, setRibbonHistory] = useState('');
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
-  const [repoHealthScore, setRepoHealthScore] = useState<number | null>(null);
+  const [repoHealthScore, setRepoHealthScore] = useState<number | null>(() => readCachedRepoHealthScore(repoId));
 
   const loadHistory = useCallback(async (t: string) => {
     const response = await listReviews(t, repoId);
@@ -665,11 +675,11 @@ export default function RepositoryReviewPage() {
       try {
         const latest = await getLatestRepositoryHealth(token, repoId);
         if (!cancelled) {
-          setRepoHealthScore(latest.latest?.top_level?.repository_health ?? null);
+          setRepoHealthScore(latest.latest?.top_level?.repository_health ?? readCachedRepoHealthScore(repoId));
         }
       } catch {
         if (!cancelled) {
-          setRepoHealthScore(null);
+          setRepoHealthScore(readCachedRepoHealthScore(repoId));
         }
       }
     }
