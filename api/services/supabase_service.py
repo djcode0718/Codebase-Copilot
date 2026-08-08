@@ -1397,18 +1397,36 @@ def get_health_history(
         return []
     try:
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        fetch_limit = max(limit * 6, days * 4, 120)
-        result = (
-            supabase.table("repository_health_runs")
-            .select("*")
-            .eq("repo_id", repo_id)
-            .eq("user_id", user_id)
-            .gte("created_at", since.isoformat())
-            .order("created_at", desc=True)
-            .limit(fetch_limit)
-            .execute()
-        )
-        rows = result.data or []
+        # Page through runs so heavy same-day reruns do not crowd out older dates.
+        page_size = 200
+        max_rows = 5000
+        offset = 0
+        rows: List[Dict[str, Any]] = []
+
+        while offset < max_rows:
+            page = (
+                supabase.table("repository_health_runs")
+                .select("*")
+                .eq("repo_id", repo_id)
+                .eq("user_id", user_id)
+                .gte("created_at", since.isoformat())
+                .order("created_at", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            page_rows = page.data or []
+            if not page_rows:
+                break
+
+            rows.extend(page_rows)
+
+            # Stop early once we likely have enough rows to cover distinct days.
+            if len(page_rows) < page_size:
+                break
+            if len(rows) >= max(limit * 8, days * 6, 300):
+                break
+
+            offset += page_size
 
         # Keep the latest persisted run per UTC date for stable day-wise trends.
         by_day: Dict[str, Dict[str, Any]] = {}

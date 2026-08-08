@@ -99,16 +99,16 @@ function severityBadge(score: number): string {
   return 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30';
 }
 
-function localDayKey(value: string): string {
+function utcDayKey(value: string): string {
   const date = new Date(value);
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
+  const year = date.getUTCFullYear();
+  const month = `${date.getUTCMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getUTCDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
-function isSameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+function isSameUtcDay(a: Date, b: Date): boolean {
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
 }
 
 export default function RepositoryHealthDashboard({ repoId, token, disabled, onRunChange }: RepositoryHealthDashboardProps) {
@@ -230,7 +230,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     for (const point of normalizedHistoryPoints) {
       const createdAt = new Date(point.created_at);
       if (createdAt < since) continue;
-      const key = localDayKey(point.created_at);
+      const key = utcDayKey(point.created_at);
       const current = pointsByDay.get(key);
       if (!current || new Date(point.created_at).getTime() >= new Date(current.created_at).getTime()) {
         pointsByDay.set(key, { created_at: point.created_at, score: point.repository_health });
@@ -246,9 +246,9 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       const date = new Date(point.created_at);
       return {
         createdAt: point.created_at,
-        name: isSameLocalDay(date, now)
+        name: isSameUtcDay(date, now)
           ? 'Today'
-          : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }),
         score: point.score,
       };
     });
