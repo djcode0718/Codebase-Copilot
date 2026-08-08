@@ -35,6 +35,7 @@ import type { Chat, Repo } from '@/lib/types';
 const STORAGE_KEY = 'codebase-copilot.sidebar.collapsed';
 const ACTIVE_REPO_STORAGE_KEY = 'codebase-copilot.sidebar.active-repo-id';
 const HISTORY_VISIBILITY_STORAGE_KEY = 'codebase-copilot.sidebar.history-visibility.v1';
+const SIDEBAR_CHAT_VISIBLE_ROWS = 6;
 
 function extractRepoIdFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/repo\/([^/]+)/);
@@ -61,6 +62,16 @@ function promoteRepoToTop(sortedRepos: Repo[], activeRepoId: string | null): Rep
   const [activeRepo] = next.splice(idx, 1);
   next.unshift(activeRepo);
   return next;
+}
+
+function chatSortTimestamp(chat: Chat): number {
+  const value = chat.last_message_at || chat.updated_at || chat.created_at || '';
+  const ts = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function sortChatsByLatest(chats: Chat[]): Chat[] {
+  return [...chats].sort((a, b) => chatSortTimestamp(b) - chatSortTimestamp(a));
 }
 
 interface SidebarProps {
@@ -273,7 +284,12 @@ function RepoConversationsSection(props: RepoConversationsProps) {
             </button>
           )}
 
-          <div className="space-y-0.5 pb-1">
+          <div
+            className={cn(
+              'space-y-0.5 pb-1',
+              visibleChats.length > SIDEBAR_CHAT_VISIBLE_ROWS && 'max-h-48 overflow-y-auto pr-1 scrollbar-thin'
+            )}
+          >
             {loadingChatRepoId === repo.id ? (
               <div className="px-2 py-1 text-[11px] text-sidebar-foreground/50">Loading…</div>
             ) : visibleChats.length === 0 ? (
@@ -281,7 +297,7 @@ function RepoConversationsSection(props: RepoConversationsProps) {
                 {query ? 'No matches' : 'No conversations yet'}
               </div>
             ) : (
-              visibleChats.slice(0, 8).map((chat) => {
+              visibleChats.map((chat) => {
                 const isRenaming = renamingChatId === chat.id;
                 return (
                   <div key={chat.id}
@@ -594,9 +610,45 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
     const t = token ?? authToken;
     if (!t) return;
     const sessions = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 20 });
-    setRepoChats((prev) => ({ ...prev, [repoId]: sessions }));
+    setRepoChats((prev) => ({ ...prev, [repoId]: sortChatsByLatest(sessions) }));
     return sessions;
   }
+
+  useEffect(() => {
+    function handleChatSessionCreated(e: Event) {
+      const detail = (e as CustomEvent<{ repoId: string; session: Chat }>).detail;
+      if (!detail?.repoId || !detail?.session) return;
+
+      setRepoChats((prev) => {
+        const existing = prev[detail.repoId] ?? [];
+        const withoutDup = existing.filter((chat) => chat.id !== detail.session.id);
+        return {
+          ...prev,
+          [detail.repoId]: sortChatsByLatest([detail.session, ...withoutDup]),
+        };
+      });
+
+      void fetchChats(detail.repoId);
+    }
+
+    function handleChatSessionsUpdated(e: Event) {
+      const detail = (e as CustomEvent<{ repoId: string; sessions: Chat[] }>).detail;
+      if (!detail?.repoId || !Array.isArray(detail.sessions)) return;
+      setRepoChats((prev) => ({
+        ...prev,
+        [detail.repoId]: sortChatsByLatest(detail.sessions),
+      }));
+    }
+
+    window.addEventListener('codebase:chat-session-created', handleChatSessionCreated as EventListener);
+    window.addEventListener('codebase:chat-sessions-updated', handleChatSessionsUpdated as EventListener);
+    return () => {
+      window.removeEventListener('codebase:chat-session-created', handleChatSessionCreated as EventListener);
+      window.removeEventListener('codebase:chat-sessions-updated', handleChatSessionsUpdated as EventListener);
+    };
+    // We intentionally rely on latest closure values for fetchChats/auth token.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken]);
 
   // Auto-load chats for all ready repos
   useEffect(() => {

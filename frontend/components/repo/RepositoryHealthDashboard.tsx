@@ -98,6 +98,25 @@ function severityBadge(score: number): string {
   return 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30';
 }
 
+function localDayKey(value: string): string {
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function localDayKeyFromDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function isSameLocalDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
 export default function RepositoryHealthDashboard({ repoId, token, disabled, onRunChange }: RepositoryHealthDashboardProps) {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
@@ -168,96 +187,117 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     return run.findings.filter((f) => f.category === selected.category);
   }, [run, selected]);
 
-  const chartData = useMemo(() => {
-    const historyPoints = history
-      ? [...history.points].sort(
-          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-        )
-      : [];
+  const priorityImprovements = useMemo(() => {
+    return categories
+      .filter((c) => c.score < 100)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 3)
+      .map((c) => `${c.category} (${c.score})`);
+  }, [categories]);
 
-    // Always include the current run as the latest point so the chart
-    // reflects the most-recent analysis even before DB propagation.
-    if (run) {
-      const alreadyPresent = historyPoints.some((p) => p.run_id === run.run_id);
-      if (!alreadyPresent) {
-        historyPoints.push({
-          run_id: run.run_id,
-          created_at: run.generated_at ?? new Date().toISOString(),
-          repository_health: run.top_level.repository_health,
-          grade: run.top_level.grade,
-          category_scores: {},
-        });
+  const normalizedHistoryPoints = useMemo(() => {
+    const map = new Map<string, { run_id: string; created_at: string; repository_health: number; category_scores: Record<string, number> }>();
+
+    for (const point of history?.points ?? []) {
+      map.set(point.run_id, {
+        run_id: point.run_id,
+        created_at: point.created_at,
+        repository_health: point.repository_health,
+        category_scores: point.category_scores ?? {},
+      });
+    }
+
+    if (run && !map.has(run.run_id)) {
+      const categoryScores: Record<string, number> = {};
+      for (const category of run.categories) {
+        categoryScores[category.category] = category.score;
       }
+      map.set(run.run_id, {
+        run_id: run.run_id,
+        created_at: run.generated_at ?? new Date().toISOString(),
+        repository_health: run.top_level.repository_health,
+        category_scores: categoryScores,
+      });
     }
 
-    if (historyPoints.length === 0) return [];
-
-    // Build a 30-day daily timeline by carrying forward the most recent score
-    const now = new Date();
-    const thirtyDaysAgo = new Date(now);
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-
-    // Map each history point to its date key (YYYY-MM-DD)
-    const dateToScore = new Map<string, number>();
-    for (const point of historyPoints) {
-      const dateKey = new Date(point.created_at).toISOString().slice(0, 10);
-      dateToScore.set(dateKey, point.repository_health);
-    }
-
-    const dailyPoints: { name: string; score: number }[] = [];
-    // Start with earliest known score as carry-forward seed
-    let lastScore = historyPoints[0].repository_health;
-
-    for (let d = new Date(thirtyDaysAgo); d <= now; d.setDate(d.getDate() + 1)) {
-      const dateKey = d.toISOString().slice(0, 10);
-      const todayKey = now.toISOString().slice(0, 10);
-
-      if (dateToScore.has(dateKey)) {
-        lastScore = dateToScore.get(dateKey)!;
-      }
-
-      // Only include points from the first actual data point onward
-      const firstDataDate = new Date(historyPoints[0].created_at).toISOString().slice(0, 10);
-      if (dateKey < firstDataDate) continue;
-
-      const label = dateKey === todayKey
-        ? 'Today'
-        : new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-      dailyPoints.push({ name: label, score: lastScore });
-    }
-
-    return dailyPoints;
+    return [...map.values()]
+      .filter((point) => Number.isFinite(new Date(point.created_at).getTime()))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [history, run]);
 
-  // Compute effective trend: use backend trend if non-zero, otherwise derive from chart history
-  const effectiveTrend = useMemo(() => {
-    if (run && run.top_level.trend !== 0) return run.top_level.trend;
-    if (chartData.length >= 2) {
-      return chartData[chartData.length - 1].score - chartData[0].score;
-    }
-    return 0;
-  }, [run, chartData]);
+  const chartData = useMemo(() => {
+    if (normalizedHistoryPoints.length === 0) return [];
 
-  // Compute per-category effective trends from history
-  const categoryEffectiveTrends = useMemo(() => {
-    const trends = new Map<string, number>();
-    if (!history || history.points.length < 2 || !run) return trends;
-    const sorted = [...history.points].sort(
+    const now = new Date();
+    const since = new Date(now);
+    since.setDate(since.getDate() - 29);
+
+    const pointsByDay = new Map<string, { created_at: string; score: number }>();
+    for (const point of normalizedHistoryPoints) {
+      const createdAt = new Date(point.created_at);
+      if (createdAt < since) continue;
+      const key = localDayKey(point.created_at);
+      const current = pointsByDay.get(key);
+      if (!current || new Date(point.created_at).getTime() >= new Date(current.created_at).getTime()) {
+        pointsByDay.set(key, { created_at: point.created_at, score: point.repository_health });
+      }
+    }
+
+    const orderedByDay = [...pointsByDay.values()].sort(
       (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
-    const earliest = sorted[0];
-    const latest = sorted[sorted.length - 1];
-    if (!earliest.category_scores || !latest.category_scores) return trends;
+    if (orderedByDay.length === 0) return [];
+
+    let carryScore = orderedByDay[0].score;
+    const result: { name: string; score: number }[] = [];
+    for (let day = new Date(since); day <= now; day.setDate(day.getDate() + 1)) {
+      const dayKey = localDayKeyFromDate(day);
+      const exact = pointsByDay.get(dayKey);
+      if (exact) {
+        carryScore = exact.score;
+      }
+
+      result.push({
+        name: isSameLocalDay(day, now)
+          ? 'Today'
+          : day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        score: carryScore,
+      });
+    }
+
+    return result;
+  }, [normalizedHistoryPoints]);
+
+  // Compute trend from the immediately previous analysis when available.
+  const effectiveTrend = useMemo<number | null>(() => {
+    if (normalizedHistoryPoints.length >= 2) {
+      const previous = normalizedHistoryPoints[normalizedHistoryPoints.length - 2];
+      const latest = normalizedHistoryPoints[normalizedHistoryPoints.length - 1];
+      return latest.repository_health - previous.repository_health;
+    }
+    if ((run?.top_level.trend ?? 0) !== 0) {
+      return run?.top_level.trend ?? null;
+    }
+    return null;
+  }, [normalizedHistoryPoints, run]);
+
+  // Compute per-category trends from latest vs immediately previous run.
+  const categoryEffectiveTrends = useMemo(() => {
+    const trends = new Map<HealthCategoryName, number>();
+    if (normalizedHistoryPoints.length < 2) return trends;
+
+    const previous = normalizedHistoryPoints[normalizedHistoryPoints.length - 2];
+    const latest = normalizedHistoryPoints[normalizedHistoryPoints.length - 1];
+
     for (const cat of CATEGORY_ORDER) {
-      const oldScore = earliest.category_scores[cat];
+      const oldScore = previous.category_scores[cat];
       const newScore = latest.category_scores[cat];
       if (oldScore != null && newScore != null) {
         trends.set(cat, newScore - oldScore);
       }
     }
     return trends;
-  }, [history, run]);
+  }, [normalizedHistoryPoints]);
 
   async function handleRunAnalysis() {
     if (!token || disabled || running) return;
@@ -327,9 +367,9 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1"><Clock3 size={12} /> {run.top_level.status}</span>
-              <span className={cn('inline-flex items-center gap-1', trendTone(effectiveTrend))}>
-                {effectiveTrend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                {effectiveTrend >= 0 ? '+' : ''}{effectiveTrend}
+              <span className={cn('inline-flex items-center gap-1', trendTone(effectiveTrend ?? 0))}>
+                {effectiveTrend == null ? null : effectiveTrend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                {effectiveTrend == null ? '—' : `${effectiveTrend >= 0 ? '+' : ''}${effectiveTrend}`}
               </span>
               <span>Size: {run.top_level.repository_size}</span>
               <span>Lang: {run.top_level.language_detection.join(', ') || 'Auto'}</span>
@@ -348,12 +388,12 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
               <div>
                 <p className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground">Priority improvements</p>
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  {run.weaknesses.slice(0, 3).map((item) => (
+                  {priorityImprovements.map((item) => (
                     <span key={item} className="inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-300">
                       {item}
                     </span>
                   ))}
-                  {run.weaknesses.length === 0 && <span className="text-[11px] text-muted-foreground">No critical weak areas detected.</span>}
+                  {priorityImprovements.length === 0 && <span className="text-[11px] text-muted-foreground">No improvement areas below 100.</span>}
                 </div>
               </div>
             </div>

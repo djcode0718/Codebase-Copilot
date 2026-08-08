@@ -1359,7 +1359,8 @@ class RepositoryHealthEngine:
         recommendations: Sequence[Dict[str, Any]],
     ) -> Dict[str, Any]:
         top_categories = sorted(categories, key=lambda c: c.score, reverse=True)[:3]
-        weak_categories = sorted(categories, key=lambda c: c.score)[:3]
+        weak_candidates = [c for c in categories if c.score < 100]
+        weak_categories = sorted(weak_candidates, key=lambda c: c.score)[:3]
 
         critical = [f.title for f in findings if f.finding_type == "problem" and f.severity in {"critical", "high"}][:8]
         arch_risks = [f.title for f in findings if f.category == "Architecture" and f.finding_type == "problem"][:5]

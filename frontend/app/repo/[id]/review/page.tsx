@@ -31,6 +31,7 @@ import {
   generateExplorerFix,
   getExplorerFile,
   getExplorerHistory,
+  getLatestRepositoryHealth,
   getReview,
   listReviews,
   runExplorerFileReview,
@@ -59,18 +60,19 @@ function csvToList(csv: string): string[] {
   return csv.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null): number {
-  if (!selectedFile) return 74;
+function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null, repoHealthScore: number | null): number | null {
+  if (typeof repoHealthScore === 'number') return repoHealthScore;
+  if (!selectedFile) return null;
   if (selectedFile.health === 'critical') return 42;
   if (selectedFile.health === 'review_suggested') return 67;
   if (selectedFile.health === 'healthy') return 84;
-  return 74;
+  return null;
 }
 
 interface FileActionRibbonProps {
   selectedFilePath: string;
   selectedFile: ExplorerFileDetails | null;
-  ribbonHealthScore: number;
+  ribbonHealthScore: number | null;
   runRibbonReview: (type: string) => Promise<void>;
   runRibbonGenerateTests: () => Promise<void>;
   runRibbonTests: () => Promise<void>;
@@ -118,7 +120,7 @@ function FileActionRibbon({
         </div>
         <div className="text-right">
           <p className="text-[11px] text-muted-foreground">Repository Health</p>
-          <p className="text-lg font-semibold">{ribbonHealthScore}</p>
+          <p className="text-lg font-semibold">{typeof ribbonHealthScore === 'number' ? ribbonHealthScore : '—'}</p>
         </div>
       </div>
 
@@ -597,6 +599,7 @@ export default function RepositoryReviewPage() {
   const [ribbonHistory, setRibbonHistory] = useState('');
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
+  const [repoHealthScore, setRepoHealthScore] = useState<number | null>(null);
 
   const loadHistory = useCallback(async (t: string) => {
     const response = await listReviews(t, repoId);
@@ -654,6 +657,29 @@ export default function RepositoryReviewPage() {
     };
   }, [token, repoId, selectedFilePath]);
 
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+
+    async function loadRepoHealthScore() {
+      try {
+        const latest = await getLatestRepositoryHealth(token, repoId);
+        if (!cancelled) {
+          setRepoHealthScore(latest.latest?.top_level?.repository_health ?? null);
+        }
+      } catch {
+        if (!cancelled) {
+          setRepoHealthScore(null);
+        }
+      }
+    }
+
+    void loadRepoHealthScore();
+    return () => {
+      cancelled = true;
+    };
+  }, [repoId, token]);
+
 
   const runReview = useCallback(async (runner: () => Promise<ReviewRun>) => {
     if (!token) return;
@@ -674,8 +700,8 @@ export default function RepositoryReviewPage() {
   const findings = useMemo(() => selectedReview?.findings ?? [], [selectedReview]);
 
   const ribbonHealthScore = useMemo(() => {
-    return computeRibbonHealthScore(selectedFile);
-  }, [selectedFile]);
+    return computeRibbonHealthScore(selectedFile, repoHealthScore);
+  }, [selectedFile, repoHealthScore]);
   const {
     runRibbonReview,
     runRibbonGenerateTests,
