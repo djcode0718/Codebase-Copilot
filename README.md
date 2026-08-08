@@ -30,6 +30,7 @@
 | **Maintainability refactor** | Shared router access guard (`api/routers/_repo_access.py`) removes duplicated ownership checks across evaluation and health routers; frontend explorer/sidebar/indexing stream were split into smaller units for readability with no API or route contract changes |
 | **Branch Workspace** | Added branch-aware repository workspace with searchable branch selector, branch status, checkout/pull/default-branch actions, and branch comparison/merge-readiness APIs (`/api/repo/{repo_id}/branches/*`) while preserving existing workflows |
 | **Authentication UX** | Enterprise-grade Sign In / Sign Up refresh with GitHub-first OAuth, Google/Microsoft OAuth options, premium guest-mode entry, caps-lock + inline validation feedback, feature/trust previews, and first-run Instant Workspace onboarding while preserving existing auth/session flows |
+| **Chat thread actions** | Message-level controls now mirror ChatGPT-style workflows: user messages support Copy + Edit, assistant messages support Copy + Like/Dislike + Try Again; share action removed from thread bubbles |
 
 The system combines:
 

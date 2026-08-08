@@ -6,7 +6,7 @@
  * response sections, inline grounding summary, and expandable inspector data.
  */
 import { motion } from 'framer-motion';
-import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2, RefreshCcw, Pencil } from 'lucide-react';
+import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2, RefreshCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useState, lazy, Suspense } from 'react';
 import { cn } from '@/lib/utils';
 import type { Message, QueryMode } from '@/lib/types';
@@ -301,6 +301,7 @@ function renderInline(text: string): React.ReactNode {
 
 export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
+  const [reaction, setReaction] = useState<'up' | 'down' | null>(null);
   const isUser = message.role === 'user';
 
   const intelParsed = !isUser ? parseIntelligenceSections(message.content) : null;
@@ -409,28 +410,28 @@ export default function MessageBubble({ message, onInspect, isInspected, index, 
         )}
 
         {/* Actions */}
-        <div className={cn('flex items-center gap-3 text-xs text-muted-foreground', isUser ? 'justify-end' : 'justify-start')}>
+        <div className={cn('flex items-center gap-1 text-xs text-muted-foreground', isUser ? 'justify-end' : 'justify-start')}>
+          {isUser && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={actionsDisabled}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors cursor-pointer hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              title={copied ? 'Copied' : 'Copy question'}
+            >
+              {copied ? <Check size={16} className="text-brand" /> : <Copy size={16} />}
+            </button>
+          )}
+
           {isUser && onEdit && (
             <button
               type="button"
               onClick={onEdit}
               disabled={actionsDisabled}
-              className="flex items-center gap-1 transition-colors cursor-pointer hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors cursor-pointer hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              title="Edit question"
             >
-              <Pencil size={11} />
-              Edit
-            </button>
-          )}
-
-          {!isUser && onTryAgain && (
-            <button
-              type="button"
-              onClick={onTryAgain}
-              disabled={actionsDisabled}
-              className="flex items-center gap-1 transition-colors cursor-pointer hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <RefreshCcw size={11} />
-              Try again
+              <Pencil size={16} />
             </button>
           )}
 
@@ -439,10 +440,45 @@ export default function MessageBubble({ message, onInspect, isInspected, index, 
               type="button"
               onClick={handleCopy}
               disabled={actionsDisabled}
-              className="flex items-center gap-1 transition-colors cursor-pointer hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors cursor-pointer hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              title={copied ? 'Copied' : 'Copy answer'}
             >
-              {copied ? <Check size={11} className="text-brand" /> : <Copy size={11} />}
-              {copied ? 'Copied' : 'Copy'}
+              {copied ? <Check size={16} className="text-brand" /> : <Copy size={16} />}
+            </button>
+          )}
+
+          {!isUser && (
+            <>
+              <button
+                type="button"
+                onClick={() => setReaction((prev) => (prev === 'up' ? null : 'up'))}
+                disabled={actionsDisabled}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors cursor-pointer hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                title="Like"
+              >
+                <ThumbsUp size={16} className={reaction === 'up' ? 'text-brand' : undefined} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setReaction((prev) => (prev === 'down' ? null : 'down'))}
+                disabled={actionsDisabled}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors cursor-pointer hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                title="Dislike"
+              >
+                <ThumbsDown size={16} className={reaction === 'down' ? 'text-destructive' : undefined} />
+              </button>
+            </>
+          )}
+
+          {!isUser && onTryAgain && (
+            <button
+              type="button"
+              onClick={onTryAgain}
+              disabled={actionsDisabled}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors cursor-pointer hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              title="Try again"
+            >
+              <RefreshCcw size={16} />
             </button>
           )}
         </div>
