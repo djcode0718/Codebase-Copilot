@@ -91,6 +91,10 @@ Query: {query}
 Respond with ONLY the category name: CODE_LOOKUP or ARCHITECTURAL"""
 
 _GENERAL_OOS_PHRASES = {
+    "share me good movies list",
+    "good movies list",
+    "movie list",
+    "movie recommendations",
     "do you like",
     "what do you like",
     "what is your favorite",
@@ -102,6 +106,22 @@ _GENERAL_OOS_PHRASES = {
     "who are you",
     "what is the weather",
     "what's the weather",
+}
+
+_ALWAYS_OOS_PHRASES = {
+    "tell me a joke",
+    "how are you",
+    "who are you",
+    "what is the weather",
+    "what's the weather",
+}
+
+# Keep OOS heuristics from grabbing legitimate repository questions.
+_REPO_SCOPE_HINTS = {
+    "repo", "repository", "codebase", "project", "this project", "this repo",
+    "file", "files", "function", "functions", "class", "classes", "module", "modules",
+    "method", "methods", "api", "endpoint", "service", "component", "architecture",
+    "implementation", "bug", "fix", "frontend", "backend", "pipeline", "rag", "llm",
 }
 
 
@@ -117,15 +137,34 @@ def is_general_knowledge_or_preference_query(query: str) -> bool:
     text = (query or "").strip().lower()
     if not text:
         return False
-    if any(phrase in text for phrase in _GENERAL_OOS_PHRASES):
+
+    has_repo_scope = any(hint in text for hint in _REPO_SCOPE_HINTS)
+
+    if any(phrase in text for phrase in _ALWAYS_OOS_PHRASES):
         return True
 
+    if any(phrase in text for phrase in _GENERAL_OOS_PHRASES) and not has_repo_scope:
+        return True
+
+    # Catch generic recommendation/list asks (movies/books/music/etc.).
+    if not has_repo_scope:
+        has_oos_topic = re.search(
+            r"\b(movie|movies|film|films|book|books|music|song|songs|anime|series|shows?)\b",
+            text,
+        )
+        has_oos_intent = re.search(
+            r"\b(share|suggest|recommend|recommendation|recommendations|give|list|top|best|good)\b",
+            text,
+        )
+        if has_oos_topic and has_oos_intent:
+            return True
+
     # Prefer strict phrase matches first; keep lightweight regexes minimal.
-    if re.match(r"^(do|did|can)\s+you\s+(like|prefer)\b", text):
+    if re.match(r"^(do|did|can)\s+you\s+(like|prefer)\b", text) and not has_repo_scope:
         return True
-    if re.match(r"^what\s+is\s+your\s+(favorite|favourite)\b", text):
+    if re.match(r"^what\s+is\s+your\s+(favorite|favourite)\b", text) and not has_repo_scope:
         return True
-    if re.match(r"^(who\s+won|capital\s+of|what\s+is\s+the\s+capital\s+of)\b", text):
+    if re.match(r"^(who\s+won|capital\s+of|what\s+is\s+the\s+capital\s+of)\b", text) and not has_repo_scope:
         return True
     return False
 

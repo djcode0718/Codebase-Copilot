@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils';
 import { getRepoWorkspaceHref, isRepoWorkspaceReady } from '@/lib/repo-routing';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
-import { listChatSessions, updateChatSession, deleteChat, deleteAllChats, exportRepositoryMemory } from '@/lib/api';
+import { ApiRequestError, listChatSessions, updateChatSession, deleteChat, deleteAllChats, exportRepositoryMemory } from '@/lib/api';
 import type { Chat, Repo } from '@/lib/types';
 
 const STORAGE_KEY = 'codebase-copilot.sidebar.collapsed';
@@ -72,6 +72,16 @@ function chatSortTimestamp(chat: Chat): number {
 
 function sortChatsByLatest(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => chatSortTimestamp(b) - chatSortTimestamp(a));
+}
+
+function isExpiredAuthError(err: unknown): boolean {
+  if (err instanceof ApiRequestError) {
+    return err.status === 401 && /token expired|sign in again/i.test(err.detail || err.message);
+  }
+  if (err instanceof Error) {
+    return /token expired|sign in again/i.test(err.message);
+  }
+  return false;
 }
 
 interface SidebarProps {
@@ -538,6 +548,7 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
   const [renamingChatId,   setRenamingChatId]   = useState<string | null>(null);
   const [renameValue,      setRenameValue]      = useState('');
   const [authToken,        setAuthToken]        = useState('');
+  const authExpiredNotifiedRef = useRef(false);
   // Per-repo inline search
   const [searchOpen,   setSearchOpen]   = useState<Record<string, boolean>>({});
   const [searchQuery,  setSearchQuery]  = useState<Record<string, string>>({});
@@ -644,9 +655,22 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
   async function fetchChats(repoId: string, token?: string) {
     const t = token ?? authToken;
     if (!t) return;
-    const sessions = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 20 });
-    setRepoChats((prev) => ({ ...prev, [repoId]: sortChatsByLatest(sessions) }));
-    return sessions;
+    try {
+      const sessions = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 20 });
+      authExpiredNotifiedRef.current = false;
+      setRepoChats((prev) => ({ ...prev, [repoId]: sortChatsByLatest(sessions) }));
+      return sessions;
+    } catch (err) {
+      if (isExpiredAuthError(err)) {
+        if (!authExpiredNotifiedRef.current) {
+          authExpiredNotifiedRef.current = true;
+          toast.error('Your session has expired. Please sign in again.');
+        }
+        setRepoChats((prev) => ({ ...prev, [repoId]: [] }));
+        return [];
+      }
+      throw err;
+    }
   }
 
   useEffect(() => {
@@ -663,7 +687,7 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
         };
       });
 
-      void fetchChats(detail.repoId);
+      void fetchChats(detail.repoId).catch(() => undefined);
     }
 
     function handleChatSessionsUpdated(e: Event) {

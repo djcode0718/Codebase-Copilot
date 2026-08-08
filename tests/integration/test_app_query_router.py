@@ -1,6 +1,5 @@
 ﻿"""
 tests/test_app_query_router.py
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Unit tests for app/retrieval/query_router.py
 
 Tests the two-stage classifier:
@@ -19,7 +18,13 @@ from unittest.mock import MagicMock, patch
 pytestmark = pytest.mark.slow
 pytest.importorskip("llama_index.core")
 
-from app.retrieval.query_router import classify_query, QueryMode, _CODE_KEYWORDS, _ARCHITECTURAL_KEYWORDS
+from app.retrieval.query_router import (
+    classify_query,
+    QueryMode,
+    _CODE_KEYWORDS,
+    _ARCHITECTURAL_KEYWORDS,
+    is_general_knowledge_or_preference_query,
+)
 from app.parsing.chunk_utils import chunk_text
 
 
@@ -172,6 +177,26 @@ class TestKeywordConstants:
         assert overlap == set(), f"Overlapping keywords: {overlap}"
 
 
+class TestOutOfScopeDetection:
+    @pytest.mark.parametrize("query", [
+        "share me good movies list",
+        "Can you recommend good movies?",
+        "Give me a book recommendations list",
+        "What is your favorite movie?",
+        "What is the weather today?",
+    ])
+    def test_general_knowledge_or_preference_queries_detected(self, query):
+        assert is_general_knowledge_or_preference_query(query) is True
+
+    @pytest.mark.parametrize("query", [
+        "Can you recommend improvements for this repository architecture?",
+        "What do you recommend for this project pipeline?",
+        "Show me the function that builds the API router",
+    ])
+    def test_repo_scoped_queries_not_marked_oos(self, query):
+        assert is_general_knowledge_or_preference_query(query) is False
+
+
 # â”€â”€ chunk_utils: chunk_text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestChunkText:
@@ -267,4 +292,3 @@ class MyClass:
         chunks = chunk_text(code, max_chunk_size=200, overlap=20)
         assert len(chunks) > 0
         assert all(isinstance(c, str) for c in chunks)
-

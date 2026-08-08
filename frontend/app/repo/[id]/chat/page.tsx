@@ -17,6 +17,7 @@ import ExportMenu from '@/components/repo/ExportMenu';
 import { useChatStream, type StreamedResponse } from '@/hooks/useChatStream';
 import { createClient } from '@/lib/supabase/client';
 import {
+  ApiRequestError,
   createQuickAskSession,
   createMainSession,
   getSuggestions,
@@ -121,6 +122,16 @@ function collectReviewTargets(messages: Message[]): string[] {
     }
   }
   return orderedPaths;
+}
+
+function isExpiredAuthError(err: unknown): boolean {
+  if (err instanceof ApiRequestError) {
+    return err.status === 401 && /token expired|sign in again/i.test(err.detail || err.message);
+  }
+  if (err instanceof Error) {
+    return /token expired|sign in again/i.test(err.message);
+  }
+  return false;
 }
 
 type ConversationFilter = 'all' | 'pinned' | 'archived' | 'today' | 'week' | 'month';
@@ -1150,7 +1161,7 @@ function useMessageMutationHandlers({
               latencyLlmMs: null,
               latencyTotalMs: latestAssistant.latency_ms ?? null,
             });
-            void onAfterMessagePersisted();
+            void onAfterMessagePersisted().catch(() => undefined);
             return;
           }
           await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
@@ -1175,7 +1186,7 @@ function useMessageMutationHandlers({
       setInspectorData(buildInspectorPayloadFromMeta(pendingMetadata, fallbackAssistantMsg.content));
       setRetryPrompt(userQuery);
       toast.error('Recovered with a safe fallback answer due to empty stream content.');
-      void onAfterMessagePersisted();
+      void onAfterMessagePersisted().catch(() => undefined);
       return;
     }
 
@@ -1201,7 +1212,7 @@ function useMessageMutationHandlers({
     setInspectorData(result);
     setRetryPrompt(null);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
-    void onAfterMessagePersisted();
+    void onAfterMessagePersisted().catch(() => undefined);
   }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setRetryPrompt, setSuggestions, textareaRef, onAfterMessagePersisted]);
 
   useEffect(() => {
@@ -1249,6 +1260,7 @@ export default function ChatPage() {
   const [sessionLoading, setSessionLoading] = useState(false);
   const [repo, setRepo] = useState<Repo | null>(null);
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
+  const authExpiredNotifiedRef = useRef(false);
   const pendingAutoPromptRef = useRef<string | null>(null);
   const [autoPromptTick, setAutoPromptTick] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1278,9 +1290,22 @@ export default function ChatPage() {
   }, []);
 
   const refreshSessions = useCallback(async (t: string) => {
-    const latest = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 100 });
-    setSessions(latest);
-    window.dispatchEvent(new CustomEvent('codebase:chat-sessions-updated', { detail: { repoId, sessions: latest } }));
+    try {
+      const latest = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 100 });
+      authExpiredNotifiedRef.current = false;
+      setSessions(latest);
+      window.dispatchEvent(new CustomEvent('codebase:chat-sessions-updated', { detail: { repoId, sessions: latest } }));
+    } catch (err) {
+      if (isExpiredAuthError(err)) {
+        if (!authExpiredNotifiedRef.current) {
+          authExpiredNotifiedRef.current = true;
+          toast.error('Your session has expired. Please sign in again.');
+        }
+        setSessions([]);
+        return;
+      }
+      throw err;
+    }
   }, [repoId]);
   const handleCreateQuickAsk = useCallback(async () => {
     if (!token) return;
@@ -1333,7 +1358,11 @@ export default function ChatPage() {
   }, [loadSession, sessionLoading, streaming, token]);
   const handleSessionsChanged = useCallback(async () => {
     if (!token) return;
-    await refreshSessions(token);
+    try {
+      await refreshSessions(token);
+    } catch (err) {
+      console.error('Failed to refresh chat sessions:', err);
+    }
   }, [refreshSessions, token]);
   useChatBootstrapEffect({
     repoId,

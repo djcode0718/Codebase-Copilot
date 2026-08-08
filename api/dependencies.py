@@ -23,6 +23,16 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_AUTH_ERROR_KEY = "_auth_error"
+
+
+def _classify_auth_error(exc: Exception) -> str:
+    """Map auth exceptions to coarse error types consumed by get_current_user."""
+    text = str(exc).lower()
+    if "token is expired" in text or "expired" in text:
+        return "expired"
+    return "invalid"
+
 # ── Supabase client (module-level singleton) ──────────────────────────────────
 # Uses the SERVICE ROLE key — never expose this in the frontend.
 # Set in .env:
@@ -76,6 +86,7 @@ async def get_authenticated_user(
             return _to_user_payload(response.user)
     except Exception as e:
         logger.warning(f"Auth verification failed: {e}")
+        return {_AUTH_ERROR_KEY: _classify_auth_error(e)}
     return None
 
 
@@ -91,6 +102,12 @@ async def get_current_user(
     Raises 401 if token is missing, malformed, invalid, or expired.
     """
     if not auth_user:
+        raise HTTPException(status_code=401, detail="Token verification failed")
+
+    auth_error = auth_user.get(_AUTH_ERROR_KEY)
+    if auth_error == "expired":
+        raise HTTPException(status_code=401, detail="Token expired. Please sign in again.")
+    if auth_error:
         raise HTTPException(status_code=401, detail="Token verification failed")
 
     user_id = auth_user.get("id")

@@ -38,6 +38,24 @@ import type {
 
 const DEFAULT_API_BASE = 'http://localhost:8000';
 
+export class ApiRequestError extends Error {
+  status: number;
+  detail: string;
+
+  constructor(message: string, status: number, detail: string) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function buildApiRequestError(res: Response, fallbackMessage: string): Promise<ApiRequestError> {
+  const err = await res.json().catch(() => ({ detail: res.statusText }));
+  const detail = String(err?.detail || res.statusText || fallbackMessage);
+  return new ApiRequestError(detail || fallbackMessage, res.status, detail);
+}
+
 function isPrivateIpv4(hostname: string): boolean {
   return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
 }
@@ -349,7 +367,7 @@ export async function listChatSessions(
     headers: authHeaders(token),
     cache: 'no-store',
   });
-  if (!res.ok) throw new Error('Failed to list sessions');
+  if (!res.ok) throw await buildApiRequestError(res, 'Failed to list sessions');
   return res.json();
 }
 
