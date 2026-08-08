@@ -61,6 +61,11 @@ function csvToList(csv: string): string[] {
   return csv.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function firstPathFromCsv(csv: string): string {
+  const first = csvToList(csv)[0] || '';
+  return first ? normalizePath(first) : '';
+}
+
 function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null, repoHealthScore: number | null): number | null {
   void selectedFile;
   if (typeof repoHealthScore === 'number') return repoHealthScore;
@@ -73,6 +78,10 @@ const SOURCE_FILE_EXTENSIONS = [
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, '/').trim();
+}
+
+function coverageCacheKey(path: string): string {
+  return normalizePath(path).toLowerCase();
 }
 
 function isLikelySourceFile(pathValue: string): boolean {
@@ -131,6 +140,7 @@ function formatLastModified(value?: string | null): string {
 interface FileActionRibbonProps {
   selectedFilePath: string;
   selectedFile: ExplorerFileDetails | null;
+  coverageLabel: string;
   ribbonHealthScore: number | null;
   runRibbonReview: (type: string) => Promise<void>;
   runRibbonGenerateTests: () => Promise<void>;
@@ -151,6 +161,7 @@ interface FileActionRibbonProps {
 function FileActionRibbon({
   selectedFilePath,
   selectedFile,
+  coverageLabel,
   ribbonHealthScore,
   runRibbonReview,
   runRibbonGenerateTests,
@@ -188,7 +199,7 @@ function FileActionRibbon({
             {selectedFile?.language || 'unknown'} • {selectedFile?.line_count || 'n/a'} lines • {selectedFile?.imports.length || 0} imports • {selectedFile?.classes.length || 0} classes • {selectedFile?.functions.length || 0} functions
           </p>
           <p className="mt-1 text-[11px] text-muted-foreground" suppressHydrationWarning>
-            Coverage 72% • Last Modified By {modifierLabel} • Last Modified {modifiedAtLabel}
+            Coverage {coverageLabel} • Last Modified By {modifierLabel} • Last Modified {modifiedAtLabel}
           </p>
         </div>
         <div className="text-right">
@@ -269,6 +280,7 @@ type ReviewRibbonActionsArgs = {
   setRibbonHistory: Dispatch<SetStateAction<string>>;
   setShowRibbonDiff: Dispatch<SetStateAction<boolean>>;
   setSelectedFile: Dispatch<SetStateAction<ExplorerFileDetails | null>>;
+  onCoverageMeasured: (path: string, coverage: number | null) => void;
 };
 
 function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
@@ -286,6 +298,7 @@ function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
     setRibbonHistory,
     setShowRibbonDiff,
     setSelectedFile,
+    onCoverageMeasured,
   } = args;
 
   const runRibbonAction = useCallback(async <T,>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> => {
@@ -323,9 +336,10 @@ function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
       const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
       const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
       setRibbonTests(run);
+      onCoverageMeasured(selectedFilePath, run.coverage);
       toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
     });
-  }, [repoId, runRibbonAction, selectedFilePath, setRibbonTests, token]);
+  }, [onCoverageMeasured, repoId, runRibbonAction, selectedFilePath, setRibbonTests, token]);
 
   const runRibbonGenerateFix = useCallback(async () => {
     const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
@@ -396,6 +410,8 @@ function ReviewHeaderCard({ repoId }: { repoId: string }) {
 
 type ReviewRunPanelsProps = {
   loading: boolean;
+  activeReviewTarget: 'file' | 'files';
+  setActiveReviewTarget: Dispatch<SetStateAction<'file' | 'files'>>;
   filePath: string;
   setFilePath: Dispatch<SetStateAction<string>>;
   filesCsv: string;
@@ -416,6 +432,8 @@ type ReviewRunPanelsProps = {
 function ReviewRunPanels(props: ReviewRunPanelsProps) {
   const {
     loading,
+    activeReviewTarget,
+    setActiveReviewTarget,
     filePath,
     setFilePath,
     filesCsv,
@@ -437,16 +455,48 @@ function ReviewRunPanels(props: ReviewRunPanelsProps) {
     <div className="space-y-4">
       <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium"><FileCode2 size={14} className="text-brand" /> Review file</div>
-        <Input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder="api/services/chat_service.py" />
-        <Button disabled={loading || !filePath.trim()} onClick={() => runReview(() => reviewFile(token, { repo_id: repoId, filename: filePath.trim(), prompt: prompt.trim() || undefined }))}>Run file review</Button>
+        <Input
+          value={filePath}
+          onChange={(e) => {
+            setActiveReviewTarget('file');
+            setFilePath(e.target.value);
+          }}
+          placeholder="api/services/chat_service.py"
+        />
+        <Button
+          disabled={loading || !filePath.trim()}
+          onClick={() => {
+            setActiveReviewTarget('file');
+            runReview(() => reviewFile(token, { repo_id: repoId, filename: filePath.trim(), prompt: prompt.trim() || undefined }));
+          }}
+        >
+          Run file review
+        </Button>
       </div>
 
       <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium"><Bot size={14} className="text-brand" /> Review multiple files</div>
-        <Textarea value={filesCsv} onChange={(e) => setFilesCsv(e.target.value)} placeholder="api/services/chat_service.py,api/routers/chat.py" rows={2} />
-        <Button disabled={loading || !filesCsv.trim()} onClick={() => runReview(() => reviewFiles(token, { repo_id: repoId, files: csvToList(filesCsv), prompt: prompt.trim() || undefined }))}>
+        <Textarea
+          value={filesCsv}
+          onChange={(e) => {
+            setActiveReviewTarget('files');
+            setFilesCsv(e.target.value);
+          }}
+          placeholder="api/services/chat_service.py,api/routers/chat.py"
+          rows={2}
+        />
+        <Button
+          disabled={loading || !filesCsv.trim()}
+          onClick={() => {
+            setActiveReviewTarget('files');
+            runReview(() => reviewFiles(token, { repo_id: repoId, files: csvToList(filesCsv), prompt: prompt.trim() || undefined }));
+          }}
+        >
           Run files review
         </Button>
+        {activeReviewTarget === 'files' && firstPathFromCsv(filesCsv) ? (
+          <p className="text-[11px] text-muted-foreground">Active file metadata: {firstPathFromCsv(filesCsv)}</p>
+        ) : null}
       </div>
 
       <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
@@ -658,6 +708,7 @@ export default function RepositoryReviewPage() {
   const [loading, setLoading] = useState(false);
   const [fixLoading, setFixLoading] = useState<string | null>(null); // finding id being fixed
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [activeReviewTarget, setActiveReviewTarget] = useState<'file' | 'files'>('file');
   const [filePath, setFilePath] = useState('');
   const [filesCsv, setFilesCsv] = useState('');
   const [commitHash, setCommitHash] = useState('');
@@ -669,6 +720,7 @@ export default function RepositoryReviewPage() {
   const [ribbonReview, setRibbonReview] = useState<ExplorerReviewResult | null>(null);
   const [ribbonFix, setRibbonFix] = useState<ExplorerFixProposal | null>(null);
   const [ribbonTests, setRibbonTests] = useState<ExplorerTestRunResult | null>(null);
+  const [coverageByPath, setCoverageByPath] = useState<Record<string, number>>({});
   const [ribbonHistory, setRibbonHistory] = useState('');
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
@@ -687,6 +739,7 @@ export default function RepositoryReviewPage() {
     inferredRepoIdsRef.current.clear();
 
     // Prevent stale file/ribbon context from previous repo carrying over.
+    setActiveReviewTarget('file');
     setFilePath('');
     setFilesCsv('');
     setCommitHash('');
@@ -698,11 +751,22 @@ export default function RepositoryReviewPage() {
     setRibbonReview(null);
     setRibbonFix(null);
     setRibbonTests(null);
+    setCoverageByPath({});
     setRibbonHistory('');
     setRibbonAction(null);
     setShowRibbonDiff(false);
     setRepoHealthScore(null);
   }, [repoId]);
+
+  const setFilePathAndActivate: Dispatch<SetStateAction<string>> = useCallback((next) => {
+    setActiveReviewTarget('file');
+    setFilePath(next);
+  }, []);
+
+  const setFilesCsvAndActivate: Dispatch<SetStateAction<string>> = useCallback((next) => {
+    setActiveReviewTarget('files');
+    setFilesCsv(next);
+  }, []);
 
   const loadHistory = useCallback(async (t: string) => {
     const response = await listReviews(t, repoId);
@@ -789,11 +853,46 @@ export default function RepositoryReviewPage() {
     };
   }, [filePath, repoId, token]);
 
-  const selectedFilePath = filePath.trim();
+  const selectedFilePath = useMemo(() => {
+    const singlePath = filePath.trim() ? normalizePath(filePath) : '';
+    const firstMultiPath = firstPathFromCsv(filesCsv);
+    if (activeReviewTarget === 'files') {
+      return firstMultiPath || singlePath;
+    }
+    return singlePath || firstMultiPath;
+  }, [activeReviewTarget, filePath, filesCsv]);
+
+  const coverageLabel = useMemo(() => {
+    const key = selectedFilePath ? coverageCacheKey(selectedFilePath) : '';
+    const cachedCoverage = key ? coverageByPath[key] : undefined;
+    const value = typeof cachedCoverage === 'number' ? cachedCoverage : ribbonTests?.coverage;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+    return `${Math.round(value)}%`;
+  }, [coverageByPath, ribbonTests, selectedFilePath]);
+
+  const handleCoverageMeasured = useCallback((path: string, coverage: number | null) => {
+    const key = coverageCacheKey(path);
+    if (!key) return;
+    if (typeof coverage !== 'number' || !Number.isFinite(coverage)) return;
+    setCoverageByPath((prev) => ({ ...prev, [key]: coverage }));
+  }, []);
 
   useEffect(() => {
-    if (!token || !selectedFilePath) return;
+    // Keep ribbon context file-scoped; prevents stale coverage/details from previous file.
+    setRibbonReview(null);
+    setRibbonFix(null);
+    setRibbonTests(null);
+    setRibbonHistory('');
+    setShowRibbonDiff(false);
+  }, [selectedFilePath]);
+
+  useEffect(() => {
+    if (!token || !selectedFilePath) {
+      setSelectedFile(null);
+      return;
+    }
     let cancelled = false;
+    setSelectedFile(null);
     async function loadSelectedFile() {
       try {
         const details = await getExplorerFile(token, repoId, selectedFilePath);
@@ -875,6 +974,7 @@ export default function RepositoryReviewPage() {
     setRibbonHistory,
     setShowRibbonDiff,
     setSelectedFile,
+    onCoverageMeasured: handleCoverageMeasured,
   });
 
   useEffect(() => {
@@ -923,6 +1023,7 @@ export default function RepositoryReviewPage() {
         <FileActionRibbon
           selectedFilePath={selectedFilePath}
           selectedFile={selectedFile}
+          coverageLabel={coverageLabel}
           ribbonHealthScore={ribbonHealthScore}
           runRibbonReview={runRibbonReview}
           runRibbonGenerateTests={runRibbonGenerateTests}
@@ -944,10 +1045,12 @@ export default function RepositoryReviewPage() {
       <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <ReviewRunPanels
           loading={loading}
+          activeReviewTarget={activeReviewTarget}
+          setActiveReviewTarget={setActiveReviewTarget}
           filePath={filePath}
-          setFilePath={setFilePath}
+          setFilePath={setFilePathAndActivate}
           filesCsv={filesCsv}
-          setFilesCsv={setFilesCsv}
+          setFilesCsv={setFilesCsvAndActivate}
           commitHash={commitHash}
           setCommitHash={setCommitHash}
           prFilesCsv={prFilesCsv}
@@ -972,7 +1075,7 @@ export default function RepositoryReviewPage() {
           setFixOutput={setFixOutput}
           fixLoading={fixLoading}
           setFixLoading={setFixLoading}
-          setFilePath={setFilePath}
+          setFilePath={setFilePathAndActivate}
           loadHistory={loadHistory}
         />
       </section>
