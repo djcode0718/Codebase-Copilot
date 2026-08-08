@@ -148,6 +148,43 @@ function ChatContextMenu({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { chat, repoId, x, y } = state;
+  const [menuPosition, setMenuPosition] = useState({ left: x, top: y });
+
+  useEffect(() => {
+    setMenuPosition({ left: x, top: y });
+  }, [x, y]);
+
+  useEffect(() => {
+    function updateMenuPosition() {
+      if (typeof window === 'undefined') return;
+      const viewportPadding = 8;
+      const menuEl = ref.current;
+      const menuWidth = menuEl?.offsetWidth ?? 200;
+      const menuHeight = menuEl?.offsetHeight ?? 280;
+
+      const maxLeft = Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding);
+      const maxTop = Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding);
+
+      let nextLeft = Math.min(Math.max(x, viewportPadding), maxLeft);
+      let nextTop = y;
+
+      // Prefer showing below the anchor, but flip above if bottom would clip.
+      if (y + menuHeight > window.innerHeight - viewportPadding) {
+        nextTop = y - menuHeight;
+      }
+      nextTop = Math.min(Math.max(nextTop, viewportPadding), maxTop);
+
+      setMenuPosition({ left: nextLeft, top: nextTop });
+    }
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [x, y]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -162,9 +199,6 @@ function ChatContextMenu({
     };
   }, [onClose]);
 
-  const left = Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 400) - 190);
-  const top  = Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : 600) - 230);
-
   const items = [
     { key: 'open'     as const, icon: MessageSquare,                label: 'Open' },
     { key: 'rename'   as const, icon: Pencil,                       label: 'Rename' },
@@ -177,7 +211,7 @@ function ChatContextMenu({
   return (
     <div
       ref={ref}
-      style={{ position: 'fixed', left, top, zIndex: 9999 }}
+      style={{ position: 'fixed', left: menuPosition.left, top: menuPosition.top, zIndex: 9999 }}
       className="min-w-[168px] rounded-2xl border border-sidebar-border bg-sidebar shadow-xl shadow-black/20 py-1 text-sm"
       onClick={(e) => e.stopPropagation()}
     >
