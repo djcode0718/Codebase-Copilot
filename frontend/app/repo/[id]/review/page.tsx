@@ -116,8 +116,16 @@ function formatLastModified(value?: string | null): string {
   if (!value) return 'Unavailable';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Unavailable';
-  // Use an SSR-safe deterministic format to prevent server/client locale drift.
-  return date.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  // Fixed locale + timezone keeps SSR and client render deterministic.
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'UTC',
+  }).format(date);
 }
 
 interface FileActionRibbonProps {
@@ -159,6 +167,18 @@ function FileActionRibbon({
   ribbonTests,
   ribbonHistory,
 }: FileActionRibbonProps) {
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  const modifierName = selectedFile?.owner?.trim();
+  const modifierLabel = modifierName || (isMounted ? 'Unavailable' : '\u2014');
+  const modifiedAtLabel = selectedFile?.last_modified
+    ? formatLastModified(selectedFile.last_modified)
+    : (isMounted ? 'Unavailable' : '\u2014');
+
   return (
     <section className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-lg shadow-black/5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -167,8 +187,8 @@ function FileActionRibbon({
           <p className="mt-1 text-xs text-muted-foreground">
             {selectedFile?.language || 'unknown'} • {selectedFile?.line_count || 'n/a'} lines • {selectedFile?.imports.length || 0} imports • {selectedFile?.classes.length || 0} classes • {selectedFile?.functions.length || 0} functions
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            Coverage 72% • Owner {selectedFile?.owner?.trim() || 'Unavailable'} • Last Modified {formatLastModified(selectedFile?.last_modified)}
+          <p className="mt-1 text-[11px] text-muted-foreground" suppressHydrationWarning>
+            Coverage 72% • Last Modified By {modifierLabel} • Last Modified {modifiedAtLabel}
           </p>
         </div>
         <div className="text-right">
@@ -654,6 +674,35 @@ export default function RepositoryReviewPage() {
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
   const [repoHealthScore, setRepoHealthScore] = useState<number | null>(null);
   const inferredRepoIdsRef = useRef<Set<string>>(new Set());
+  const previousRepoIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (previousRepoIdRef.current === null) {
+      previousRepoIdRef.current = repoId;
+      return;
+    }
+    if (previousRepoIdRef.current === repoId) return;
+
+    previousRepoIdRef.current = repoId;
+    inferredRepoIdsRef.current.clear();
+
+    // Prevent stale file/ribbon context from previous repo carrying over.
+    setFilePath('');
+    setFilesCsv('');
+    setCommitHash('');
+    setPrFilesCsv('');
+    setPrDiff('');
+    setSelectedFile(null);
+    setSelectedReview(null);
+    setFixOutput(null);
+    setRibbonReview(null);
+    setRibbonFix(null);
+    setRibbonTests(null);
+    setRibbonHistory('');
+    setRibbonAction(null);
+    setShowRibbonDiff(false);
+    setRepoHealthScore(null);
+  }, [repoId]);
 
   const loadHistory = useCallback(async (t: string) => {
     const response = await listReviews(t, repoId);
