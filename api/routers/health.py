@@ -75,8 +75,6 @@ async def run_repository_health_analysis(
 
     run_payload = engine.run(repo=repo, previous_scores=previous_scores, previous_findings=previous_findings)
 
-    if not supabase_service.is_repository_health_schema_available(supabase):
-        return _build_transient_health_run_response(repo_id=repo_id, run_payload=run_payload)
 
     try:
         run_record = supabase_service.insert_health_run(
