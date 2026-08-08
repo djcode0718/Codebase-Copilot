@@ -258,6 +258,52 @@ def handle_user_query(
     query_mode = classify_query(resolved_query)
     logger.info(f"Query mode: {query_mode.value}")
 
+    if query_mode == QueryMode.RELATIONSHIP:
+        from app.retrieval.query_router import extract_relationship_target
+        from app.llm.prompts import RELATIONSHIP_PROMPT
+        
+        target = extract_relationship_target(resolved_query)
+        logger.info(f"Stage -1: RELATIONSHIP query detected. Target symbol: '{target}'")
+        refs = []
+        if target:
+            graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
+            if os.path.exists(graph_path):
+                try:
+                    import json
+                    with open(graph_path, "r", encoding="utf-8") as gf:
+                        graph = json.load(gf)
+                    refs = graph.get(target, [])
+                    if not refs:
+                        for key, val in graph.items():
+                            if key.lower() == target.lower():
+                                refs = val
+                                break
+                    if refs:
+                        logger.info(f"Stage -1: Relationship graph lookup SUCCEEDED for '{target}'. Found {len(refs)} references.")
+                    else:
+                        logger.info(f"Stage -1: Relationship graph lookup EMPTY/FAILED for '{target}'.")
+                except Exception as ex:
+                    logger.warning(f"Failed to load relationship graph: {ex}")
+            else:
+                logger.warning(f"Relationship graph file not found at {graph_path}")
+        else:
+            logger.info("Stage -1: Relationship target extraction returned None.")
+        
+        ref_list_str = "\n".join([f"- {r}" for r in refs]) if refs else "No references found."
+        full_prompt = RELATIONSHIP_PROMPT.format(
+            target_symbol=target or "unknown",
+            references_list=ref_list_str
+        )
+        
+        response = Settings.llm.complete(full_prompt)
+        response_str = str(response).strip()
+        
+        from llama_index.core.base.llms.types import ChatMessage
+        memory.put(ChatMessage(role="user", content=query))
+        memory.put(ChatMessage(role="assistant", content=response_str))
+        
+        return response_str, chat_engine, memory, query_mode
+
     # Rebuild engine if mode changed (or first query)
     if chat_engine is None or query_mode != last_mode:
         if query_mode == QueryMode.CODE_LOOKUP:

@@ -16,56 +16,50 @@ TO DISABLE COLBERT:
 """
 
 from typing import List, Optional
+import math
 from llama_index.core.schema import NodeWithScore
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_colbert_reranker = None
+_cross_encoder = None
 
 
-def _load_colbert(top_k: int):
+def _load_cross_encoder():
     """
-    Lazy-load LlamaIndex ColbertRerank postprocessor.
+    Lazy-load sentence-transformers CrossEncoder.
     Cached at module level — loads once per session.
-    Downloads colbert-ir/colbertv2.0 (~440MB) on first call.
+    Downloads BAAI/bge-reranker-base on first call.
     """
-    global _colbert_reranker
+    global _cross_encoder
 
-    if _colbert_reranker is not None:
-        return _colbert_reranker
+    if _cross_encoder is not None:
+        logger.info("CrossEncoder reranker cache hit: reusing loaded model instance")
+        return _cross_encoder
 
-    # ── COLBERT ON ────────────────────────────────────────────────────────
-    # To disable: set USE_COLBERT=False in config.py
     try:
-        from llama_index.postprocessor.colbert_rerank import ColbertRerank
+        from sentence_transformers import CrossEncoder
         import time
 
-        logger.info("Loading ColBERT reranker (first load ~30s, downloads ~440MB)...")
+        logger.info("Loading CrossEncoder reranker (BAAI/bge-reranker-base)...")
         start = time.time()
 
-        _colbert_reranker = ColbertRerank(
-            top_n=top_k,
-            model="colbert-ir/colbertv2.0",
-            tokenizer="colbert-ir/colbertv2.0",
-            keep_retrieval_score=True,
-        )
+        _cross_encoder = CrossEncoder("BAAI/bge-reranker-base")
 
-        logger.info(f"ColBERT reranker loaded in {time.time() - start:.2f}s")
-        return _colbert_reranker
+        logger.info(f"CrossEncoder reranker loaded in {time.time() - start:.2f}s (cache miss, initialized model instance)")
+        return _cross_encoder
 
     except ImportError:
         logger.warning(
-            "llama-index-postprocessor-colbert-rerank not installed.\n"
-            "Run: pip install llama-index-postprocessor-colbert-rerank\n"
+            "sentence-transformers not installed.\n"
+            "Run: pip install sentence-transformers\n"
             "Or set USE_COLBERT=False in config.py to disable."
         )
         return None
 
     except Exception as e:
-        logger.warning(f"ColBERT load failed: {e}; falling back to RRF scores")
+        logger.warning(f"CrossEncoder load failed: {e}; falling back to RRF scores")
         return None
-    # ── END COLBERT ON ────────────────────────────────────────────────────
 
 
 def rerank_with_colbert(
@@ -74,9 +68,9 @@ def rerank_with_colbert(
     top_k: int = 5,
 ) -> List[NodeWithScore]:
     """
-    Rerank nodes using ColBERT late-interaction scoring.
+    Rerank nodes using a CrossEncoder model (BAAI/bge-reranker-base).
 
-    Falls back to RRF score sorting if ColBERT is disabled or unavailable.
+    Falls back to RRF score sorting if reranking is disabled or unavailable.
 
     Args:
         query:  user query string
@@ -89,49 +83,38 @@ def rerank_with_colbert(
     if not nodes:
         return []
 
-    # ── COLBERT ON ────────────────────────────────────────────────────────
     from app.config import USE_COLBERT
 
     if USE_COLBERT:
-        reranker = _load_colbert(top_k)
+        reranker = _load_cross_encoder()
 
         if reranker is not None:
             try:
                 import time
-                import torch
-                from llama_index.core import QueryBundle
 
                 start = time.time()
 
-                # ColbertRerank is a NodePostprocessor — takes nodes + query bundle
-                with torch.no_grad():
-                    reranked = reranker.postprocess_nodes(
-                        nodes,
-                        query_bundle=QueryBundle(query_str=query),
-                    )
+                # Prepare pairs of (query, document text) for the cross-encoder
+                pairs = [[query, node.node.get_content()] for node in nodes]
+                scores = reranker.predict(pairs)
 
-                # Normalize scores to plain floats in case the postprocessor returns tensors.
-                for node in reranked:
-                    score = node.score
-                    if score is None:
-                        continue
-                    if hasattr(score, "detach"):
-                        score = score.detach()
-                    if hasattr(score, "item"):
-                        score = score.item()
-                    node.score = float(score)
+                # Assign scores to the nodes (sigmoid normalization to [0, 1])
+                for node, score in zip(nodes, scores):
+                    node.score = 1 / (1 + math.exp(-float(score)))
+
+                # Sort descending by cross-encoder score
+                reranked = sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)
 
                 logger.info(
-                    f"ColBERT reranked {len(nodes)} -> {len(reranked)} nodes "
+                    f"CrossEncoder reranked {len(nodes)} -> {len(reranked)} nodes "
                     f"in {time.time() - start:.2f}s"
                 )
                 return reranked[:top_k]
 
             except Exception as e:
-                logger.warning(f"ColBERT reranking failed: {e}; using RRF scores")
-    # ── END COLBERT ON ────────────────────────────────────────────────────
+                logger.warning(f"CrossEncoder reranking failed: {e}; using RRF scores")
 
     # Fallback: sort by RRF scores from QueryFusionRetriever
-    logger.info("Using RRF scores for ranking (ColBERT disabled or unavailable)")
+    logger.info("Using RRF scores for ranking (CrossEncoder disabled or unavailable)")
     sorted_nodes = sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)
     return sorted_nodes[:top_k]

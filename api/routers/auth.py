@@ -15,7 +15,7 @@ from typing import Deque, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import Client
 
-from api.dependencies import get_current_user, get_supabase
+from api.dependencies import get_current_user, get_optional_user, get_supabase
 from api.models.auth import (
     GenericAuthResponse,
     LoginAuditRequest,
@@ -69,14 +69,16 @@ def _enforce_rate_limit(request: Request, route_key: str) -> None:
     response_model=RegisterPreflightResponse,
     tags=["public"],
     dependencies=[Depends(get_current_user)],
+    openapi_extra={"security": []},
 )
 async def register_preflight(
     body: RegisterPreflightRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    AUTHENTICATED ENDPOINT (rate-limited).
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
     Validates email availability before registration.
     Protected by per-IP rate limiting.
     """
@@ -137,14 +139,16 @@ async def register_preflight(
     response_model=LoginPreflightResponse,
     tags=["public"],
     dependencies=[Depends(get_current_user)],
+    openapi_extra={"security": []},
 )
 async def login_preflight(
     body: LoginPreflightRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    AUTHENTICATED ENDPOINT (rate-limited).
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
     Checks login eligibility and account status before password verification.
     Protected by per-IP rate limiting.
     """
@@ -186,14 +190,16 @@ async def login_preflight(
     response_model=GenericAuthResponse,
     tags=["public"],
     dependencies=[Depends(get_current_user)],
+    openapi_extra={"security": []},
 )
 async def login_audit(
     body: LoginAuditRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    AUTHENTICATED ENDPOINT (rate-limited).
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
     Records login success/failure events for security auditing and rate limiting.
     Protected by per-IP rate limiting.
     """
@@ -246,18 +252,19 @@ async def login_audit(
     "/logout/audit",
     response_model=GenericAuthResponse,
     tags=["public"],
+    openapi_extra={"security": []},
 )
 async def logout_audit(
     body: LogoutAuditRequest,
     request: Request,
-    user_id: str = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    AUTHENTICATED ENDPOINT.
+    PUBLIC ENDPOINT (optional authentication).
     Records logout events for security auditing. Can be called by:
     - Authenticated users (session.user_id is captured)
-    - Request is tied to the authenticated user for audit trail consistency
+    - Anonymous/guest users (provided email for audit trail)
     """
     normalized_email: Optional[str] = None
     if body.email:
@@ -291,14 +298,16 @@ async def logout_audit(
     response_model=GenericAuthResponse,
     tags=["public"],
     dependencies=[Depends(get_current_user)],
+    openapi_extra={"security": []},
 )
 async def password_reset_audit_request(
     body: PasswordResetAuditRequest,
     request: Request,
+    _request_user: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    AUTHENTICATED ENDPOINT (rate-limited).
+    PUBLIC ENDPOINT (rate-limited, no authentication required).
     Records password reset requests for audit logging.
     Protected by per-IP rate limiting.
     Intentionally generic response to avoid leaking account existence.
@@ -325,17 +334,18 @@ async def password_reset_audit_request(
     "/password-reset/audit-complete",
     response_model=GenericAuthResponse,
     tags=["public"],
+    openapi_extra={"security": []},
 )
 async def password_reset_audit_complete(
     body: PasswordResetCompleteAuditRequest,
     request: Request,
-    user_id: str = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_optional_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    AUTHENTICATED ENDPOINT.
+    PUBLIC ENDPOINT (optional authentication).
     Records password reset completion for audit logging.
-    Tracks password reset completion for authenticated sessions.
+    Can be called by authenticated users or guests resetting their password.
     """
     normalized_email = None
     if body.email:

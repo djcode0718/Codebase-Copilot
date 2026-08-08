@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import os
 from unittest.mock import MagicMock, patch
 import pytest
@@ -10,19 +10,27 @@ pytest.importorskip("llama_index.core")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Stub heavy / unavailable modules before importing qa_service
-for _mod in [
+_STUB_REWRITER = [
     "llama_index.retrievers",
     "llama_index.retrievers.bm25",
     "llama_index.embeddings.ollama",
     "app.indexing.index_builder",
     "app.retrieval.reranker",
-]:
-    sys.modules.setdefault(_mod, MagicMock())
+]
+_orig_rewriter = {m: sys.modules.get(m) for m in _STUB_REWRITER}
+for _mod in _STUB_REWRITER:
+    sys.modules[_mod] = MagicMock()
 
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core import Settings
 from llama_index.core.base.llms.types import ChatMessage
 from app.services.qa_service import resolve_ambiguous_query
+
+for _mod, _val in _orig_rewriter.items():
+    if _val is None:
+        sys.modules.pop(_mod, None)
+    else:
+        sys.modules[_mod] = _val
 
 
 class TestQueryResolution:
