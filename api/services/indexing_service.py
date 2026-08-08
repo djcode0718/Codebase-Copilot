@@ -466,7 +466,24 @@ def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
     emit("embedding", f"Building embeddings for {len(nodes)} chunks…", 65)
     build_vector_index(nodes, index_name)
 
-    # Step 5 - Done
+    # Step 5 - Relationship Graph
+    emit("graph", "Building call and reference graph…", 80)
+    try:
+        from app.parsing.relationship_graph import RelationshipGraphBuilder
+        import json
+        from app.config import INDEX_DIR
+        graph_builder = RelationshipGraphBuilder(repo_path)
+        graph = graph_builder.build_graph(valid_files)
+        graph_dir = os.path.join(INDEX_DIR, index_name)
+        os.makedirs(graph_dir, exist_ok=True)
+        graph_path = os.path.join(graph_dir, "relationship_graph.json")
+        with open(graph_path, "w", encoding="utf-8") as gf:
+            json.dump(graph, gf, indent=2)
+        logger.info(f"Relationship graph saved to {graph_path} with {len(graph)} symbols")
+    except Exception as ge:
+        logger.warning(f"Failed to build relationship graph: {ge}", exc_info=True)
+
+    # Step 6 - Done
     emit("summary", "Finalising architectural context…", 90)
     file_count = len(valid_files)
     node_count = len(nodes)

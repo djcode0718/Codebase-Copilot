@@ -1,20 +1,18 @@
 """
 api/services/chat_service.py
 ─────────────────────────────
-Wraps app/services/qa_service.handle_user_query() and streams the response
-as Server-Sent Events.
+Manages chat queries with a repository, supporting both streaming (SSE) and non-streaming modes.
+
+Non-streaming queries:
+  `get_full_response_for_persistence` wraps `app/services/qa_service.handle_user_query()`.
+
+Streaming queries:
+  `stream_chat_response` does NOT call `app/services/qa_service.handle_user_query()`. Instead, 
+  it runs a dedicated local retrieval, routing, and prompt assembly loop using the local 
+  `_prepare_stream_prompt` implementation, and streams Server-Sent Events (SSE) using LLM streaming APIs.
 
 Session state (chat_engine + memory) is cached in-process per (repo_id, chat_id)
 so multi-turn conversation works correctly within a server session.
-
-Note on streaming:
-  LlamaIndex's CondensePlusContextChatEngine supports stream_chat() which
-  returns a StreamingAgentChatResponse with a response_gen generator.
-  We use this when ColBERT is OFF.
-
-  When ColBERT is ON, the pipeline bypasses the chat engine and calls
-  Settings.llm.complete() directly (see qa_service.py). LlamaIndex LLMs
-  support stream_complete() for streaming. We use that path here.
 """
 
 import asyncio
@@ -104,6 +102,11 @@ _REPO_INTENT_KEYWORDS = {
     "sql", "migration", "test", "pytest", "frontend", "backend", "service", "router",
     "model", "component", "typescript", "python", "javascript", "java", "go", "rust",
     "c#", "c++", ".py", ".ts", ".tsx", ".js", ".jsx",
+    # Config / auth / provider terms — queries about these clearly target the codebase
+    "provider", "configure", "configured", "configuration", "authenticate",
+    "authenticated", "authentication", "credential", "credentials", "secret",
+    "token", "key", "env", "environment", "setting", "settings",
+    "llm", "embedding", "vector", "index", "retrieval", "pipeline",
 }
 
 
@@ -133,12 +136,25 @@ def _looks_repository_intent(query: str) -> bool:
     return any(marker in text for marker in ("/", "\\", "::", "()", "{", "}"))
 
 
-def _should_force_no_match(query: str, top_score: float) -> bool:
-    """Short-circuit clearly out-of-scope prompts to the strict no-match response."""
+def _should_force_no_match(query: str, top_score: float, use_colbert: bool = True) -> bool:
+    """Short-circuit clearly out-of-scope prompts to the strict no-match response.
+
+    Score-scale contract:
+    - When use_colbert=True:  top_score is CrossEncoder sigmoid-normalized → (0, 1).
+        Relevant queries score ≥ 0.60; out-of-scope queries cluster at ≈ 0.50.
+        Threshold 0.60 confirmed by 7-query calibration (4 answerable + 3 OOS).
+    - When use_colbert=False: top_score is an RRF score in [0, ~0.10].
+        RRF scores are never meaningful as an out-of-scope signal (max ≈ 0.033
+        even for on-topic queries). Skip the score check entirely.
+    """
     if _looks_repository_intent(query):
         return False
-    # Irrelevant prompts should not proceed to full LLM synthesis.
-    return top_score < 0.7
+    if not use_colbert:
+        # RRF scores max at ~0.03 regardless of relevance — score threshold is
+        # meaningless here; rely solely on _looks_repository_intent.
+        return False
+    # CrossEncoder sigmoid scores: out-of-scope queries ≈ 0.50, relevant ≥ 0.60.
+    return top_score < 0.60
 
 
 def _build_retriever(query_mode, vector_index, bm25_retriever):
@@ -350,9 +366,9 @@ def _build_no_match_events(
     t_start: float,
     retrieved_files: List[dict],
     t_retrieval_ms: int,
+    query_mode_value: str = QueryMode.CODE_LOOKUP.value,
 ) -> List[str]:
     full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
-    query_mode_value = QueryMode.CODE_LOOKUP.value
     events: List[str] = [to_sse_data({"type": "token", "content": full_response})]
 
     t_total_ms = int((time.time() - t_start) * 1000)
@@ -386,12 +402,7 @@ async def _stream_llm_response(full_prompt: str) -> AsyncGenerator[str, None]:
         return getattr(chunk_obj, field, None)
 
     def _extract_chunk_delta(chunk_obj, last_cumulative: str) -> Tuple[str, str]:
-        # Preferred token-like delta payload.
-        delta = _coerce_text(_pick_attr_or_key(chunk_obj, "delta"))
-        if delta:
-            return delta, last_cumulative
-
-        # Some providers expose cumulative content instead of per-token deltas.
+        # First try to get cumulative text from standard fields
         cumulative_text = ""
         for field in ("text", "response", "content"):
             cumulative_text = _coerce_text(_pick_attr_or_key(chunk_obj, field))
@@ -403,9 +414,14 @@ async def _stream_llm_response(full_prompt: str) -> AsyncGenerator[str, None]:
                 return cumulative_text[len(last_cumulative):], cumulative_text
             return cumulative_text, cumulative_text
 
-        # Fallback: plain string chunk.
+        # Fallback to delta token-like payload
+        delta = _coerce_text(_pick_attr_or_key(chunk_obj, "delta"))
+        if delta:
+            return delta, last_cumulative + delta
+
+        # Fallback: plain string chunk
         if isinstance(chunk_obj, str):
-            return chunk_obj, last_cumulative
+            return chunk_obj, last_cumulative + chunk_obj
 
         return "", last_cumulative
 
@@ -500,6 +516,56 @@ async def _prepare_stream_prompt(
     memory = _get_or_create_memory(repo_id, chat_id, persisted_history)
 
     resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
+
+    if query_mode == QueryMode.RELATIONSHIP:
+        from app.retrieval.query_router import extract_relationship_target
+        from app.llm.prompts import RELATIONSHIP_PROMPT
+        import os
+
+        target = extract_relationship_target(resolved_query)
+        logger.info(f"Stage -1: RELATIONSHIP query detected in stream. Target symbol: '{target}'")
+        refs = []
+        if target:
+            from app.config import INDEX_DIR
+            graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
+            if os.path.exists(graph_path):
+                try:
+                    import json
+                    with open(graph_path, "r", encoding="utf-8") as gf:
+                        graph = json.load(gf)
+                    refs = graph.get(target, [])
+                    if not refs:
+                        for key, val in graph.items():
+                            if key.lower() == target.lower():
+                                refs = val
+                                break
+                    if refs:
+                        logger.info(f"Stage -1: Relationship graph lookup SUCCEEDED in stream for '{target}'. Found {len(refs)} references.")
+                    else:
+                        logger.info(f"Stage -1: Relationship graph lookup EMPTY/FAILED in stream for '{target}'.")
+                except Exception as ex:
+                    logger.warning(f"Failed to load relationship graph in stream: {ex}")
+            else:
+                logger.warning(f"Relationship graph file not found at {graph_path}")
+        else:
+            logger.info("Stage -1: Relationship target extraction returned None in stream.")
+
+        ref_list_str = "\n".join([f"- {r}" for r in refs]) if refs else "No references found."
+        full_prompt = RELATIONSHIP_PROMPT.format(
+            target_symbol=target or "unknown",
+            references_list=ref_list_str
+        )
+
+        return {
+            "memory": memory,
+            "resolved_query": resolved_query,
+            "query_mode": query_mode,
+            "reranked_nodes": [],
+            "retrieved_files": [],
+            "t_retrieval_ms": 0,
+            "full_prompt": full_prompt,
+        }
+
     reranked_nodes, t_retrieval_ms = await _retrieve_ranked_nodes(
         query_mode,
         vector_index,
@@ -508,6 +574,42 @@ async def _prepare_stream_prompt(
     )
     retrieved_files = _build_retrieved_files(reranked_nodes)
     context_str = _build_context_str(reranked_nodes)
+
+    # ── ARCHITECTURAL mode: guarantee _codebase_context is always in context ──
+    # Dense retrieval scores _codebase_context chunks poorly (its content is file
+    # paths and code previews — low cosine similarity to natural-language arch queries).
+    # Verified: "what does the architecture look like?" retrieved 4x README, 0x context doc.
+    # Fix: if no _codebase_context chunk made it into the top-K retrieved set, pull
+    # up to 2 chunks directly from Chroma by metadata filter and append them to the
+    # context string. Appended (not prepended) so normal retrieval results lead.
+    if query_mode == QueryMode.ARCHITECTURAL:
+        retrieved_paths = {n.node.metadata.get("path", "") for n in reranked_nodes}
+        if "_codebase_context" not in retrieved_paths:
+            try:
+                import os as _os
+                import chromadb as _chromadb
+                from app.config import INDEX_DIR as _INDEX_DIR
+                _chroma_path = _os.path.join(_INDEX_DIR, index_name, "chroma")
+                _chroma_client = _chromadb.PersistentClient(path=_chroma_path)
+                _chroma_collection = _chroma_client.get_or_create_collection(index_name)
+                _ctx_results = _chroma_collection.get(
+                    where={"path": {"$eq": "_codebase_context"}},
+                    limit=2,
+                    include=["documents"],
+                )
+                if _ctx_results["documents"]:
+                    _injected = "\n\n".join(
+                        f"[_codebase_context]\n{doc}" for doc in _ctx_results["documents"]
+                    )
+                    context_str = context_str + "\n\n" + _injected
+                    logger.info(
+                        f"ARCHITECTURAL: injected {len(_ctx_results['documents'])} "
+                        "_codebase_context chunk(s) (not in top-K retrieved set)"
+                    )
+            except Exception as _ctx_err:
+                logger.warning(f"_codebase_context injection failed: {_ctx_err}")
+    # ── end context injection ─────────────────────────────────────────────────
+
     history_str = _build_history_str(memory)
 
     system_prompt = _select_system_prompt(query_mode, CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT)
@@ -573,13 +675,14 @@ async def stream_chat_response(
     SSE generator for /chat/{chat_id}/message/stream.
 
     Yields:
-        data: {"type": "token", "content": "..."}\\n\\n     (one per token)
-        data: {"type": "metadata", ...}\\n\\n               (after full response)
-        data: {"type": "done"}\\n\\n
-        data: {"type": "error", "message": "..."}\\n\\n     (on failure)
+        data: {"type": "token", "content": "..."}\n\n     (one per token)
+        data: {"type": "metadata", ...}\n\n               (after full response)
+        data: {"type": "done"}\n\n
+        data: {"type": "error", "message": "..."}\n\n     (on failure)
 
-    Internally uses the same dual-mode routing as qa_service.handle_user_query()
-    but with streaming output.
+    Internally, this does NOT call `app/services/qa_service.handle_user_query()`. Instead, it uses 
+    the local `_prepare_stream_prompt` implementation to run its own routing, retrieval, 
+    and prompt assembly loop, and streams the results.
     """
     _ensure_llamaindex()
 
@@ -626,12 +729,19 @@ async def stream_chat_response(
         query_mode_value = query_mode.value
 
         top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
-        if _should_force_no_match(query, top_score):
+        # No-match guard: only applied for CODE_LOOKUP mode.
+        # ARCHITECTURAL mode is designed for broad reasoning — CrossEncoder scores
+        # for natural-language architecture queries are always low (sigmoid ≈ 0.50)
+        # since the retrieved content is code, not natural language. Silencing those
+        # queries defeats the purpose of ARCHITECTURAL mode.
+        # RELATIONSHIP mode is handled separately above (returns before this point).
+        if query_mode == QueryMode.CODE_LOOKUP and _should_force_no_match(query, top_score, use_colbert=USE_COLBERT):
             full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
             for evt in _build_no_match_events(
                 t_start=t_start,
                 retrieved_files=retrieved_files,
                 t_retrieval_ms=t_retrieval_ms,
+                query_mode_value=query_mode_value,
             ):
                 yield evt
             return
