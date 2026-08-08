@@ -1397,6 +1397,7 @@ def get_health_history(
         return []
     try:
         since = datetime.now(timezone.utc) - timedelta(days=days)
+        fetch_limit = max(limit * 6, days * 4, 120)
         result = (
             supabase.table("repository_health_runs")
             .select("*")
@@ -1404,10 +1405,24 @@ def get_health_history(
             .eq("user_id", user_id)
             .gte("created_at", since.isoformat())
             .order("created_at", desc=True)
-            .limit(limit)
+            .limit(fetch_limit)
             .execute()
         )
-        return result.data or []
+        rows = result.data or []
+
+        # Keep the latest persisted run per UTC date for stable day-wise trends.
+        by_day: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            created_at = row.get("created_at")
+            if not created_at:
+                continue
+            day_key = str(created_at)[:10]
+            current = by_day.get(day_key)
+            if not current or str(created_at) > str(current.get("created_at") or ""):
+                by_day[day_key] = row
+
+        ordered = sorted(by_day.values(), key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return ordered[:limit]
     except Exception as e:
         if _is_missing_health_table_error(e):
             return []

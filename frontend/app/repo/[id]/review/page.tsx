@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
@@ -30,6 +30,7 @@ import {
   discoverExplorerTests,
   generateExplorerFix,
   getExplorerFile,
+  getExplorerTree,
   getExplorerHistory,
   getLatestRepositoryHealth,
   getReview,
@@ -41,7 +42,7 @@ import {
   reviewFiles,
   reviewPullRequest,
 } from '@/lib/api';
-import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
+import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ExplorerTreeNode, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
 import { toast } from 'sonner';
 
 function SeverityPill({ severity }: { severity: string }) {
@@ -66,6 +67,38 @@ function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null, repo
   return null;
 }
 
+const SOURCE_FILE_EXTENSIONS = [
+  '.py', '.ts', '.tsx', '.js', '.jsx', '.java', '.kt', '.go', '.rs', '.rb', '.php', '.cs', '.swift', '.scala', '.c', '.cc', '.cpp', '.h', '.hpp', '.m', '.mm',
+];
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, '/').trim();
+}
+
+function isLikelySourceFile(pathValue: string): boolean {
+  const path = normalizePath(pathValue).toLowerCase();
+  if (!path || path.endsWith('/')) return false;
+  if (path.includes('/.git/') || path.includes('/node_modules/') || path.includes('/dist/') || path.includes('/build/')) return false;
+  if (path.endsWith('.min.js') || path.endsWith('.lock') || path.endsWith('.map')) return false;
+  return SOURCE_FILE_EXTENSIONS.some((ext) => path.endsWith(ext));
+}
+
+function pickFirstReviewableFile(nodes: ExplorerTreeNode[]): string | null {
+  for (const node of nodes) {
+    if (node.type !== 'file') continue;
+    const candidate = node.path || node.name;
+    if (!candidate) continue;
+    if (isLikelySourceFile(candidate)) return normalizePath(candidate);
+  }
+  for (const node of nodes) {
+    if (node.type !== 'file') continue;
+    const candidate = node.path || node.name;
+    if (!candidate) continue;
+    return normalizePath(candidate);
+  }
+  return null;
+}
+
 function readCachedRepoHealthScore(repoId: string): number | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -77,6 +110,14 @@ function readCachedRepoHealthScore(repoId: string): number | null {
   } catch {
     return null;
   }
+}
+
+function formatLastModified(value?: string | null): string {
+  if (!value) return 'Unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unavailable';
+  // Use an SSR-safe deterministic format to prevent server/client locale drift.
+  return date.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 }
 
 interface FileActionRibbonProps {
@@ -126,7 +167,9 @@ function FileActionRibbon({
           <p className="mt-1 text-xs text-muted-foreground">
             {selectedFile?.language || 'unknown'} • {selectedFile?.line_count || 'n/a'} lines • {selectedFile?.imports.length || 0} imports • {selectedFile?.classes.length || 0} classes • {selectedFile?.functions.length || 0} functions
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">Coverage 72% • Owner Unknown • Last Modified</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Coverage 72% • Owner {selectedFile?.owner?.trim() || 'Unavailable'} • Last Modified {formatLastModified(selectedFile?.last_modified)}
+          </p>
         </div>
         <div className="text-right">
           <p className="text-[11px] text-muted-foreground">Repository Health</p>
@@ -595,7 +638,7 @@ export default function RepositoryReviewPage() {
   const [loading, setLoading] = useState(false);
   const [fixLoading, setFixLoading] = useState<string | null>(null); // finding id being fixed
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [filePath, setFilePath] = useState('api/services/chat_service.py');
+  const [filePath, setFilePath] = useState('');
   const [filesCsv, setFilesCsv] = useState('');
   const [commitHash, setCommitHash] = useState('');
   const [prFilesCsv, setPrFilesCsv] = useState('');
@@ -609,7 +652,8 @@ export default function RepositoryReviewPage() {
   const [ribbonHistory, setRibbonHistory] = useState('');
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
-  const [repoHealthScore, setRepoHealthScore] = useState<number | null>(() => readCachedRepoHealthScore(repoId));
+  const [repoHealthScore, setRepoHealthScore] = useState<number | null>(null);
+  const inferredRepoIdsRef = useRef<Set<string>>(new Set());
 
   const loadHistory = useCallback(async (t: string) => {
     const response = await listReviews(t, repoId);
@@ -636,6 +680,7 @@ export default function RepositoryReviewPage() {
             setFilePath(files[0]);
             setFilesCsv(files.join(','));
             setPrFilesCsv(files.join(','));
+            inferredRepoIdsRef.current.add(repoId);
           }
           if (parsed.prompt && parsed.prompt.trim()) {
             setPrompt(parsed.prompt.trim());
@@ -647,6 +692,53 @@ export default function RepositoryReviewPage() {
     }
     void init();
   }, [loadHistory, repoId, token]);
+
+  useEffect(() => {
+    if (!token || filePath.trim() || inferredRepoIdsRef.current.has(repoId)) return;
+    inferredRepoIdsRef.current.add(repoId);
+    let cancelled = false;
+
+    async function inferDefaultFile() {
+      try {
+        const queue: string[] = [''];
+        const visited = new Set<string>();
+        let attempts = 0;
+
+        while (queue.length > 0 && attempts < 24) {
+          const current = queue.shift() ?? '';
+          const key = normalizePath(current);
+          if (visited.has(key)) continue;
+          visited.add(key);
+          attempts += 1;
+
+          const tree = await getExplorerTree(token, repoId, { path: current || undefined, limit: 300 });
+          const nodes = Array.isArray(tree?.nodes) ? tree.nodes : [];
+
+          const preferredFile = pickFirstReviewableFile(nodes);
+          if (preferredFile) {
+            if (!cancelled) {
+              setFilePath(preferredFile);
+            }
+            return;
+          }
+
+          const childFolders = nodes
+            .filter((node) => node.type === 'folder' && node.path)
+            .map((node) => normalizePath(node.path))
+            .filter((path) => path && !visited.has(path));
+          queue.push(...childFolders);
+        }
+      } catch {
+        // Keep the field editable/empty if tree inference is unavailable.
+      }
+
+    }
+
+    void inferDefaultFile();
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, repoId, token]);
 
   const selectedFilePath = filePath.trim();
 

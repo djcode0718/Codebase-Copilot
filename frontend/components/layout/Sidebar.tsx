@@ -284,6 +284,23 @@ function RepoConversationsSection(props: RepoConversationsProps) {
             </button>
           )}
 
+          <div className="flex items-center gap-1 pt-0.5">
+            <button type="button"
+              onClick={() => handleNewChat(repo.id)}
+              className="flex flex-1 items-center gap-1.5 rounded-xl px-2 py-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand/10"
+            >
+              <Plus size={11} /> New Chat
+            </button>
+            {allChats.length > 0 && (
+              <button type="button" title="Delete all conversations"
+                onClick={() => void handleDeleteAllChats(repo.id)}
+                className="flex h-6 w-6 items-center justify-center rounded-lg text-destructive/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
+
           <div
             className={cn(
               'space-y-0.5 pb-1',
@@ -341,22 +358,6 @@ function RepoConversationsSection(props: RepoConversationsProps) {
               })
             )}
 
-            <div className="flex items-center gap-1 pt-0.5">
-              <button type="button"
-                onClick={() => handleNewChat(repo.id)}
-                className="flex flex-1 items-center gap-1.5 rounded-xl px-2 py-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand/10"
-              >
-                <Plus size={11} /> New Chat
-              </button>
-              {allChats.length > 0 && (
-                <button type="button" title="Delete all conversations"
-                  onClick={() => void handleDeleteAllChats(repo.id)}
-                  className="flex h-6 w-6 items-center justify-center rounded-lg text-destructive/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                >
-                  <Trash2 size={11} />
-                </button>
-              )}
-            </div>
           </div>
         </>
       )}

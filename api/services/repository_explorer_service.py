@@ -265,6 +265,29 @@ def _safe_read_text(path: str, max_chars: int = _MAX_FILE_CHARS) -> str:
         return f.read(max_chars)
 
 
+def _git_last_modifier(repo_root: str, rel_path: str) -> Tuple[Optional[str], Optional[str]]:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "log", "-1", "--format=%an|%aI", "--", rel_path],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None, None
+
+        raw = (proc.stdout or "").strip()
+        if not raw:
+            return None, None
+        owner, _, modified_at = raw.partition("|")
+        owner = owner.strip() or None
+        modified_at = modified_at.strip() or None
+        return owner, modified_at
+    except Exception:
+        return None, None
+
+
 def _python_structure(content: str) -> Dict[str, Any]:
     classes: List[str] = []
     functions: List[str] = []
@@ -319,6 +342,13 @@ def get_file_details(repo: Dict[str, Any], *, relative_path: str) -> Dict[str, A
         raise FileNotFoundError("File not found")
 
     content = _safe_read_text(abs_path)
+    try:
+        stat = os.stat(abs_path)
+        fs_modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    except Exception:
+        fs_modified_at = None
+
+    owner, git_modified_at = _git_last_modifier(repo_root, rel)
     lines = content.splitlines()
     language = _language_for(rel)
 
@@ -351,6 +381,8 @@ def get_file_details(repo: Dict[str, Any], *, relative_path: str) -> Dict[str, A
         "imports": structure["imports"],
         "line_count": len(lines),
         "size": len(content),
+        "owner": owner,
+        "last_modified": git_modified_at or fs_modified_at,
     }
     logger.info(
         "Explorer get_file_details completed: path='%s' language=%s lines=%s",

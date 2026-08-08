@@ -28,6 +28,7 @@ import { toast } from 'sonner';
 import {
   Line,
   LineChart,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -244,6 +245,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     return orderedByDay.map((point) => {
       const date = new Date(point.created_at);
       return {
+        createdAt: point.created_at,
         name: isSameLocalDay(date, now)
           ? 'Today'
           : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
@@ -389,8 +391,18 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
               <LineChart data={chartData} margin={{ top: 5, right: 10, left: -18, bottom: 0 }}>
                 <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" interval={Math.max(0, Math.floor(chartData.length / 5) - 1)} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                <Tooltip />
-                <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: 'hsl(var(--primary))' }} activeDot={{ r: 5 }} />
+                <Tooltip
+                  formatter={(value: number | string) => [`${value}/100`, 'Score']}
+                  labelFormatter={(_, payload) => {
+                    const point = payload?.[0]?.payload as { createdAt?: string; name?: string } | undefined;
+                    if (!point?.createdAt) return point?.name || '';
+                    const date = new Date(point.createdAt);
+                    return Number.isNaN(date.getTime()) ? (point?.name || '') : date.toLocaleString();
+                  }}
+                />
+                <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: 'hsl(var(--primary))' }} activeDot={{ r: 5 }}>
+                  <LabelList dataKey="score" position="top" fontSize={10} fill="hsl(var(--muted-foreground))" />
+                </Line>
               </LineChart>
             </ResponsiveContainer>
           </div>
