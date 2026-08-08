@@ -491,6 +491,8 @@ function ChatMessageList({
   suggestions,
   onSuggestion,
   onRetry,
+  onTryAgainForAnswer,
+  onEditQuestion,
   sessionReady,
   messagesEndRef,
 }: {
@@ -505,6 +507,8 @@ function ChatMessageList({
   suggestions: string[];
   onSuggestion: (q: string) => void;
   onRetry: () => void;
+  onTryAgainForAnswer: (index: number, msg: Message) => void;
+  onEditQuestion: (msg: Message) => void;
   sessionReady: boolean;
   messagesEndRef: { current: HTMLDivElement | null };
 }) {
@@ -519,6 +523,9 @@ function ChatMessageList({
           index={i}
           isInspected={inspectedIndex === i}
           onInspect={msg.role === 'assistant' ? () => onInspect(i, msg) : undefined}
+          onTryAgain={msg.role === 'assistant' ? () => onTryAgainForAnswer(i, msg) : undefined}
+          onEdit={msg.role === 'user' ? () => onEditQuestion(msg) : undefined}
+          actionsDisabled={streaming || !sessionReady}
         />
       ))}
 
@@ -676,6 +683,8 @@ function ChatWorkspace({
   onInspect,
   onSuggestion,
   onRetry,
+  onTryAgainForAnswer,
+  onEditQuestion,
   onInputChange,
   onKeyDown,
   onSubmit,
@@ -706,6 +715,8 @@ function ChatWorkspace({
   onInspect: (index: number, msg: Message) => void;
   onSuggestion: (q: string) => void;
   onRetry: () => void;
+  onTryAgainForAnswer: (index: number, msg: Message) => void;
+  onEditQuestion: (msg: Message) => void;
   onInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: () => void;
@@ -782,6 +793,8 @@ function ChatWorkspace({
               suggestions={suggestions}
               onSuggestion={onSuggestion}
               onRetry={onRetry}
+              onTryAgainForAnswer={onTryAgainForAnswer}
+              onEditQuestion={onEditQuestion}
               sessionReady={sessionReady}
               messagesEndRef={messagesEndRef}
             />
@@ -1379,6 +1392,41 @@ export default function ChatPage() {
       onAfterMessagePersisted: handleSessionsChanged,
       setRetryPrompt,
     });
+
+  const findNearestUserPromptForAssistant = useCallback((assistantIndex: number): string | null => {
+    for (let i = Math.min(assistantIndex - 1, messages.length - 1); i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg.role !== 'user') continue;
+      const query = (msg.content || '').trim();
+      if (query) return query;
+    }
+    return null;
+  }, [messages]);
+
+  const handleTryAgainForAnswer = useCallback((assistantIndex: number) => {
+    if (streaming || !sessionReady) return;
+    const userPrompt = findNearestUserPromptForAssistant(assistantIndex);
+    if (!userPrompt) {
+      toast.error('Could not locate the original question for this answer.');
+      return;
+    }
+    void handleSend(userPrompt);
+  }, [findNearestUserPromptForAssistant, handleSend, sessionReady, streaming]);
+
+  const handleEditQuestion = useCallback((msg: Message) => {
+    const next = (msg.content || '').trim();
+    if (!next) return;
+    setInput(next);
+    requestAnimationFrame(() => {
+      if (!textareaRef.current) return;
+      textareaRef.current.focus();
+      textareaRef.current.selectionStart = textareaRef.current.value.length;
+      textareaRef.current.selectionEnd = textareaRef.current.value.length;
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+    });
+  }, []);
+
   const isDev = process.env.NODE_ENV !== 'production';
   const displayThreadStats = buildThreadStats(messages, suggestions, inspectedIndex);
   const inspectorPayload = buildInspectorPayload(inspectedIndex, pendingMetadata, inspectorData);
@@ -1410,6 +1458,8 @@ export default function ChatPage() {
             if (!retryPrompt) return;
             void handleSend(retryPrompt);
           }}
+          onTryAgainForAnswer={handleTryAgainForAnswer}
+          onEditQuestion={handleEditQuestion}
           onInputChange={handleInputChange}
           onKeyDown={(e) => handleKeyDown(e, input)}
           onSubmit={() => handleSend(input)}

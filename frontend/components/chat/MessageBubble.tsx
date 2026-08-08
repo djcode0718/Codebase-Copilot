@@ -6,7 +6,7 @@
  * response sections, inline grounding summary, and expandable inspector data.
  */
 import { motion } from 'framer-motion';
-import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2 } from 'lucide-react';
+import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2, RefreshCcw, Pencil } from 'lucide-react';
 import { useState, lazy, Suspense } from 'react';
 import { cn } from '@/lib/utils';
 import type { Message, QueryMode } from '@/lib/types';
@@ -124,6 +124,9 @@ interface MessageBubbleProps {
   onInspect?: () => void;
   isInspected?: boolean;
   index: number;
+  onTryAgain?: () => void;
+  onEdit?: () => void;
+  actionsDisabled?: boolean;
 }
 
 function SimpleMarkdown({ content }: { content: string }) {
@@ -296,7 +299,7 @@ function renderInline(text: string): React.ReactNode {
   });
 }
 
-export default function MessageBubble({ message, onInspect, isInspected, index }: MessageBubbleProps) {
+export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
 
@@ -406,15 +409,43 @@ export default function MessageBubble({ message, onInspect, isInspected, index }
         )}
 
         {/* Actions */}
-        {!isUser && (
-          <button
-            onClick={handleCopy}
-            className="flex items-center gap-1 text-xs text-muted-foreground transition-colors cursor-pointer hover:text-foreground"
-          >
-            {copied ? <Check size={11} className="text-brand" /> : <Copy size={11} />}
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        )}
+        <div className={cn('flex items-center gap-3 text-xs text-muted-foreground', isUser ? 'justify-end' : 'justify-start')}>
+          {isUser && onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              disabled={actionsDisabled}
+              className="flex items-center gap-1 transition-colors cursor-pointer hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Pencil size={11} />
+              Edit
+            </button>
+          )}
+
+          {!isUser && onTryAgain && (
+            <button
+              type="button"
+              onClick={onTryAgain}
+              disabled={actionsDisabled}
+              className="flex items-center gap-1 transition-colors cursor-pointer hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RefreshCcw size={11} />
+              Try again
+            </button>
+          )}
+
+          {!isUser && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={actionsDisabled}
+              className="flex items-center gap-1 transition-colors cursor-pointer hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {copied ? <Check size={11} className="text-brand" /> : <Copy size={11} />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          )}
+        </div>
       </div>
     </motion.div>
   );
