@@ -1,8 +1,12 @@
+"""
+LEGACY: This file implements the old TF-IDF retriever and is no longer used in production.
+It has been replaced by VectorStoreIndex (ChromaDB + nomic-embed-text) and DocumentSummaryIndex.
+"""
 from pathlib import Path
 from typing import List, Dict, Any
 import os
 import numpy as np
-from app.indexing.vector_store import VectorStore
+from app.indexing.legacy.vector_store import VectorStore
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

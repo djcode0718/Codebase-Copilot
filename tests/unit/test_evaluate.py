@@ -26,9 +26,9 @@ _STUB_MODULES = [
     "app.services.qa_service",
     "app.retrieval.query_router",
 ]
+_orig_modules = {m: sys.modules.get(m) for m in _STUB_MODULES}
 for _mod in _STUB_MODULES:
-    if _mod not in sys.modules:
-        sys.modules[_mod] = mock.MagicMock()
+    sys.modules[_mod] = mock.MagicMock()
 
 # Provide a concrete QueryMode enum so imports succeed without the real module.
 import enum as _enum
@@ -54,10 +54,20 @@ def _import_evaluate():
     import evaluate as ev  # noqa: PLC0415
     return ev
 
+# Perform import of evaluate to run its module-level execution
+_ev_imported = _import_evaluate()
+
+# Restore original modules to prevent pollution
+for _mod, _val in _orig_modules.items():
+    if _val is None:
+        sys.modules.pop(_mod, None)
+    else:
+        sys.modules[_mod] = _val
+
 
 @pytest.fixture(scope="module")
 def ev():
-    return _import_evaluate()
+    return _ev_imported
 
 
 # ─── EVAL_DATASET structure ──────────────────────────────────────────────────

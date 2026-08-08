@@ -1,3 +1,7 @@
+"""
+LEGACY: This file implements the old chunk reranker and is no longer used in production.
+It has been replaced by BAAI/bge-reranker-base.
+"""
 from typing import List, Dict, Any
 from app.utils.logger import get_logger
 

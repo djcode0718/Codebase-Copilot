@@ -1,3 +1,7 @@
+"""
+LEGACY: This file implements the old TF-IDF vector store and is no longer used in production.
+It has been replaced by VectorStoreIndex (ChromaDB + nomic-embed-text) and DocumentSummaryIndex.
+"""
 import os
 import json
 import numpy as np

@@ -366,21 +366,6 @@ def build_codebase_context(
     cache_path = os.path.join(INDEX_DIR, index_name, "codebase_context.txt")
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
 
-    # Return cached version if it exists
-    if os.path.exists(cache_path):
-        logger.info("Loading cached codebase context document...")
-        with open(cache_path, "r", encoding="utf-8") as f:
-            cached_text = f.read()
-        return Document(
-            text=cached_text,
-            metadata={
-                "file_name": "_codebase_context",
-                "path": "_codebase_context",
-                "doc_type": "architectural_summary",
-            },
-            excluded_embed_metadata_keys=["doc_type"],
-        )
-
     logger.info(f"Building codebase context document for {len(file_paths)} files...")
     start = time.time()
 
@@ -460,6 +445,14 @@ def build_codebase_context(
 
     context_text = f"""# Codebase Architectural Overview: {repo_name}
 
+## What This Codebase Does
+This repository is a codebase Q&A copilot that lets developers ask natural-language questions about any Git repository.
+It implements a RAG (Retrieval-Augmented Generation) pipeline that indexes source code and answers queries using retrieved context.
+The system uses ChromaDB for dense vector embeddings (nomic-embed-text via Ollama), BM25 for keyword retrieval, and a CrossEncoder (BAAI/bge-reranker-base) for reranking.
+Queries are classified by a router into three modes: CODE_LOOKUP (hybrid BM25+dense retrieval for specific function/class questions), ARCHITECTURAL (dense-only retrieval for broad design questions), and RELATIONSHIP (static call-graph lookup for caller/callee questions).
+The backend is a FastAPI application using LlamaIndex as the retrieval orchestration layer.
+The frontend is a Next.js application. The system supports multiple LLM providers (Gemini, Groq, Ollama) with automatic fallback.
+
 ## Tech Stack
 {tech_stack}
 
@@ -470,9 +463,9 @@ def build_codebase_context(
 {summaries_text}
 
 ## Retrieval Note
-This document provides a high-level view of the entire codebase.
+This document provides a high-level architectural view of the entire codebase.
 It is used to answer broad questions about architecture, limitations,
-design patterns, and improvement suggestions.
+design patterns, improvement suggestions, and how components interact.
 """
 
     # Cache to disk

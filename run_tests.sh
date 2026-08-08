@@ -47,7 +47,13 @@ echo ""
 # ── Check env ─────────────────────────────────────────────────────────────────
 if [ -f ".env" ]; then
     echo "✓  Found .env — loading environment variables"
-    export $(grep -v '^#' .env | grep -v '^$' | xargs)
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(echo "$line" | sed 's/#.*//')
+        line=$(echo "$line" | xargs)
+        if [ -n "$line" ] && [[ "$line" == *"="* ]]; then
+            export "$line"
+        fi
+    done < ".env"
 else
     echo "⚠  No .env found — using test defaults"
 fi

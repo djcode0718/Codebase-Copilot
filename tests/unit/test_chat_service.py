@@ -37,9 +37,9 @@ _STUBS = [
     "app.retrieval.reranker",
     "app.services.qa_service",
 ]
+_orig_modules = {m: sys.modules.get(m) for m in _STUBS}
 for _m in _STUBS:
-    if _m not in sys.modules:
-        sys.modules[_m] = MagicMock()
+    sys.modules[_m] = MagicMock()
 
 # Ensure llama_index.core.Settings is a real-ish object so attribute access works.
 settings_mock = MagicMock()
@@ -57,6 +57,13 @@ sys.modules["app.retrieval.query_router"].QueryMode = _QueryMode
 
 
 from api.services import chat_service  # noqa: E402
+
+# Restore original modules to prevent pollution
+for _m, _val in _orig_modules.items():
+    if _val is None:
+        sys.modules.pop(_m, None)
+    else:
+        sys.modules[_m] = _val
 
 
 # ─── Session cache helpers ────────────────────────────────────────────────────
@@ -267,4 +274,31 @@ async def test_recover_from_stream_failure_uses_sync_complete_when_async_recover
     assert text == "sync recovered answer"
     assert path == "non_stream_recovery"
     mock_llm.complete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_delta_accumulation_prevents_duplication():
+    # Simulate a stream that yields:
+    # 1. Chunk with delta="Hello"
+    # 2. Chunk with delta=" world"
+    # 3. Chunk with text="Hello world!" (cumulative, but delta field missing/empty)
+    chunk1 = {"delta": "Hello", "text": None}
+    chunk2 = {"delta": " world", "text": None}
+    chunk3 = {"delta": None, "text": "Hello world!"}
+
+    async def mock_stream_with_fallback(_prompt, **kwargs):
+        yield chunk1
+        yield chunk2
+        yield chunk3
+
+    fallback_mod = MagicMock(stream_with_fallback=mock_stream_with_fallback)
+    with patch.dict(sys.modules, {"app.services.llm_fallback": fallback_mod}):
+        tokens = []
+        async for token in chat_service._stream_llm_response("test prompt"):
+            tokens.append(token)
+
+    # If duplication prevention works, the cumulative text chunk (chunk3)
+    # should only yield the new delta part "!" instead of the full "Hello world!".
+    assert tokens == ["Hello", " world", "!"]
+
 

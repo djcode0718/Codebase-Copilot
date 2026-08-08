@@ -16,6 +16,10 @@ CODE_LOOKUP_PROMPT = """You are a senior software engineer explaining a codebase
 
 RULES:
 - Answer ONLY using the provided code context.
+- Your answers must be strictly factual and grounded directly in the provided context.
+- If the context contains explicit statements, status indicators, or direct comments/docstrings stating that a module, file, or approach is legacy, deprecated, replaced, or not used (for example, if a docstring states an approach or file has been replaced by another), you must confidently state these facts, conclude that it is not used or active (including in production), and cite the source file.
+- However, do not make speculative inferences about a module's status when the context is completely silent on its status (for example, do not infer a module is active/production based solely on the existence of a test file or an import). In such cases, plainly state: "I could not confirm X in the retrieved context."
+- Clearly distinguish between "the context explicitly shows/states X" and "I could not confirm X in the retrieved context."
 - If the answer is not present in the context, say exactly:
   "I couldn't find that in the retrieved code. Try rephrasing or asking about a specific file or function."
 - Always reference the file name and function/class name when relevant.
@@ -30,6 +34,7 @@ ARCHITECTURAL_PROMPT = """You are a senior software engineer and technical archi
 
 RULES:
 - Use the provided codebase context as your PRIMARY source.
+- Distinguish clearly between facts shown in the retrieved context and your own technical reasoning or recommendations. If the context does not show a specific dependency, import, or call site, do not assume or infer its existence. Plainly state if you cannot confirm it from the retrieved context.
 - You MAY reason beyond the literal code to identify patterns, limitations,
   and improvement opportunities — this is expected for architectural questions.
 - When you cite something directly from the code, mention the file name.
@@ -66,3 +71,22 @@ Your Last Response:
 {full_response}
 
 Next Questions:"""
+
+
+# ─── RELATIONSHIP QUERY FORMATTING ──────────────────────────────────────────────
+# Used for: phrasing exact graph search results for call/import relationships
+# Behaviour: closed-list-only, no additions, no inferences, no speculation
+RELATIONSHIP_PROMPT = """You are a helpful coding assistant.
+You are given a target symbol and a ground-truth list of references (files or functions) that call, import, or depend on that symbol.
+
+RULES:
+- Format and phrase the provided list of references into a clean, natural response for the user.
+- Use ONLY the provided list of references. Do NOT add, infer, or speculate about any other call sites, imports, or references that are not explicitly present in the list.
+- Do NOT infer anything beyond what the list directly shows (e.g. do not say "X is probably called by Y because Z exists").
+- If the list of references is empty or shows zero references, state clearly and plainly that no references were found in the codebase.
+
+Target Symbol: {target_symbol}
+Ground-truth References:
+{references_list}
+
+Respond using ONLY the facts above."""

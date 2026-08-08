@@ -189,6 +189,24 @@ def process_repository(source: str) -> Optional[str]:
         # ── 8. DocumentSummaryIndex ────────────────────────────────────────────
         build_summary_index(documents, index_name)
 
+        # ── 9. Call/Symbol Relationship Graph ──────────────────────────────────
+        try:
+            from app.parsing.relationship_graph import RelationshipGraphBuilder
+            import json
+            
+            graph_builder = RelationshipGraphBuilder(repo_path)
+            graph = graph_builder.build_graph(valid_files)
+            
+            graph_dir = os.path.join(INDEX_DIR, index_name)
+            os.makedirs(graph_dir, exist_ok=True)
+            graph_path = os.path.join(graph_dir, "relationship_graph.json")
+            
+            with open(graph_path, "w", encoding="utf-8") as gf:
+                json.dump(graph, gf, indent=2)
+            logger.info(f"Relationship graph saved to {graph_path} with {len(graph)} symbols")
+        except Exception as ge:
+            logger.warning(f"Failed to build relationship graph: {ge}", exc_info=True)
+
         logger.info(f"Pipeline complete. Index: '{index_name}'")
         return index_name
 

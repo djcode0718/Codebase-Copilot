@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_router_chat.py
 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Integration tests for the chat router endpoints:
@@ -644,6 +644,34 @@ class TestStreamMessage:
         chunks = [(line.decode("utf-8") if isinstance(line, bytes) else line) for line in resp.iter_lines() if line]
         assert len(chunks) == 3  # token + error + done
         assert "error" in chunks[1]
+        assert "error" in chunks[1]
         assert "repository memory issue" in chunks[1].lower()
         assert "conversation_tags" not in chunks[1]
         assert "done" in chunks[2]
+
+
+# ── GET /api/chat/export ──────────────────────────────────────────────────────
+
+class TestExportRepositoryMemory:
+    def test_export_success(self, client, mock_supabase, fake_repo, fake_chat, fake_repo_id, fake_chat_id, monkeypatch):
+        from api.services import supabase_service
+        monkeypatch.setattr(supabase_service, "get_repo", lambda *args: fake_repo)
+        monkeypatch.setattr(supabase_service, "get_chats_for_repo", lambda *args, **kwargs: [fake_chat])
+        monkeypatch.setattr(supabase_service, "get_messages_for_chat", lambda *args: [])
+        monkeypatch.setattr(supabase_service, "get_conversation_summary", lambda *args: None)
+        monkeypatch.setattr(supabase_service, "get_tags_for_chat", lambda *args: [])
+
+        resp = client.get("/api/chat/export", params={"repo_id": fake_repo_id, "format": "md"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["format"] == "md"
+        assert body["content_type"] == "text/markdown"
+        assert "filename" in body
+        assert "content" in body
+
+    def test_export_unsupported_format(self, client, mock_supabase, fake_repo, fake_repo_id, monkeypatch):
+        from api.services import supabase_service
+        monkeypatch.setattr(supabase_service, "get_repo", lambda *args: fake_repo)
+        resp = client.get("/api/chat/export", params={"repo_id": fake_repo_id, "format": "invalid"})
+        assert resp.status_code == 422  # validation pattern fail
+

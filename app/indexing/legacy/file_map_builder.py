@@ -1,3 +1,7 @@
+"""
+LEGACY: This file implements the old file map builder and is no longer used in production.
+It has been replaced by VectorStoreIndex (ChromaDB + nomic-embed-text) and DocumentSummaryIndex.
+"""
 import os
 import json
 import pickle
