@@ -245,8 +245,6 @@ def _try_persist_post_index_health_run(supabase, repo_id: str) -> None:
         if not user_id:
             return
 
-        if not supabase_service.is_repository_health_schema_available(supabase):
-            return
 
         previous_run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
         previous_scores = None

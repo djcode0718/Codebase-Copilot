@@ -557,6 +557,8 @@ export interface ExplorerFileDetails {
   imports: string[];
   line_count: number;
   size: number;
+  owner?: string | null;
+  last_modified?: string | null;
 }
 
 export interface ExplorerReviewResult {

@@ -1,15 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createClient } from '@/lib/supabase/client';
 import { auditPasswordResetRequest, normalizeEmail } from '@/lib/auth-api';
 import { validateEmailForRecovery, getPasswordResetRedirectUrl, showPasswordRecoveryError } from '@/lib/auth-recovery-utils';
-import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
-import { AuthBusyLabel, AuthScreenMotion, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
+import { AuthRecoveryFooterLink, AuthRecoveryPageFrame, AuthRecoverySubmitButton, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
 
 export default function ForgotPasswordPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -64,32 +61,17 @@ export default function ForgotPasswordPage() {
           className="h-11 bg-background border-border focus-visible:ring-brand"
         />
       </div>
-      <Button
-        type="submit"
-        disabled={loading}
-        className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200"
-      >
-        <AuthBusyLabel loading={loading} idleLabel="Send reset link" />
-      </Button>
+      <AuthRecoverySubmitButton loading={loading} idleLabel="Send reset link" />
     </form>
   );
 
   return (
-    <AuthScreenMotion>
-      <AuthExperienceShell
-        heading="Reset password"
-        subtitle="Recover your account with a secure one-time reset link."
-        authCard={card}
-        footer={(
-          <p className="text-center text-sm text-muted-foreground">
-            Remembered your password?{' '}
-            <Link href="/auth/sign-in" className="text-brand hover:underline">
-              Sign in
-            </Link>
-          </p>
-        )}
-      />
-    </AuthScreenMotion>
+    <AuthRecoveryPageFrame
+      heading="Reset password"
+      subtitle="Recover your account with a secure one-time reset link."
+      authCard={card}
+      footer={<AuthRecoveryFooterLink text="Remembered your password?" href="/auth/sign-in" linkLabel="Sign in" />}
+    />
   );
 }
 

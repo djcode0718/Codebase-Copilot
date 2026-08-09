@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
@@ -30,7 +30,9 @@ import {
   discoverExplorerTests,
   generateExplorerFix,
   getExplorerFile,
+  getExplorerTree,
   getExplorerHistory,
+  getLatestRepositoryHealth,
   getReview,
   listReviews,
   runExplorerFileReview,
@@ -40,7 +42,7 @@ import {
   reviewFiles,
   reviewPullRequest,
 } from '@/lib/api';
-import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
+import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ExplorerTreeNode, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
 import { toast } from 'sonner';
 
 function SeverityPill({ severity }: { severity: string }) {
@@ -59,18 +61,87 @@ function csvToList(csv: string): string[] {
   return csv.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null): number {
-  if (!selectedFile) return 74;
-  if (selectedFile.health === 'critical') return 42;
-  if (selectedFile.health === 'review_suggested') return 67;
-  if (selectedFile.health === 'healthy') return 84;
-  return 74;
+function firstPathFromCsv(csv: string): string {
+  const first = csvToList(csv)[0] || '';
+  return first ? normalizePath(first) : '';
+}
+
+function computeRibbonHealthScore(selectedFile: ExplorerFileDetails | null, repoHealthScore: number | null): number | null {
+  void selectedFile;
+  if (typeof repoHealthScore === 'number') return repoHealthScore;
+  return null;
+}
+
+const SOURCE_FILE_EXTENSIONS = [
+  '.py', '.ts', '.tsx', '.js', '.jsx', '.java', '.kt', '.go', '.rs', '.rb', '.php', '.cs', '.swift', '.scala', '.c', '.cc', '.cpp', '.h', '.hpp', '.m', '.mm',
+];
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, '/').trim();
+}
+
+function coverageCacheKey(path: string): string {
+  return normalizePath(path).toLowerCase();
+}
+
+function isLikelySourceFile(pathValue: string): boolean {
+  const path = normalizePath(pathValue).toLowerCase();
+  if (!path || path.endsWith('/')) return false;
+  if (path.includes('/.git/') || path.includes('/node_modules/') || path.includes('/dist/') || path.includes('/build/')) return false;
+  if (path.endsWith('.min.js') || path.endsWith('.lock') || path.endsWith('.map')) return false;
+  return SOURCE_FILE_EXTENSIONS.some((ext) => path.endsWith(ext));
+}
+
+function pickFirstReviewableFile(nodes: ExplorerTreeNode[]): string | null {
+  for (const node of nodes) {
+    if (node.type !== 'file') continue;
+    const candidate = node.path || node.name;
+    if (!candidate) continue;
+    if (isLikelySourceFile(candidate)) return normalizePath(candidate);
+  }
+  for (const node of nodes) {
+    if (node.type !== 'file') continue;
+    const candidate = node.path || node.name;
+    if (!candidate) continue;
+    return normalizePath(candidate);
+  }
+  return null;
+}
+
+function readCachedRepoHealthScore(repoId: string): number | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`codebase:health-latest:${repoId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { top_level?: { repository_health?: unknown } };
+    const value = parsed?.top_level?.repository_health;
+    return typeof value === 'number' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatLastModified(value?: string | null): string {
+  if (!value) return 'Unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unavailable';
+  // Fixed locale + timezone keeps SSR and client render deterministic.
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'UTC',
+  }).format(date);
 }
 
 interface FileActionRibbonProps {
   selectedFilePath: string;
   selectedFile: ExplorerFileDetails | null;
-  ribbonHealthScore: number;
+  coverageLabel: string;
+  ribbonHealthScore: number | null;
   runRibbonReview: (type: string) => Promise<void>;
   runRibbonGenerateTests: () => Promise<void>;
   runRibbonTests: () => Promise<void>;
@@ -90,6 +161,7 @@ interface FileActionRibbonProps {
 function FileActionRibbon({
   selectedFilePath,
   selectedFile,
+  coverageLabel,
   ribbonHealthScore,
   runRibbonReview,
   runRibbonGenerateTests,
@@ -106,6 +178,18 @@ function FileActionRibbon({
   ribbonTests,
   ribbonHistory,
 }: FileActionRibbonProps) {
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  const modifierName = selectedFile?.owner?.trim();
+  const modifierLabel = modifierName || (isMounted ? 'Unavailable' : '\u2014');
+  const modifiedAtLabel = selectedFile?.last_modified
+    ? formatLastModified(selectedFile.last_modified)
+    : (isMounted ? 'Unavailable' : '\u2014');
+
   return (
     <section className="rounded-[1.25rem] border border-border bg-card/80 p-4 shadow-lg shadow-black/5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -114,11 +198,13 @@ function FileActionRibbon({
           <p className="mt-1 text-xs text-muted-foreground">
             {selectedFile?.language || 'unknown'} • {selectedFile?.line_count || 'n/a'} lines • {selectedFile?.imports.length || 0} imports • {selectedFile?.classes.length || 0} classes • {selectedFile?.functions.length || 0} functions
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">Coverage 72% • Owner Unknown • Last Modified</p>
+          <p className="mt-1 text-[11px] text-muted-foreground" suppressHydrationWarning>
+            Coverage {coverageLabel} • Last Modified By {modifierLabel} • Last Modified {modifiedAtLabel}
+          </p>
         </div>
         <div className="text-right">
           <p className="text-[11px] text-muted-foreground">Repository Health</p>
-          <p className="text-lg font-semibold">{ribbonHealthScore}</p>
+          <p className="text-lg font-semibold">{typeof ribbonHealthScore === 'number' ? ribbonHealthScore : '—'}</p>
         </div>
       </div>
 
@@ -180,6 +266,439 @@ function FileActionRibbon({
   );
 }
 
+type ReviewRibbonActionsArgs = {
+  token: string;
+  repoId: string;
+  selectedFilePath: string;
+  selectedFile: ExplorerFileDetails | null;
+  ribbonReview: ExplorerReviewResult | null;
+  ribbonFix: ExplorerFixProposal | null;
+  setRibbonAction: Dispatch<SetStateAction<string | null>>;
+  setRibbonReview: Dispatch<SetStateAction<ExplorerReviewResult | null>>;
+  setRibbonFix: Dispatch<SetStateAction<ExplorerFixProposal | null>>;
+  setRibbonTests: Dispatch<SetStateAction<ExplorerTestRunResult | null>>;
+  setRibbonHistory: Dispatch<SetStateAction<string>>;
+  setShowRibbonDiff: Dispatch<SetStateAction<boolean>>;
+  setSelectedFile: Dispatch<SetStateAction<ExplorerFileDetails | null>>;
+  onCoverageMeasured: (path: string, coverage: number | null) => void;
+};
+
+function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
+  const {
+    token,
+    repoId,
+    selectedFilePath,
+    selectedFile,
+    ribbonReview,
+    ribbonFix,
+    setRibbonAction,
+    setRibbonReview,
+    setRibbonFix,
+    setRibbonTests,
+    setRibbonHistory,
+    setShowRibbonDiff,
+    setSelectedFile,
+    onCoverageMeasured,
+  } = args;
+
+  const runRibbonAction = useCallback(async <T,>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> => {
+    if (!token || !selectedFilePath) return undefined;
+    try {
+      setRibbonAction(actionName);
+      const result = await fn();
+      if (successMsg) toast.success(successMsg);
+      return result;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `${actionName.replace('_', ' ')} failed`);
+      return undefined;
+    } finally {
+      setRibbonAction(null);
+    }
+  }, [selectedFilePath, setRibbonAction, token]);
+
+  const runRibbonReview = useCallback(async (type: string) => {
+    const result = await runRibbonAction(type, () =>
+      runExplorerFileReview(token, repoId, { path: selectedFilePath, review_type: type }),
+      `${type.replace('_', ' ')} complete`
+    );
+    if (result) setRibbonReview(result);
+  }, [repoId, runRibbonAction, selectedFilePath, setRibbonReview, token]);
+
+  const runRibbonGenerateTests = useCallback(async () => {
+    await runRibbonAction('generate_tests', async () => {
+      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
+      setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
+    }, 'Generated test candidates');
+  }, [repoId, runRibbonAction, selectedFilePath, setRibbonHistory, token]);
+
+  const runRibbonTests = useCallback(async () => {
+    await runRibbonAction('run_tests', async () => {
+      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
+      const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
+      setRibbonTests(run);
+      onCoverageMeasured(selectedFilePath, run.coverage);
+      toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
+    });
+  }, [onCoverageMeasured, repoId, runRibbonAction, selectedFilePath, setRibbonTests, token]);
+
+  const runRibbonGenerateFix = useCallback(async () => {
+    const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
+    const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
+    const fix = await runRibbonAction('generate_fix', () =>
+      generateExplorerFix(token, repoId, { path: selectedFilePath, finding, recommendation }),
+      'Fix generated'
+    );
+    if (fix) {
+      setRibbonFix(fix);
+      setShowRibbonDiff(true);
+    }
+  }, [repoId, ribbonReview, runRibbonAction, selectedFilePath, setRibbonFix, setShowRibbonDiff, token]);
+
+  const runRibbonApplyFix = useCallback(async () => {
+    if (!ribbonFix) return;
+    if (!window.confirm('Apply this fix? Validation checks will run before acceptance.')) return;
+    await runRibbonAction('apply_fix', async () => {
+      await applyExplorerFix(token, repoId, { fix_id: ribbonFix.fix_id, expected_sha256: selectedFile?.sha256, run_validation: true });
+      const refreshed = await getExplorerFile(token, repoId, selectedFilePath);
+      setSelectedFile(refreshed);
+    }, 'Fix applied');
+  }, [repoId, ribbonFix, runRibbonAction, selectedFile?.sha256, selectedFilePath, setSelectedFile, token]);
+
+  const runRibbonHistory = useCallback(async () => {
+    await runRibbonAction('history', async () => {
+      const h = await getExplorerHistory(token, repoId, selectedFilePath);
+      setRibbonHistory(
+        [`Reviews: ${h.reviews.length}`, `Fixes: ${h.fixes.length}`, `Applied: ${h.applied_fixes.length}`,
+         `Rejected: ${h.rejected_fixes.length}`, `Tests: ${h.test_runs.length}`, `Conversations: ${h.conversations.length}`].join(' | ')
+      );
+    }, 'History loaded');
+  }, [repoId, runRibbonAction, selectedFilePath, setRibbonHistory, token]);
+
+  const runRibbonAskAi = useCallback(async () => {
+    await runRibbonAction('ask_ai', async () => {
+      await addExplorerConversationEntry(token, repoId, { path: selectedFilePath, role: 'user', content: `Open AI conversation for ${selectedFilePath}` });
+      window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
+    }, 'AI chat context queued');
+  }, [repoId, runRibbonAction, selectedFilePath, token]);
+
+  return {
+    runRibbonReview,
+    runRibbonGenerateTests,
+    runRibbonTests,
+    runRibbonGenerateFix,
+    runRibbonApplyFix,
+    runRibbonHistory,
+    runRibbonAskAi,
+  };
+}
+
+function ReviewHeaderCard({ repoId }: { repoId: string }) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5"
+    >
+      <div className="flex items-center gap-2">
+        <Sparkles size={16} className="text-brand" />
+        <h1 className="font-heading text-2xl font-bold tracking-tight">AI Engineering Review</h1>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">Review commits and PR diffs with persisted findings and optional fix generation. Use the <a href={`/repo/${repoId}/explorer`} className="text-brand underline hover:no-underline">File Explorer</a> to browse and review individual files.</p>
+    </motion.section>
+  );
+}
+
+type ReviewRunPanelsProps = {
+  loading: boolean;
+  activeReviewTarget: 'file' | 'files';
+  setActiveReviewTarget: Dispatch<SetStateAction<'file' | 'files'>>;
+  filePath: string;
+  setFilePath: Dispatch<SetStateAction<string>>;
+  filesCsv: string;
+  setFilesCsv: Dispatch<SetStateAction<string>>;
+  commitHash: string;
+  setCommitHash: Dispatch<SetStateAction<string>>;
+  prFilesCsv: string;
+  setPrFilesCsv: Dispatch<SetStateAction<string>>;
+  prDiff: string;
+  setPrDiff: Dispatch<SetStateAction<string>>;
+  prompt: string;
+  setPrompt: Dispatch<SetStateAction<string>>;
+  repoId: string;
+  token: string;
+  runReview: (runner: () => Promise<ReviewRun>) => Promise<void>;
+};
+
+function ReviewRunPanels(props: ReviewRunPanelsProps) {
+  const {
+    loading,
+    activeReviewTarget,
+    setActiveReviewTarget,
+    filePath,
+    setFilePath,
+    filesCsv,
+    setFilesCsv,
+    commitHash,
+    setCommitHash,
+    prFilesCsv,
+    setPrFilesCsv,
+    prDiff,
+    setPrDiff,
+    prompt,
+    setPrompt,
+    repoId,
+    token,
+    runReview,
+  } = props;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
+        <div className="flex items-center gap-2 text-sm font-medium"><FileCode2 size={14} className="text-brand" /> Review file</div>
+        <Input
+          value={filePath}
+          onChange={(e) => {
+            setActiveReviewTarget('file');
+            setFilePath(e.target.value);
+          }}
+          placeholder="api/services/chat_service.py"
+        />
+        <Button
+          disabled={loading || !filePath.trim()}
+          onClick={() => {
+            setActiveReviewTarget('file');
+            runReview(() => reviewFile(token, { repo_id: repoId, filename: filePath.trim(), prompt: prompt.trim() || undefined }));
+          }}
+        >
+          Run file review
+        </Button>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
+        <div className="flex items-center gap-2 text-sm font-medium"><Bot size={14} className="text-brand" /> Review multiple files</div>
+        <Textarea
+          value={filesCsv}
+          onChange={(e) => {
+            setActiveReviewTarget('files');
+            setFilesCsv(e.target.value);
+          }}
+          placeholder="api/services/chat_service.py,api/routers/chat.py"
+          rows={2}
+        />
+        <Button
+          disabled={loading || !filesCsv.trim()}
+          onClick={() => {
+            setActiveReviewTarget('files');
+            runReview(() => reviewFiles(token, { repo_id: repoId, files: csvToList(filesCsv), prompt: prompt.trim() || undefined }));
+          }}
+        >
+          Run files review
+        </Button>
+        {activeReviewTarget === 'files' && firstPathFromCsv(filesCsv) ? (
+          <p className="text-[11px] text-muted-foreground">Active file metadata: {firstPathFromCsv(filesCsv)}</p>
+        ) : null}
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
+        <div className="flex items-center gap-2 text-sm font-medium"><GitCommitHorizontal size={14} className="text-brand" /> Review commit</div>
+        <Input value={commitHash} onChange={(e) => setCommitHash(e.target.value)} placeholder="commit hash" />
+        <Button disabled={loading || !commitHash.trim()} onClick={() => runReview(() => reviewCommit(token, { repo_id: repoId, commit_hash: commitHash.trim(), prompt: prompt.trim() || undefined }))}>Run commit review</Button>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
+        <div className="flex items-center gap-2 text-sm font-medium"><GitPullRequest size={14} className="text-brand" /> Review pull request</div>
+        <Textarea value={prFilesCsv} onChange={(e) => setPrFilesCsv(e.target.value)} placeholder="changed files csv" rows={2} />
+        <Textarea value={prDiff} onChange={(e) => setPrDiff(e.target.value)} placeholder="paste PR diff (optional if files are available)" rows={5} />
+        <Button
+          disabled={loading || (!prFilesCsv.trim() && !prDiff.trim())}
+          onClick={() => runReview(() => reviewPullRequest(token, {
+            repo_id: repoId,
+            changed_files: csvToList(prFilesCsv),
+            diff: prDiff,
+            prompt: prompt.trim() || undefined,
+          }))}
+        >
+          Run PR review
+        </Button>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
+        <div className="text-sm font-medium">Optional reviewer prompt</div>
+        <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Focus on security/authentication risks..." rows={3} />
+      </div>
+    </div>
+  );
+}
+
+type ReviewHistoryPanelsProps = {
+  token: string;
+  history: ReviewHistoryItem[];
+  historyLoading: boolean;
+  setHistoryLoading: Dispatch<SetStateAction<boolean>>;
+  selectedReview: ReviewRun | null;
+  setSelectedReview: Dispatch<SetStateAction<ReviewRun | null>>;
+  findings: ReviewRun['findings'];
+  fixOutput: ReviewFixResponse | null;
+  setFixOutput: Dispatch<SetStateAction<ReviewFixResponse | null>>;
+  fixLoading: string | null;
+  setFixLoading: Dispatch<SetStateAction<string | null>>;
+  setFilePath: Dispatch<SetStateAction<string>>;
+  loadHistory: (t: string) => Promise<void>;
+};
+
+function ReviewHistoryPanels(props: ReviewHistoryPanelsProps) {
+  const {
+    token,
+    history,
+    historyLoading,
+    setHistoryLoading,
+    selectedReview,
+    setSelectedReview,
+    findings,
+    fixOutput,
+    setFixOutput,
+    fixLoading,
+    setFixLoading,
+    setFilePath,
+    loadHistory,
+  } = props;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-border bg-card/80 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-sm font-medium">Review history</div>
+          {historyLoading && <Loader2 size={13} className="animate-spin text-muted-foreground" />}
+        </div>
+        <div className="space-y-2 max-h-[18rem] overflow-auto">
+          {history.length === 0 && <p className="text-sm text-muted-foreground">No reviews yet.</p>}
+
+          {history.map((item) => {
+            const isActive = selectedReview?.review_id === item.review_id;
+            return (
+              <button
+                key={item.review_id}
+                className={`w-full text-left rounded-xl border p-3 transition-colors ${isActive ? 'border-brand/40 bg-brand/5' : 'border-border bg-background/70 hover:border-brand/30'}`}
+                onClick={async () => {
+                  if (!token || historyLoading) return;
+                  setHistoryLoading(true);
+                  setFixOutput(null);
+                  try {
+                    const row = await getReview(token, item.review_id);
+                    setSelectedReview(row);
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'Failed to load review');
+                  } finally {
+                    setHistoryLoading(false);
+                  }
+                }}
+              >
+                <div className="text-xs text-muted-foreground">{item.target_type.toUpperCase()} • {item.created_at ? new Date(item.created_at).toLocaleString() : 'n/a'}</div>
+                <div className="mt-1 text-sm font-medium truncate">{item.summary}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {selectedReview && (
+        <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs text-muted-foreground">Review #{selectedReview.review_id.slice(0, 8)}</div>
+              <div className="text-sm font-medium">{selectedReview.summary}</div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                if (!token) return;
+                try {
+                  await deleteReview(token, selectedReview.review_id);
+                  setSelectedReview(null);
+                  setFixOutput(null);
+                  await loadHistory(token);
+                  toast.success('Review deleted');
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Failed to delete review');
+                }
+              }}
+            >
+              <Trash2 size={13} className="mr-1" /> Delete
+            </Button>
+          </div>
+
+          <div className="space-y-2 max-h-[18rem] overflow-auto">
+            {findings.length === 0 && <p className="text-sm text-muted-foreground">No findings for this review.</p>}
+            {findings.map((f) => (
+              <div key={f.id} className={`rounded-xl border p-3 space-y-2 transition-colors ${fixOutput && fixLoading === null && (fixOutput as ReviewFixResponse & { _findingId?: string })._findingId === f.id ? 'border-brand/40 bg-brand/5' : 'border-border bg-background/70'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-sm font-medium hover:text-brand"
+                    onClick={() => {
+                      if (f.file && f.file !== 'unknown') {
+                        setFilePath(f.file);
+                      }
+                    }}
+                  >
+                    {f.finding}
+                  </button>
+                  <SeverityPill severity={f.severity} />
+                </div>
+                <div className="text-xs text-muted-foreground">{f.file} • {f.code_area} • risk: {f.risk_level}</div>
+                <p className="text-sm">{f.recommendation}</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={fixLoading !== null}
+                  onClick={async () => {
+                    if (!token) return;
+                    setFixLoading(f.id);
+                    setFixOutput(null);
+                    try {
+                      const fix = await generateReviewFix(token, {
+                        review_id: selectedReview.review_id,
+                        repo_id: selectedReview.repo_id,
+                        finding_id: f.id,
+                        finding: f.finding,
+                        file: f.file,
+                        code_area: f.code_area,
+                        recommendation: f.recommendation,
+                      });
+                      setFixOutput(fix);
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : 'Failed to generate fix');
+                    } finally {
+                      setFixLoading(null);
+                    }
+                  }}
+                >
+                  {fixLoading === f.id ? (
+                    <><Loader2 size={13} className="mr-1 animate-spin" /> Generating…</>
+                  ) : (
+                    <><Wrench size={13} className="mr-1" /> Generate fix</>
+                  )}
+                </Button>
+              </div>
+            ))}
+          </div>
+
+          {fixOutput && (
+            <div className="rounded-xl border border-brand/30 bg-brand/5 p-3">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-brand">
+                <Wrench size={12} />
+                Suggested fix{fixOutput.target_file ? ` for ${fixOutput.target_file}` : ''}
+              </div>
+              <pre className="whitespace-pre-wrap text-sm leading-relaxed">{fixOutput.suggested_fix}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 export default function RepositoryReviewPage() {
   const { id: repoId } = useParams<{ id: string }>();
@@ -189,7 +708,8 @@ export default function RepositoryReviewPage() {
   const [loading, setLoading] = useState(false);
   const [fixLoading, setFixLoading] = useState<string | null>(null); // finding id being fixed
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [filePath, setFilePath] = useState('api/services/chat_service.py');
+  const [activeReviewTarget, setActiveReviewTarget] = useState<'file' | 'files'>('file');
+  const [filePath, setFilePath] = useState('');
   const [filesCsv, setFilesCsv] = useState('');
   const [commitHash, setCommitHash] = useState('');
   const [prFilesCsv, setPrFilesCsv] = useState('');
@@ -200,9 +720,53 @@ export default function RepositoryReviewPage() {
   const [ribbonReview, setRibbonReview] = useState<ExplorerReviewResult | null>(null);
   const [ribbonFix, setRibbonFix] = useState<ExplorerFixProposal | null>(null);
   const [ribbonTests, setRibbonTests] = useState<ExplorerTestRunResult | null>(null);
+  const [coverageByPath, setCoverageByPath] = useState<Record<string, number>>({});
   const [ribbonHistory, setRibbonHistory] = useState('');
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
+  const [repoHealthScore, setRepoHealthScore] = useState<number | null>(null);
+  const inferredRepoIdsRef = useRef<Set<string>>(new Set());
+  const previousRepoIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (previousRepoIdRef.current === null) {
+      previousRepoIdRef.current = repoId;
+      return;
+    }
+    if (previousRepoIdRef.current === repoId) return;
+
+    previousRepoIdRef.current = repoId;
+    inferredRepoIdsRef.current.clear();
+
+    // Prevent stale file/ribbon context from previous repo carrying over.
+    setActiveReviewTarget('file');
+    setFilePath('');
+    setFilesCsv('');
+    setCommitHash('');
+    setPrFilesCsv('');
+    setPrDiff('');
+    setSelectedFile(null);
+    setSelectedReview(null);
+    setFixOutput(null);
+    setRibbonReview(null);
+    setRibbonFix(null);
+    setRibbonTests(null);
+    setCoverageByPath({});
+    setRibbonHistory('');
+    setRibbonAction(null);
+    setShowRibbonDiff(false);
+    setRepoHealthScore(null);
+  }, [repoId]);
+
+  const setFilePathAndActivate: Dispatch<SetStateAction<string>> = useCallback((next) => {
+    setActiveReviewTarget('file');
+    setFilePath(next);
+  }, []);
+
+  const setFilesCsvAndActivate: Dispatch<SetStateAction<string>> = useCallback((next) => {
+    setActiveReviewTarget('files');
+    setFilesCsv(next);
+  }, []);
 
   const loadHistory = useCallback(async (t: string) => {
     const response = await listReviews(t, repoId);
@@ -229,6 +793,7 @@ export default function RepositoryReviewPage() {
             setFilePath(files[0]);
             setFilesCsv(files.join(','));
             setPrFilesCsv(files.join(','));
+            inferredRepoIdsRef.current.add(repoId);
           }
           if (parsed.prompt && parsed.prompt.trim()) {
             setPrompt(parsed.prompt.trim());
@@ -241,11 +806,93 @@ export default function RepositoryReviewPage() {
     void init();
   }, [loadHistory, repoId, token]);
 
-  const selectedFilePath = filePath.trim();
+  useEffect(() => {
+    if (!token || filePath.trim() || inferredRepoIdsRef.current.has(repoId)) return;
+    inferredRepoIdsRef.current.add(repoId);
+    let cancelled = false;
+
+    async function inferDefaultFile() {
+      try {
+        const queue: string[] = [''];
+        const visited = new Set<string>();
+        let attempts = 0;
+
+        while (queue.length > 0 && attempts < 24) {
+          const current = queue.shift() ?? '';
+          const key = normalizePath(current);
+          if (visited.has(key)) continue;
+          visited.add(key);
+          attempts += 1;
+
+          const tree = await getExplorerTree(token, repoId, { path: current || undefined, limit: 300 });
+          const nodes = Array.isArray(tree?.nodes) ? tree.nodes : [];
+
+          const preferredFile = pickFirstReviewableFile(nodes);
+          if (preferredFile) {
+            if (!cancelled) {
+              setFilePath(preferredFile);
+            }
+            return;
+          }
+
+          const childFolders = nodes
+            .filter((node) => node.type === 'folder' && node.path)
+            .map((node) => normalizePath(node.path))
+            .filter((path) => path && !visited.has(path));
+          queue.push(...childFolders);
+        }
+      } catch {
+        // Keep the field editable/empty if tree inference is unavailable.
+      }
+
+    }
+
+    void inferDefaultFile();
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, repoId, token]);
+
+  const selectedFilePath = useMemo(() => {
+    const singlePath = filePath.trim() ? normalizePath(filePath) : '';
+    const firstMultiPath = firstPathFromCsv(filesCsv);
+    if (activeReviewTarget === 'files') {
+      return firstMultiPath || singlePath;
+    }
+    return singlePath || firstMultiPath;
+  }, [activeReviewTarget, filePath, filesCsv]);
+
+  const coverageLabel = useMemo(() => {
+    const key = selectedFilePath ? coverageCacheKey(selectedFilePath) : '';
+    const cachedCoverage = key ? coverageByPath[key] : undefined;
+    const value = typeof cachedCoverage === 'number' ? cachedCoverage : ribbonTests?.coverage;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+    return `${Math.round(value)}%`;
+  }, [coverageByPath, ribbonTests, selectedFilePath]);
+
+  const handleCoverageMeasured = useCallback((path: string, coverage: number | null) => {
+    const key = coverageCacheKey(path);
+    if (!key) return;
+    if (typeof coverage !== 'number' || !Number.isFinite(coverage)) return;
+    setCoverageByPath((prev) => ({ ...prev, [key]: coverage }));
+  }, []);
 
   useEffect(() => {
-    if (!token || !selectedFilePath) return;
+    // Keep ribbon context file-scoped; prevents stale coverage/details from previous file.
+    setRibbonReview(null);
+    setRibbonFix(null);
+    setRibbonTests(null);
+    setRibbonHistory('');
+    setShowRibbonDiff(false);
+  }, [selectedFilePath]);
+
+  useEffect(() => {
+    if (!token || !selectedFilePath) {
+      setSelectedFile(null);
+      return;
+    }
     let cancelled = false;
+    setSelectedFile(null);
     async function loadSelectedFile() {
       try {
         const details = await getExplorerFile(token, repoId, selectedFilePath);
@@ -259,6 +906,29 @@ export default function RepositoryReviewPage() {
       cancelled = true;
     };
   }, [token, repoId, selectedFilePath]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+
+    async function loadRepoHealthScore() {
+      try {
+        const latest = await getLatestRepositoryHealth(token, repoId);
+        if (!cancelled) {
+          setRepoHealthScore(latest.latest?.top_level?.repository_health ?? readCachedRepoHealthScore(repoId));
+        }
+      } catch {
+        if (!cancelled) {
+          setRepoHealthScore(readCachedRepoHealthScore(repoId));
+        }
+      }
+    }
+
+    void loadRepoHealthScore();
+    return () => {
+      cancelled = true;
+    };
+  }, [repoId, token]);
 
 
   const runReview = useCallback(async (runner: () => Promise<ReviewRun>) => {
@@ -280,84 +950,32 @@ export default function RepositoryReviewPage() {
   const findings = useMemo(() => selectedReview?.findings ?? [], [selectedReview]);
 
   const ribbonHealthScore = useMemo(() => {
-    return computeRibbonHealthScore(selectedFile);
-  }, [selectedFile]);
-
-  async function runRibbonAction<T>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> {
-    if (!token || !selectedFilePath) return undefined;
-    try {
-      setRibbonAction(actionName);
-      const result = await fn();
-      if (successMsg) toast.success(successMsg);
-      return result;
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : `${actionName.replace('_', ' ')} failed`);
-      return undefined;
-    } finally {
-      setRibbonAction(null);
-    }
-  }
-
-  async function runRibbonReview(type: string) {
-    const result = await runRibbonAction(type, () =>
-      runExplorerFileReview(token, repoId, { path: selectedFilePath, review_type: type }),
-      `${type.replace('_', ' ')} complete`
-    );
-    if (result) setRibbonReview(result);
-  }
-
-  async function runRibbonGenerateTests() {
-    await runRibbonAction('generate_tests', async () => {
-      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
-      setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
-    }, 'Generated test candidates');
-  }
-
-  async function runRibbonTests() {
-    await runRibbonAction('run_tests', async () => {
-      const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
-      const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
-      setRibbonTests(run);
-      toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
-    });
-  }
-
-  async function runRibbonGenerateFix() {
-    const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
-    const recommendation = ribbonReview?.findings?.[0]?.recommendation || '';
-    const fix = await runRibbonAction('generate_fix', () =>
-      generateExplorerFix(token, repoId, { path: selectedFilePath, finding, recommendation }),
-      'Fix generated'
-    );
-    if (fix) { setRibbonFix(fix); setShowRibbonDiff(true); }
-  }
-
-  async function runRibbonApplyFix() {
-    if (!ribbonFix) return;
-    if (!window.confirm('Apply this fix? Validation checks will run before acceptance.')) return;
-    await runRibbonAction('apply_fix', async () => {
-      await applyExplorerFix(token, repoId, { fix_id: ribbonFix.fix_id, expected_sha256: selectedFile?.sha256, run_validation: true });
-      const refreshed = await getExplorerFile(token, repoId, selectedFilePath);
-      setSelectedFile(refreshed);
-    }, 'Fix applied');
-  }
-
-  async function runRibbonHistory() {
-    await runRibbonAction('history', async () => {
-      const h = await getExplorerHistory(token, repoId, selectedFilePath);
-      setRibbonHistory(
-        [`Reviews: ${h.reviews.length}`, `Fixes: ${h.fixes.length}`, `Applied: ${h.applied_fixes.length}`,
-         `Rejected: ${h.rejected_fixes.length}`, `Tests: ${h.test_runs.length}`, `Conversations: ${h.conversations.length}`].join(' | ')
-      );
-    }, 'History loaded');
-  }
-
-  async function runRibbonAskAi() {
-    await runRibbonAction('ask_ai', async () => {
-      await addExplorerConversationEntry(token, repoId, { path: selectedFilePath, role: 'user', content: `Open AI conversation for ${selectedFilePath}` });
-      window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
-    }, 'AI chat context queued');
-  }
+    return computeRibbonHealthScore(selectedFile, repoHealthScore);
+  }, [selectedFile, repoHealthScore]);
+  const {
+    runRibbonReview,
+    runRibbonGenerateTests,
+    runRibbonTests,
+    runRibbonGenerateFix,
+    runRibbonApplyFix,
+    runRibbonHistory,
+    runRibbonAskAi,
+  } = useReviewRibbonActions({
+    token,
+    repoId,
+    selectedFilePath,
+    selectedFile,
+    ribbonReview,
+    ribbonFix,
+    setRibbonAction,
+    setRibbonReview,
+    setRibbonFix,
+    setRibbonTests,
+    setRibbonHistory,
+    setShowRibbonDiff,
+    setSelectedFile,
+    onCoverageMeasured: handleCoverageMeasured,
+  });
 
   useEffect(() => {
     if (!selectedFilePath) return;
@@ -399,22 +1017,13 @@ export default function RepositoryReviewPage() {
 
   return (
     <div className="space-y-6">
-      <motion.section
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5"
-      >
-        <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-brand" />
-          <h1 className="font-heading text-2xl font-bold tracking-tight">AI Engineering Review</h1>
-        </div>
-        <p className="mt-2 text-sm text-muted-foreground">Review commits and PR diffs with persisted findings and optional fix generation. Use the <a href={`/repo/${repoId}/explorer`} className="text-brand underline hover:no-underline">File Explorer</a> to browse and review individual files.</p>
-      </motion.section>
+      <ReviewHeaderCard repoId={repoId} />
 
       {selectedFilePath && (
         <FileActionRibbon
           selectedFilePath={selectedFilePath}
           selectedFile={selectedFile}
+          coverageLabel={coverageLabel}
           ribbonHealthScore={ribbonHealthScore}
           runRibbonReview={runRibbonReview}
           runRibbonGenerateTests={runRibbonGenerateTests}
@@ -433,195 +1042,42 @@ export default function RepositoryReviewPage() {
         />
       )}
 
-      {/* File Viewer removed — use /explorer page for full file browsing */}
-
       <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-4">
-          <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium"><FileCode2 size={14} className="text-brand" /> Review file</div>
-            <Input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder="api/services/chat_service.py" />
-            <Button disabled={loading || !filePath.trim()} onClick={() => runReview(() => reviewFile(token, { repo_id: repoId, filename: filePath.trim(), prompt: prompt.trim() || undefined }))}>Run file review</Button>
-          </div>
-
-          <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium"><Bot size={14} className="text-brand" /> Review multiple files</div>
-            <Textarea value={filesCsv} onChange={(e) => setFilesCsv(e.target.value)} placeholder="api/services/chat_service.py,api/routers/chat.py" rows={2} />
-            <Button
-              disabled={loading || !filesCsv.trim()}
-              onClick={() => runReview(() => reviewFiles(token, {
-                repo_id: repoId,
-                files: csvToList(filesCsv),
-                prompt: prompt.trim() || undefined,
-              }))}
-            >
-              Run files review
-            </Button>
-          </div>
-
-          <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium"><GitCommitHorizontal size={14} className="text-brand" /> Review commit</div>
-            <Input value={commitHash} onChange={(e) => setCommitHash(e.target.value)} placeholder="commit hash" />
-            <Button disabled={loading || !commitHash.trim()} onClick={() => runReview(() => reviewCommit(token, { repo_id: repoId, commit_hash: commitHash.trim(), prompt: prompt.trim() || undefined }))}>Run commit review</Button>
-          </div>
-
-          <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium"><GitPullRequest size={14} className="text-brand" /> Review pull request</div>
-            <Textarea value={prFilesCsv} onChange={(e) => setPrFilesCsv(e.target.value)} placeholder="changed files csv" rows={2} />
-            <Textarea value={prDiff} onChange={(e) => setPrDiff(e.target.value)} placeholder="paste PR diff (optional if files are available)" rows={5} />
-            <Button
-              disabled={loading || (!prFilesCsv.trim() && !prDiff.trim())}
-              onClick={() => runReview(() => reviewPullRequest(token, {
-                repo_id: repoId,
-                changed_files: csvToList(prFilesCsv),
-                diff: prDiff,
-                prompt: prompt.trim() || undefined,
-              }))}
-            >
-              Run PR review
-            </Button>
-          </div>
-
-          <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
-            <div className="text-sm font-medium">Optional reviewer prompt</div>
-            <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Focus on security/authentication risks..." rows={3} />
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="rounded-2xl border border-border bg-card/80 p-4">
-
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-medium">Review history</div>
-              {historyLoading && <Loader2 size={13} className="animate-spin text-muted-foreground" />}
-            </div>
-            <div className="space-y-2 max-h-[18rem] overflow-auto">
-              {history.length === 0 && <p className="text-sm text-muted-foreground">No reviews yet.</p>}
-
-              {history.map((item) => {
-                const isActive = selectedReview?.review_id === item.review_id;
-                return (
-                  <button
-                    key={item.review_id}
-                    className={`w-full text-left rounded-xl border p-3 transition-colors ${isActive ? 'border-brand/40 bg-brand/5' : 'border-border bg-background/70 hover:border-brand/30'}`}
-                    onClick={async () => {
-                      if (!token || historyLoading) return;
-                      setHistoryLoading(true);
-                      setFixOutput(null);
-                      try {
-                        const row = await getReview(token, item.review_id);
-                        setSelectedReview(row);
-                      } catch (err) {
-                        toast.error(err instanceof Error ? err.message : 'Failed to load review');
-                      } finally {
-                        setHistoryLoading(false);
-                      }
-                    }}
-                  >
-                    <div className="text-xs text-muted-foreground">{item.target_type.toUpperCase()} • {item.created_at ? new Date(item.created_at).toLocaleString() : 'n/a'}</div>
-                    <div className="mt-1 text-sm font-medium truncate">{item.summary}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {selectedReview && (
-            <div className="rounded-2xl border border-border bg-card/80 p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-xs text-muted-foreground">Review #{selectedReview.review_id.slice(0, 8)}</div>
-                  <div className="text-sm font-medium">{selectedReview.summary}</div>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    if (!token) return;
-                    try {
-                      await deleteReview(token, selectedReview.review_id);
-                      setSelectedReview(null);
-                      setFixOutput(null);
-                      await loadHistory(token);
-                      toast.success('Review deleted');
-                    } catch (err) {
-                      toast.error(err instanceof Error ? err.message : 'Failed to delete review');
-                    }
-                  }}
-                >
-                  <Trash2 size={13} className="mr-1" /> Delete
-                </Button>
-              </div>
-
-              <div className="space-y-2 max-h-[18rem] overflow-auto">
-                {findings.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No findings for this review.</p>
-                )}
-                {findings.map((f) => (
-                  <div key={f.id} className={`rounded-xl border p-3 space-y-2 transition-colors ${fixOutput && fixLoading === null && (fixOutput as ReviewFixResponse & { _findingId?: string })._findingId === f.id ? 'border-brand/40 bg-brand/5' : 'border-border bg-background/70'}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        className="text-left text-sm font-medium hover:text-brand"
-                        onClick={() => {
-                          if (f.file && f.file !== 'unknown') {
-                            setFilePath(f.file);
-                          }
-                        }}
-                      >
-                        {f.finding}
-                      </button>
-                      <SeverityPill severity={f.severity} />
-                    </div>
-                    <div className="text-xs text-muted-foreground">{f.file} • {f.code_area} • risk: {f.risk_level}</div>
-                    <p className="text-sm">{f.recommendation}</p>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={fixLoading !== null}
-                      onClick={async () => {
-                        if (!token) return;
-                        setFixLoading(f.id);
-                        setFixOutput(null);
-                        try {
-                          const fix = await generateReviewFix(token, {
-                            review_id: selectedReview.review_id,
-                            repo_id: selectedReview.repo_id,
-                            finding_id: f.id,
-                            finding: f.finding,
-                            file: f.file,
-                            code_area: f.code_area,
-                            recommendation: f.recommendation,
-                          });
-                          setFixOutput(fix);
-                        } catch (err) {
-                          toast.error(err instanceof Error ? err.message : 'Failed to generate fix');
-                        } finally {
-                          setFixLoading(null);
-                        }
-                      }}
-                    >
-                      {fixLoading === f.id ? (
-                        <><Loader2 size={13} className="mr-1 animate-spin" /> Generating…</>
-                      ) : (
-                        <><Wrench size={13} className="mr-1" /> Generate fix</>
-                      )}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-
-              {fixOutput && (
-                <div className="rounded-xl border border-brand/30 bg-brand/5 p-3">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-brand">
-                    <Wrench size={12} />
-                    Suggested fix{fixOutput.target_file ? ` for ${fixOutput.target_file}` : ''}
-                  </div>
-                  <pre className="whitespace-pre-wrap text-sm leading-relaxed">{fixOutput.suggested_fix}</pre>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <ReviewRunPanels
+          loading={loading}
+          activeReviewTarget={activeReviewTarget}
+          setActiveReviewTarget={setActiveReviewTarget}
+          filePath={filePath}
+          setFilePath={setFilePathAndActivate}
+          filesCsv={filesCsv}
+          setFilesCsv={setFilesCsvAndActivate}
+          commitHash={commitHash}
+          setCommitHash={setCommitHash}
+          prFilesCsv={prFilesCsv}
+          setPrFilesCsv={setPrFilesCsv}
+          prDiff={prDiff}
+          setPrDiff={setPrDiff}
+          prompt={prompt}
+          setPrompt={setPrompt}
+          repoId={repoId}
+          token={token}
+          runReview={runReview}
+        />
+        <ReviewHistoryPanels
+          token={token}
+          history={history}
+          historyLoading={historyLoading}
+          setHistoryLoading={setHistoryLoading}
+          selectedReview={selectedReview}
+          setSelectedReview={setSelectedReview}
+          findings={findings}
+          fixOutput={fixOutput}
+          setFixOutput={setFixOutput}
+          fixLoading={fixLoading}
+          setFixLoading={setFixLoading}
+          setFilePath={setFilePathAndActivate}
+          loadHistory={loadHistory}
+        />
       </section>
     </div>
   );

@@ -68,6 +68,7 @@ def _enforce_rate_limit(request: Request, route_key: str) -> None:
     "/register/preflight",
     response_model=RegisterPreflightResponse,
     tags=["public"],
+    dependencies=[Depends(get_current_user)],
     openapi_extra={"security": []},
 )
 async def register_preflight(
@@ -137,6 +138,7 @@ async def register_preflight(
     "/login/preflight",
     response_model=LoginPreflightResponse,
     tags=["public"],
+    dependencies=[Depends(get_current_user)],
     openapi_extra={"security": []},
 )
 async def login_preflight(
@@ -187,6 +189,7 @@ async def login_preflight(
     "/login/audit",
     response_model=GenericAuthResponse,
     tags=["public"],
+    dependencies=[Depends(get_current_user)],
     openapi_extra={"security": []},
 )
 async def login_audit(
@@ -294,6 +297,7 @@ async def logout_audit(
     "/password-reset/audit-request",
     response_model=GenericAuthResponse,
     tags=["public"],
+    dependencies=[Depends(get_current_user)],
     openapi_extra={"security": []},
 )
 async def password_reset_audit_request(

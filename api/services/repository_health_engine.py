@@ -1204,6 +1204,9 @@ class RepositoryHealthEngine:
             previous_scores,
         )
         overall_score = self._aggregate_score(category_results)
+        if previous_scores:
+            previous_overall = int(round(sum(previous_scores.values()) / max(1, len(previous_scores))))
+            trend_delta = overall_score - previous_overall
         grade = self._grade_for_score(overall_score)
         status = self._status_for_score(overall_score)
         recommendations = self.recommendation_engine.generate(category_results)
@@ -1359,7 +1362,8 @@ class RepositoryHealthEngine:
         recommendations: Sequence[Dict[str, Any]],
     ) -> Dict[str, Any]:
         top_categories = sorted(categories, key=lambda c: c.score, reverse=True)[:3]
-        weak_categories = sorted(categories, key=lambda c: c.score)[:3]
+        weak_candidates = [c for c in categories if c.score < 100]
+        weak_categories = sorted(weak_candidates, key=lambda c: c.score)[:3]
 
         critical = [f.title for f in findings if f.finding_type == "problem" and f.severity in {"critical", "high"}][:8]
         arch_risks = [f.title for f in findings if f.category == "Architecture" and f.finding_type == "problem"][:5]

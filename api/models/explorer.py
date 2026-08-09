@@ -43,6 +43,8 @@ class ExplorerFileResponse(BaseModel):
     imports: List[str]
     line_count: int
     size: int
+    owner: Optional[str] = None
+    last_modified: Optional[str] = None
 
 
 class ExplorerReviewFileRequest(BaseModel):

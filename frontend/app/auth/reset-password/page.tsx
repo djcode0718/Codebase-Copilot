@@ -1,15 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createClient } from '@/lib/supabase/client';
 import { auditPasswordResetComplete } from '@/lib/auth-api';
 import { validatePasswordForReset, validatePasswordsMatch, showPasswordRecoveryError } from '@/lib/auth-recovery-utils';
-import { AuthExperienceShell } from '@/components/auth/AuthExperienceShell';
-import { AuthBusyLabel, AuthScreenMotion, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
+import { AuthRecoveryFooterLink, AuthRecoveryPageFrame, AuthRecoverySubmitButton, AuthSuccessPanel } from '@/components/auth/AuthRecoveryPrimitives';
 
 export default function ResetPasswordPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -86,32 +83,17 @@ export default function ResetPasswordPage() {
           className="h-11 bg-background border-border focus-visible:ring-brand"
         />
       </div>
-      <Button
-        type="submit"
-        disabled={loading}
-        className="w-full bg-brand hover:bg-green-400 text-green-950 font-semibold transition-colors duration-200"
-      >
-        <AuthBusyLabel loading={loading} idleLabel="Update password" />
-      </Button>
+      <AuthRecoverySubmitButton loading={loading} idleLabel="Update password" />
     </form>
   );
 
   return (
-    <AuthScreenMotion>
-      <AuthExperienceShell
-        heading="Set new password"
-        subtitle="Create a new secure password for your Codebase Copilot account."
-        authCard={card}
-        footer={(
-          <p className="text-center text-sm text-muted-foreground">
-            Need a fresh link?{' '}
-            <Link href="/auth/forgot-password" className="text-brand hover:underline">
-              Request password reset
-            </Link>
-          </p>
-        )}
-      />
-    </AuthScreenMotion>
+    <AuthRecoveryPageFrame
+      heading="Set new password"
+      subtitle="Create a new secure password for your Codebase Copilot account."
+      authCard={card}
+      footer={<AuthRecoveryFooterLink text="Need a fresh link?" href="/auth/forgot-password" linkLabel="Request password reset" />}
+    />
   );
 }
 

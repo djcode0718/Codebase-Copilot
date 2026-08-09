@@ -5,6 +5,7 @@ import git
 import threading
 import uuid
 from urllib.parse import urlparse, quote
+from typing import Optional
 from app.config import REPOS_DIR
 from app.utils.git_auth import get_git_auth_token
 from app.utils.logger import get_logger
@@ -92,9 +93,9 @@ def is_valid_url(url: str) -> bool:
         return False
 
 
-def _build_authenticated_url(source: str) -> str:
+def _build_authenticated_url(source: str, token: Optional[str] = None) -> str:
     """Inject a GitHub token into HTTPS URL when available for private repos."""
-    token = get_git_auth_token() or ""
+    token = (token or get_git_auth_token() or "").strip()
     if not token:
         return source
 
@@ -109,26 +110,49 @@ def _build_authenticated_url(source: str) -> str:
     return parsed._replace(netloc=netloc).geturl()
 
 
+def _is_auth_error(message: str) -> bool:
+    lowered = (message or "").lower()
+    auth_signals = (
+        "authentication failed",
+        "could not read username",
+        "access denied",
+        "repository not found",
+        "terminal prompts disabled",
+        "support for password authentication was removed",
+    )
+    return any(signal in lowered for signal in auth_signals)
+
+
 def _clone_repository(source: str, target_dir: str) -> None:
     """Clone with non-interactive git settings to fail fast on auth issues."""
-    clone_source = _build_authenticated_url(source)
+    token = (get_git_auth_token() or "").strip()
+    parsed = urlparse(source)
+    is_github_https = parsed.scheme == "https" and parsed.hostname == "github.com"
     clone_env = os.environ.copy()
     clone_env["GIT_TERMINAL_PROMPT"] = "0"
     clone_env["GIT_ASKPASS"] = "echo"
+    clone_env["GCM_INTERACTIVE"] = "Never"
 
     try:
-        git.Repo.clone_from(clone_source, target_dir, env=clone_env)
+        # Public repositories should clone without credentials first.
+        git.Repo.clone_from(source, target_dir, env=clone_env)
     except git.exc.GitCommandError as e:
         err = str(e)
-        lowered = err.lower()
-        auth_signals = (
-            "authentication failed",
-            "could not read username",
-            "access denied",
-            "repository not found",
-            "terminal prompts disabled",
-        )
-        if any(signal in lowered for signal in auth_signals):
+        if not _is_auth_error(err):
+            raise
+
+        # Retry with token only for GitHub HTTPS repos where auth is likely needed.
+        if is_github_https and token:
+            _remove_existing_repo_dir(target_dir)
+            try:
+                authed_source = _build_authenticated_url(source, token=token)
+                git.Repo.clone_from(authed_source, target_dir, env=clone_env)
+                return
+            except git.exc.GitCommandError as retry_err:
+                if not _is_auth_error(str(retry_err)):
+                    raise
+
+        if _is_auth_error(err):
             raise ValueError(
                 "Git clone authentication failed. This repository may be private. "
                 "Set GIT_AUTH_TOKEN (or GITHUB_TOKEN) in backend environment with repo read access."

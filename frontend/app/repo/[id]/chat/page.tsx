@@ -487,8 +487,12 @@ function ChatMessageList({
   streaming,
   streamedText,
   error,
+  retryPrompt,
   suggestions,
   onSuggestion,
+  onRetry,
+  onTryAgainForAnswer,
+  onEditQuestion,
   sessionReady,
   messagesEndRef,
 }: {
@@ -499,8 +503,12 @@ function ChatMessageList({
   streaming: boolean;
   streamedText: string;
   error: string | null;
+  retryPrompt: string | null;
   suggestions: string[];
   onSuggestion: (q: string) => void;
+  onRetry: () => void;
+  onTryAgainForAnswer: (index: number, msg: Message) => void;
+  onEditQuestion: (msg: Message) => void;
   sessionReady: boolean;
   messagesEndRef: { current: HTMLDivElement | null };
 }) {
@@ -515,6 +523,9 @@ function ChatMessageList({
           index={i}
           isInspected={inspectedIndex === i}
           onInspect={msg.role === 'assistant' ? () => onInspect(i, msg) : undefined}
+          onTryAgain={msg.role === 'assistant' ? () => onTryAgainForAnswer(i, msg) : undefined}
+          onEdit={msg.role === 'user' ? () => onEditQuestion(msg) : undefined}
+          actionsDisabled={streaming || !sessionReady}
         />
       ))}
 
@@ -538,7 +549,21 @@ function ChatMessageList({
         </motion.div>
       )}
 
-      {error && <p className="text-xs text-destructive">⚠ {error}</p>}
+      {(error || retryPrompt) && (
+        <div className="flex items-center gap-2 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs">
+          {error ? <p className="text-destructive">⚠ {error}</p> : <p className="text-muted-foreground">Last answer could not be completed.</p>}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 cursor-pointer border-destructive/30 px-2 text-destructive hover:text-destructive"
+            onClick={onRetry}
+            disabled={streaming || !sessionReady || !retryPrompt}
+          >
+            Retry answer
+          </Button>
+        </div>
+      )}
 
       {suggestions.length > 0 && (
         <div className="pt-2 pb-1">
@@ -648,6 +673,7 @@ function ChatWorkspace({
   streaming,
   streamedText,
   error,
+  retryPrompt,
   suggestions,
   isDev,
   routedMode,
@@ -656,6 +682,9 @@ function ChatWorkspace({
   messagesEndRef,
   onInspect,
   onSuggestion,
+  onRetry,
+  onTryAgainForAnswer,
+  onEditQuestion,
   onInputChange,
   onKeyDown,
   onSubmit,
@@ -676,6 +705,7 @@ function ChatWorkspace({
   streaming: boolean;
   streamedText: string;
   error: string | null;
+  retryPrompt: string | null;
   suggestions: string[];
   isDev: boolean;
   routedMode: QueryMode | null;
@@ -684,6 +714,9 @@ function ChatWorkspace({
   messagesEndRef: { current: HTMLDivElement | null };
   onInspect: (index: number, msg: Message) => void;
   onSuggestion: (q: string) => void;
+  onRetry: () => void;
+  onTryAgainForAnswer: (index: number, msg: Message) => void;
+  onEditQuestion: (msg: Message) => void;
   onInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: () => void;
@@ -756,8 +789,12 @@ function ChatWorkspace({
               streaming={streaming}
               streamedText={streamedText}
               error={error}
+              retryPrompt={retryPrompt}
               suggestions={suggestions}
               onSuggestion={onSuggestion}
+              onRetry={onRetry}
+              onTryAgainForAnswer={onTryAgainForAnswer}
+              onEditQuestion={onEditQuestion}
               sessionReady={sessionReady}
               messagesEndRef={messagesEndRef}
             />
@@ -915,6 +952,7 @@ function useChatInteractionHandlers({
   messagesEndRef,
   textareaRef,
   onAfterMessagePersisted,
+  setRetryPrompt,
 }: {
   chatId: string | null;
   token: string;
@@ -936,6 +974,7 @@ function useChatInteractionHandlers({
   messagesEndRef: { current: HTMLDivElement | null };
   textareaRef: { current: HTMLTextAreaElement | null };
   onAfterMessagePersisted: () => Promise<void>;
+  setRetryPrompt: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
   useEffect(() => {
     if (chatId && suggestions.length > 0) {
@@ -974,6 +1013,7 @@ function useChatInteractionHandlers({
     autoPromptTick,
     textareaRef,
     onAfterMessagePersisted,
+    setRetryPrompt,
   });
 
   const lastAssistantMode = [...messages].reverse().find((m) => m.role === 'assistant' && m.query_mode)?.query_mode ?? null;
@@ -1021,6 +1061,7 @@ function useMessageMutationHandlers({
   autoPromptTick,
   textareaRef,
   onAfterMessagePersisted,
+  setRetryPrompt,
 }: {
   chatId: string | null;
   token: string;
@@ -1039,6 +1080,7 @@ function useMessageMutationHandlers({
   autoPromptTick: number;
   textareaRef: { current: HTMLTextAreaElement | null };
   onAfterMessagePersisted: () => Promise<void>;
+  setRetryPrompt: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1065,6 +1107,7 @@ function useMessageMutationHandlers({
     const modelQuery = withMermaidGuardrails(userQuery);
     const userMsg: Message = { id: `u-${Date.now()}`, chat_id: chatId, role: 'user', content: userQuery, created_at: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
+    setRetryPrompt(null);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const result = await sendMessage(chatId, modelQuery, token);
@@ -1086,6 +1129,7 @@ function useMessageMutationHandlers({
         setMessages((prev) => [...prev, partialAssistantMsg]);
         setInspectedIndex(messages.length + 1);
         setInspectorData(buildInspectorPayloadFromMeta(pendingMetadata, latestStreamedText));
+        setRetryPrompt(userQuery);
         toast.warning('Recovered partial streamed answer due to stream interruption.');
         return;
       }
@@ -1129,6 +1173,7 @@ function useMessageMutationHandlers({
       setMessages((prev) => [...prev, fallbackAssistantMsg]);
       setInspectedIndex(messages.length + 1);
       setInspectorData(buildInspectorPayloadFromMeta(pendingMetadata, fallbackAssistantMsg.content));
+      setRetryPrompt(userQuery);
       toast.error('Recovered with a safe fallback answer due to empty stream content.');
       void onAfterMessagePersisted();
       return;
@@ -1154,9 +1199,10 @@ function useMessageMutationHandlers({
       setInspectedIndex(insertedAssistantIndex);
     }
     setInspectorData(result);
+    setRetryPrompt(null);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
     void onAfterMessagePersisted();
-  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setSuggestions, textareaRef, onAfterMessagePersisted]);
+  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setRetryPrompt, setSuggestions, textareaRef, onAfterMessagePersisted]);
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
@@ -1202,6 +1248,7 @@ export default function ChatPage() {
   const [sessionReady, setSessionReady] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [repo, setRepo] = useState<Repo | null>(null);
+  const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const pendingAutoPromptRef = useRef<string | null>(null);
   const [autoPromptTick, setAutoPromptTick] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1213,6 +1260,7 @@ export default function ChatPage() {
     setSessionReady(false);
     setSessionLoading(true);
     setMessages([]);
+    setRetryPrompt(null);
     setInspectedIndex(null);
     setInspectorData(null);
     setChatId(targetChatId);
@@ -1232,15 +1280,30 @@ export default function ChatPage() {
   const refreshSessions = useCallback(async (t: string) => {
     const latest = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 100 });
     setSessions(latest);
+    window.dispatchEvent(new CustomEvent('codebase:chat-sessions-updated', { detail: { repoId, sessions: latest } }));
   }, [repoId]);
   const handleCreateQuickAsk = useCallback(async () => {
     if (!token) return;
     try {
       const session = await createQuickAskSession(token, repoId);
+      const optimisticSession: Chat = {
+        id: session.chat_id,
+        repo_id: repoId,
+        user_id: '',
+        title: 'New chat',
+        session_type: 'quick_ask',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        message_count: 0,
+        is_archived: false,
+        is_pinned: false,
+      };
+      window.dispatchEvent(new CustomEvent('codebase:chat-session-created', { detail: { repoId, session: optimisticSession } }));
       await refreshSessions(token);
       await loadSession(token, session.chat_id);
       setSuggestions([]);
       pendingAutoPromptRef.current = null;
+      setRetryPrompt(null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create repository chat');
     }
@@ -1327,7 +1390,43 @@ export default function ChatPage() {
       messagesEndRef,
       textareaRef,
       onAfterMessagePersisted: handleSessionsChanged,
+      setRetryPrompt,
     });
+
+  const findNearestUserPromptForAssistant = useCallback((assistantIndex: number): string | null => {
+    for (let i = Math.min(assistantIndex - 1, messages.length - 1); i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg.role !== 'user') continue;
+      const query = (msg.content || '').trim();
+      if (query) return query;
+    }
+    return null;
+  }, [messages]);
+
+  const handleTryAgainForAnswer = useCallback((assistantIndex: number) => {
+    if (streaming || !sessionReady) return;
+    const userPrompt = findNearestUserPromptForAssistant(assistantIndex);
+    if (!userPrompt) {
+      toast.error('Could not locate the original question for this answer.');
+      return;
+    }
+    void handleSend(userPrompt);
+  }, [findNearestUserPromptForAssistant, handleSend, sessionReady, streaming]);
+
+  const handleEditQuestion = useCallback((msg: Message) => {
+    const next = (msg.content || '').trim();
+    if (!next) return;
+    setInput(next);
+    requestAnimationFrame(() => {
+      if (!textareaRef.current) return;
+      textareaRef.current.focus();
+      textareaRef.current.selectionStart = textareaRef.current.value.length;
+      textareaRef.current.selectionEnd = textareaRef.current.value.length;
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+    });
+  }, []);
+
   const isDev = process.env.NODE_ENV !== 'production';
   const displayThreadStats = buildThreadStats(messages, suggestions, inspectedIndex);
   const inspectorPayload = buildInspectorPayload(inspectedIndex, pendingMetadata, inspectorData);
@@ -1346,6 +1445,7 @@ export default function ChatPage() {
           streaming={streaming}
           streamedText={streamedText}
           error={error}
+          retryPrompt={retryPrompt}
           suggestions={suggestions}
           isDev={isDev}
           routedMode={routedMode}
@@ -1354,6 +1454,12 @@ export default function ChatPage() {
           messagesEndRef={messagesEndRef}
           onInspect={handleInspect}
           onSuggestion={handleSend}
+          onRetry={() => {
+            if (!retryPrompt) return;
+            void handleSend(retryPrompt);
+          }}
+          onTryAgainForAnswer={handleTryAgainForAnswer}
+          onEditQuestion={handleEditQuestion}
           onInputChange={handleInputChange}
           onKeyDown={(e) => handleKeyDown(e, input)}
           onSubmit={() => handleSend(input)}

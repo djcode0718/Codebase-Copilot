@@ -1223,8 +1223,6 @@ def insert_health_recommendations(
 
 
 def get_latest_health_run(supabase: Client, *, repo_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    if not is_repository_health_schema_available(supabase):
-        return None
     try:
         result = (
             supabase.table("repository_health_runs")
@@ -1244,8 +1242,6 @@ def get_latest_health_run(supabase: Client, *, repo_id: str, user_id: str) -> Op
 
 
 def get_health_run_by_id(supabase: Client, *, run_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    if not is_repository_health_schema_available(supabase):
-        return None
     try:
         result = (
             supabase.table("repository_health_runs")
@@ -1264,8 +1260,6 @@ def get_health_run_by_id(supabase: Client, *, run_id: str, user_id: str) -> Opti
 
 
 def get_health_category_scores(supabase: Client, *, run_id: str, user_id: str) -> List[Dict[str, Any]]:
-    if not is_repository_health_schema_available(supabase):
-        return []
     try:
         result = (
             supabase.table("repository_health_category_scores")
@@ -1295,8 +1289,6 @@ def get_health_category_score(
     user_id: str,
     category: str,
 ) -> Optional[Dict[str, Any]]:
-    if not is_repository_health_schema_available(supabase):
-        return None
     try:
         result = (
             supabase.table("repository_health_category_scores")
@@ -1322,8 +1314,6 @@ def get_health_findings(
     user_id: str,
     category: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    if not is_repository_health_schema_available(supabase):
-        return []
     try:
         query = (
             supabase.table("repository_health_findings")
@@ -1352,8 +1342,6 @@ def get_health_problem_titles(supabase: Client, *, run_id: str, user_id: str) ->
 
 
 def get_health_recommendations(supabase: Client, *, run_id: str, user_id: str) -> List[Dict[str, Any]]:
-    if not is_repository_health_schema_available(supabase):
-        return []
     try:
         result = (
             supabase.table("repository_health_recommendations")
@@ -1393,21 +1381,42 @@ def get_health_history(
     days: int = 30,
     limit: int = 30,
 ) -> List[Dict[str, Any]]:
-    if not is_repository_health_schema_available(supabase):
-        return []
     try:
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        result = (
-            supabase.table("repository_health_runs")
-            .select("*")
-            .eq("repo_id", repo_id)
-            .eq("user_id", user_id)
-            .gte("created_at", since.isoformat())
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
-        return result.data or []
+        # Page through runs so heavy same-day reruns do not crowd out older dates.
+        page_size = 200
+        max_rows = 5000
+        offset = 0
+        rows: List[Dict[str, Any]] = []
+
+        while offset < max_rows:
+            page = (
+                supabase.table("repository_health_runs")
+                .select("*")
+                .eq("repo_id", repo_id)
+                .eq("user_id", user_id)
+                .gte("created_at", since.isoformat())
+                .order("created_at", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            page_rows = page.data or []
+            if not page_rows:
+                break
+
+            rows.extend(page_rows)
+
+            # Stop early once we likely have enough rows to cover distinct days.
+            if len(page_rows) < page_size:
+                break
+            if len(rows) >= max(limit * 8, days * 6, 300):
+                break
+
+            offset += page_size
+
+        ordered = sorted(rows, key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        # Return a wider analysis window so frontend can group by user-local date.
+        return ordered[: max(limit, 100)]
     except Exception as e:
         if _is_missing_health_table_error(e):
             return []

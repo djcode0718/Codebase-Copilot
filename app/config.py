@@ -4,6 +4,9 @@ from dotenv import load_dotenv
 import sys
 load_dotenv(override="pytest" not in sys.modules)
 
+# Avoid optional HuggingFace Xet warnings when hf_xet is not installed.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 # ─── LLM Provider ────────────────────────────────────────────────────────────
 # Options: "ollama" | "gemini" | "groq"
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()

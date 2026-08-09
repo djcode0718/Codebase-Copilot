@@ -4,8 +4,9 @@
  * Centerpiece indexing screen — real-time SSE pipeline with animated steps,
  * live stats bar, progress indicator. No spinners.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, AlertCircle, MessageSquare, RotateCcw, ArrowLeft, Activity, Sparkles, Clock3, FileCode2, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -13,7 +14,10 @@ import { Progress } from '@/components/ui/progress';
 import PipelineStep from '@/components/indexing/PipelineStep';
 import { useIndexingStream } from '@/hooks/useIndexingStream';
 import { useRepoSessionToken } from '@/hooks/useRepoSessionToken';
+import { getRepo, refreshRepo } from '@/lib/api';
+import { isRepoWorkspaceReady } from '@/lib/repo-routing';
 import Link from 'next/link';
+import { toast } from 'sonner';
 
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${Math.floor(ms)}ms`;
@@ -40,7 +44,9 @@ function AnimatedCounter({ value }: { value: number | null }) {
 export default function IndexingPage() {
   const { id: repoId } = useParams<{ id: string }>();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const token = useRepoSessionToken();
+  const [retrying, setRetrying] = useState(false);
 
   const {
     steps,
@@ -54,16 +60,39 @@ export default function IndexingPage() {
     indexName,
   } = useIndexingStream(repoId, token, !!token);
 
+  // Avoid showing indexing UI when user lands here with stale route state.
+  useEffect(() => {
+    if (!token) return;
+
+    let cancelled = false;
+    async function ensureRouteIsCurrent() {
+      try {
+        const repo = await getRepo(token, repoId);
+        if (!cancelled && isRepoWorkspaceReady(repo)) {
+          router.replace(`/repo/${repoId}`);
+        }
+      } catch {
+        // No-op: indexing stream handles normal loading/error states.
+      }
+    }
+
+    void ensureRouteIsCurrent();
+    return () => {
+      cancelled = true;
+    };
+  }, [repoId, router, token]);
+
   // Auto-navigate to repo page after completion
   useEffect(() => {
     if (isComplete) {
       const t = setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ['repos'] });
         router.refresh();
-        router.push(`/repo/${repoId}`);
+        router.replace(`/repo/${repoId}`);
       }, 2000);
       return () => clearTimeout(t);
     }
-  }, [isComplete, repoId, router]);
+  }, [isComplete, queryClient, repoId, router]);
 
   function headingText() {
     if (isComplete) return 'Indexing complete';
@@ -75,6 +104,21 @@ export default function IndexingPage() {
     if (isComplete && indexName) return `"${indexName}" is ready to chat.`;
     if (hasError) return 'Review the error details below and retry when ready.';
     return 'Processing files, embeddings, and repository structure in real time.';
+  }
+
+  async function handleRetryIndexing() {
+    if (!token || retrying) return;
+    setRetrying(true);
+    try {
+      await refreshRepo(token, repoId);
+      void queryClient.invalidateQueries({ queryKey: ['repos'] });
+      router.refresh();
+      router.replace(`/repo/${repoId}/indexing`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to retry indexing');
+    } finally {
+      setRetrying(false);
+    }
   }
 
   return (
@@ -194,6 +238,15 @@ export default function IndexingPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 mt-4">
+                  <Button
+                    size="sm"
+                    className="cursor-pointer"
+                    onClick={() => void handleRetryIndexing()}
+                    disabled={!token || retrying}
+                  >
+                    {retrying ? <RotateCcw size={13} className="mr-1.5 animate-spin" /> : <RotateCcw size={13} className="mr-1.5" />}
+                    Retry indexing
+                  </Button>
                   <Button
                     size="sm"
                     variant="outline"

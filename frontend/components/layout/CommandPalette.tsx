@@ -15,6 +15,7 @@ import {
 import { listRepos } from '@/lib/api';
 import { auditLogout } from '@/lib/auth-api';
 import { createClient } from '@/lib/supabase/client';
+import { getRepoWorkspaceHref } from '@/lib/repo-routing';
 import type { Repo } from '@/lib/types';
 import { FolderGit2, LayoutDashboard, LogOut, Plus, Search, Settings } from 'lucide-react';
 
@@ -156,7 +157,7 @@ export function CommandPalette() {
             <CommandItem
               key={repo.id}
               value={repo.name}
-              onSelect={() => runCommand(() => router.push(repo.status === 'ready' ? `/repo/${repo.id}` : `/repo/${repo.id}/indexing`))}
+              onSelect={() => runCommand(() => router.push(getRepoWorkspaceHref(repo)))}
             >
               <FolderGit2 className="mr-2 h-4 w-4" />
               <span className="truncate">{repo.name}</span>
