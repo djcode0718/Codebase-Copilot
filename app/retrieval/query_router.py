@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Optional
 from llama_index.core import Settings
 from app.utils.logger import get_logger
+from app.llm.prompts import QUERY_CLASSIFIER_PROMPT
 
 logger = get_logger(__name__)
 
@@ -269,7 +270,7 @@ def classify_query(query: str) -> QueryMode:
     # Stage 2: LLM classifier for ambiguous cases
     try:
         llm = Settings.llm
-        prompt = _CLASSIFIER_PROMPT.format(query=query)
+        prompt = QUERY_CLASSIFIER_PROMPT.format(query=query)
         response = llm.complete(prompt)
         result = str(response).strip().upper()
 

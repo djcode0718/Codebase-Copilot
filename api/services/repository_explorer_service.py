@@ -16,6 +16,7 @@ from api.services.review_service import review_files
 from app.config import get_repos_dir
 from app.services.llm_fallback import generate_with_fallback
 from app.utils.logger import get_logger
+from app.llm.prompts import FIX_PROPOSAL_PROMPT
 
 logger = get_logger(__name__)
 
@@ -529,14 +530,11 @@ def generate_fix_proposal(
     details = get_file_details(repo, relative_path=relative_path)
     current = details["content"]
 
-    prompt = (
-        "You are a principal engineer creating a safe, minimal code fix. Return the full updated file content only, "
-        "without markdown fences. Preserve behavior outside the targeted fix.\n\n"
-        f"TARGET_FILE: {relative_path}\n"
-        f"FINDING: {finding}\n"
-        f"RECOMMENDATION: {recommendation}\n\n"
-        "CURRENT_FILE_CONTENT:\n"
-        f"{current[:_MAX_DIFF_CHARS]}"
+    prompt = FIX_PROPOSAL_PROMPT.format(
+        relative_path=relative_path,
+        finding=finding,
+        recommendation=recommendation,
+        current_file_content=current[:_MAX_DIFF_CHARS],
     )
 
     try:

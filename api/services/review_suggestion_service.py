@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, List
 
 from app.utils.logger import get_logger
+from app.llm.prompts import REVIEW_PAYLOAD_PROMPT, FIX_TEXT_PROMPT
 
 logger = get_logger(__name__)
 
@@ -50,13 +51,8 @@ async def generate_review_payload(review_request: Dict[str, Any]) -> Dict[str, A
     """Generate structured review payload via LLM fallback chain."""
     from app.services.llm_fallback import generate_with_fallback
 
-    prompt = (
-        "You are a senior engineering reviewer. Return only valid JSON with keys: "
-        "summary (string), findings (array). Each finding must include: "
-        "id, severity(low|medium|high|critical), file, code_area, finding, recommendation, "
-        "suggested_fix, risk_level(low|medium|high), impact, complexity, estimated_effort, expected_benefit. "
-        "Be concise and evidence-based.\n\n"
-        f"REVIEW_INPUT_JSON:\n{json.dumps(review_request, ensure_ascii=True)}"
+    prompt = REVIEW_PAYLOAD_PROMPT.format(
+        review_input_json=json.dumps(review_request, ensure_ascii=True)
     )
 
     try:
@@ -77,11 +73,8 @@ async def generate_fix_text(fix_request: Dict[str, Any]) -> str:
     """Generate minimal fix proposal text for an accepted finding."""
     from app.services.llm_fallback import generate_with_fallback
 
-    prompt = (
-        "You are producing a minimal code fix proposal. "
-        "Return plain text only with: Problem, Minimal Diff Plan, and Validation Steps. "
-        "No markdown tables. Keep it short and implementation-ready.\n\n"
-        f"FIX_INPUT_JSON:\n{json.dumps(fix_request, ensure_ascii=True)}"
+    prompt = FIX_TEXT_PROMPT.format(
+        fix_input_json=json.dumps(fix_request, ensure_ascii=True)
     )
 
     try:
