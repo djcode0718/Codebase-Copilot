@@ -33,6 +33,7 @@ from app.config import (
     STREAM_FIRST_TOKEN_FALLBACK_TEXT,
 )
 from app.utils.logger import get_logger
+from app.llm.prompts import CHAT_FOLLOWUP_SUGGESTION_PROMPT
 from api.services.chat_stream_utils import to_sse_data, safe_chat_error_message
 
 logger = get_logger(__name__)
@@ -75,21 +76,6 @@ def _build_fallback_llms() -> List[Tuple[str, object]]:
 
     return candidates
 
-
-_FOLLOWUP_SUGGESTION_PROMPT = """You are helping a developer understand a codebase.
-Based on the developer's question and the AI's response below, suggest exactly 3-4 natural follow-up questions that the developer might want to ask next.
-
-Rules:
-- Make them logical next steps / deeper questions based on the conversation
-- Be specific to the codebase details mentioned in the response (e.g. classes, functions, files)
-- Keep each question short (under 10 words)
-- No numbering, no bullets — just the question text, one per line
-- Make sure they end with a question mark
-
-Developer Question: {query}
-AI Response: {response}
-
-Output exactly 3-4 follow-up questions, one per line, nothing else."""
 
 _NO_MATCH_CODE_LOOKUP_RESPONSE = (
     "I couldn't find that in the retrieved code. "
@@ -638,7 +624,7 @@ async def _generate_followup_suggestions(query: str, response_text: str) -> List
     """Generates 3-4 dynamic follow-up questions based on the query and response."""
     from app.services.llm_fallback import generate_with_fallback
 
-    prompt = _FOLLOWUP_SUGGESTION_PROMPT.format(query=query, response=response_text[:3000])
+    prompt = CHAT_FOLLOWUP_SUGGESTION_PROMPT.format(query=query, response=response_text[:3000])
 
     try:
         raw = await generate_with_fallback(prompt)

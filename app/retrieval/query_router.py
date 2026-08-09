@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Optional
 from llama_index.core import Settings
 from app.utils.logger import get_logger
+from app.llm.prompts import QUERY_CLASSIFIER_PROMPT
 
 logger = get_logger(__name__)
 
@@ -74,21 +75,6 @@ _STRONG_ARCHITECTURAL_PHRASES = {
     "architecture",
     "architectural"
 }
-
-_CLASSIFIER_PROMPT = """You are a query classifier for a codebase Q&A system.
-Classify the following query into exactly one of these two categories:
-
-CODE_LOOKUP: Questions about specific code — functions, classes, files,
-             implementations, bugs, usage, or anything that requires
-             finding a specific piece of code to answer.
-
-ARCHITECTURAL: Broad questions about the project — limitations, improvements,
-               design patterns, architecture, suggestions, comparisons,
-               or questions that require reasoning about the codebase as a whole.
-
-Query: {query}
-
-Respond with ONLY the category name: CODE_LOOKUP or ARCHITECTURAL"""
 
 
 import re
@@ -194,7 +180,7 @@ def classify_query(query: str) -> QueryMode:
     # Stage 2: LLM classifier for ambiguous cases
     try:
         llm = Settings.llm
-        prompt = _CLASSIFIER_PROMPT.format(query=query)
+        prompt = QUERY_CLASSIFIER_PROMPT.format(query=query)
         response = llm.complete(prompt)
         result = str(response).strip().upper()
 

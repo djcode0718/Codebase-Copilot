@@ -23,27 +23,13 @@ from api.dependencies import get_current_user, get_supabase
 from api.services.supabase_service import get_repo
 from app.config import INDEX_DIR
 from app.utils.logger import get_logger
+from app.llm.prompts import SUGGESTION_CHIPS_PROMPT
 
 router = APIRouter()
 logger = get_logger(__name__)
 
 # In-process cache: repo_id → list of question strings
 _suggestions_cache: dict = {}
-
-_SUGGESTION_PROMPT = """You are helping a developer understand a new codebase.
-Based on the codebase context below, generate exactly 6 specific, useful questions
-that a developer would want to ask about this project.
-
-Rules:
-- Mix code-level questions (e.g. "How does X function work?") with architectural questions
-- Be specific to THIS codebase — use actual file names, class names, or concepts from the context
-- Keep each question under 10 words
-- No numbering, no bullets — just the question text
-
-Codebase context:
-{context}
-
-Output exactly 6 questions, one per line, nothing else."""
 
 
 async def _generate_suggestions(context: str) -> List[str]:
@@ -54,7 +40,7 @@ async def _generate_suggestions(context: str) -> List[str]:
     # Never touch Settings.llm lazily; force app-configured providers first.
     configure_llamaindex_settings()
 
-    prompt = _SUGGESTION_PROMPT.format(context=context[:3000])  # cap context size
+    prompt = SUGGESTION_CHIPS_PROMPT.format(context=context[:3000])  # cap context size
 
     try:
         raw = (await generate_with_fallback(prompt)).strip()
