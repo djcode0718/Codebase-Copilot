@@ -167,6 +167,9 @@ class RelationshipGraphBuilder:
             # Find all potential symbol references (words)
             words = re.findall(r"\b([a-zA-Z0-9_]+)\b", stripped)
             for word in words:
+                # Reference tracking is scoped to symbols defined within this repository.
+                # Third-party/imported library symbols (e.g. LlamaIndex classes) are not tracked
+                # and will correctly return no references.
                 if word in self.definitions:
                     # Ignore referencing yourself
                     for def_loc in self.definitions[word]:
