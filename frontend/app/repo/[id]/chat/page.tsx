@@ -4,17 +4,20 @@
  * Chat screen — 60/40 split: message thread | AI Inspector.
  * Creates a new chat session on mount and handles full SSE streaming.
  */
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus, Wrench, Search, Pin, PinOff, Trash2, Archive, Pencil, Check, X, Download, ChevronDown } from 'lucide-react';
+import { Send, Square, ArrowLeft, Loader2, Cpu, Sparkles, Activity, MessageSquare, ShieldCheck, Plus, Wrench, Search, Pin, PinOff, Trash2, Archive, Pencil, Check, X, Download, ChevronDown, GitBranch } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import MessageBubble from '@/components/chat/MessageBubble';
 import AIInspector from '@/components/chat/AIInspector';
 import ExportMenu from '@/components/repo/ExportMenu';
+const RelationshipGraphViewer = lazy(() => import('@/components/chat/RelationshipGraphViewer'));
 import { useChatStream, type StreamedResponse } from '@/hooks/useChatStream';
+import { useGraphCache } from '@/hooks/useGraphCache';
 import { createClient } from '@/lib/supabase/client';
 import {
   ApiRequestError,
@@ -29,9 +32,10 @@ import {
   deleteAllChats,
   deleteSelectedChats,
   exportRepositoryMemory,
+  getRelationshipGraphKeys,
 } from '@/lib/api';
 import { toast } from 'sonner';
-import type { Chat, Message, Repo, QueryMode } from '@/lib/types';
+import type { Chat, Message, Repo, QueryMode, GraphAvailability } from '@/lib/types';
 
 const ARCHITECTURE_QUERY_RE = /(architect|architecture|diagram|mermaid|service map|component relationships|data flow|executive summary)/i;
 
@@ -506,6 +510,8 @@ function ChatMessageList({
   onEditQuestion,
   sessionReady,
   messagesEndRef,
+  graphKeys,
+  onOpenGraph,
 }: {
   showEmptyState: boolean;
   messages: Message[];
@@ -522,6 +528,8 @@ function ChatMessageList({
   onEditQuestion: (msg: Message) => void;
   sessionReady: boolean;
   messagesEndRef: { current: HTMLDivElement | null };
+  graphKeys?: Set<string>;
+  onOpenGraph?: (symbol: string) => void;
 }) {
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin px-5 py-5 space-y-5">
@@ -537,6 +545,8 @@ function ChatMessageList({
           onTryAgain={msg.role === 'assistant' ? () => onTryAgainForAnswer(i, msg) : undefined}
           onEdit={msg.role === 'user' ? () => onEditQuestion(msg) : undefined}
           actionsDisabled={streaming || !sessionReady}
+          graphKeys={graphKeys}
+          onOpenGraph={onOpenGraph}
         />
       ))}
 
@@ -704,6 +714,9 @@ function ChatWorkspace({
   onCreateQuickAsk,
   onOpenReview,
   threadStats,
+  graphAvailability,
+  graphKeys,
+  onOpenGraph,
 }: {
   repoId: string;
   repo: Repo | null;
@@ -736,6 +749,9 @@ function ChatWorkspace({
   onCreateQuickAsk: () => void;
   onOpenReview: () => void;
   threadStats: { label: string; value: string | number }[];
+  graphAvailability: GraphAvailability;
+  graphKeys?: Set<string>;
+  onOpenGraph: (symbol?: string) => void;
 }) {
   return (
     <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:flex xl:h-[calc(100dvh-8rem)] xl:flex-col">
@@ -776,6 +792,30 @@ function ChatWorkspace({
                 <Wrench size={12} className="mr-1" />
                 Review
               </Button>
+              {/* View graph button — always visible regardless of query mode */}
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  'h-7 border-border px-2.5 text-[11px] cursor-pointer',
+                  graphAvailability === 'available' && 'border-brand/30 text-brand hover:bg-brand/5',
+                )}
+                onClick={() => onOpenGraph()}
+                disabled={graphAvailability !== 'available'}
+                title={
+                  graphAvailability === 'loading' ? 'Checking graph availability…' :
+                  graphAvailability === 'no_graph' ? 'No graph yet — index the repository first' :
+                  graphAvailability === 'error' ? 'Couldn\'t check graph availability — try refreshing' :
+                  'View relationship graph'
+                }
+              >
+                {graphAvailability === 'loading' ? (
+                  <Loader2 size={12} className="mr-1 animate-spin" />
+                ) : (
+                  <GitBranch size={12} className="mr-1" />
+                )}
+                {graphAvailability === 'loading' ? 'Checking…' : 'View graph'}
+              </Button>
               {repo && chatId && (
                 <ExportMenu repo={repo} token={token} scope="chat" chatIds={[chatId]} />
               )}
@@ -808,6 +848,8 @@ function ChatWorkspace({
               onEditQuestion={onEditQuestion}
               sessionReady={sessionReady}
               messagesEndRef={messagesEndRef}
+              graphKeys={graphKeys}
+              onOpenGraph={(sym) => onOpenGraph(sym)}
             />
           )}
 
@@ -1261,12 +1303,54 @@ export default function ChatPage() {
   const [repo, setRepo] = useState<Repo | null>(null);
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const authExpiredNotifiedRef = useRef(false);
+
+  // ── Graph viewer state ────────────────────────────────────────────────────
+  const { fetchKeys, getAvailability } = useGraphCache();
+  const [graphAvailability, setGraphAvailability] = useState<GraphAvailability>(() => getAvailability(repoId));
+  const [graphViewerOpen, setGraphViewerOpen] = useState(false);
+  const [graphFocusSymbol, setGraphFocusSymbol] = useState<string | null>(null);
+  const [cachedGraphKeys, setCachedGraphKeys] = useState<Set<string> | undefined>(undefined);
+
+  // ── Adjust state during rendering when graphAvailability changes ──────────
+  const [prevAvailability, setPrevAvailability] = useState(graphAvailability);
+  if (graphAvailability !== prevAvailability) {
+    setPrevAvailability(graphAvailability);
+    if (graphAvailability !== 'available') {
+      setCachedGraphKeys(undefined);
+    }
+  }
   const pendingAutoPromptRef = useRef<string | null>(null);
   const [autoPromptTick, setAutoPromptTick] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { streaming, streamedText, streamedTextRef, pendingMetadata, error, sendMessage, cancelStream } =
     useChatStream();
+
+  // ── Prefetch graph keys once token + repoId are both available ───────────
+  useEffect(() => {
+    if (!token || !repoId) return;
+    if (graphAvailability !== 'loading') return;
+    void fetchKeys(token, repoId).then((status) => {
+      setGraphAvailability(status);
+    });
+  }, [token, repoId, fetchKeys, graphAvailability]);
+
+  // Keep cachedGraphKeys in sync with graphAvailability (async only)
+  useEffect(() => {
+    if (!token || !repoId || graphAvailability !== 'available') return;
+    getRelationshipGraphKeys(token, repoId)
+      .then((d) => setCachedGraphKeys(new Set(d.keys)))
+      .catch(() => setCachedGraphKeys(undefined));
+  }, [graphAvailability, token, repoId]);
+
+  const handleOpenGraph = useCallback((symbol?: string) => {
+    setGraphFocusSymbol(symbol ?? null);
+    setGraphViewerOpen(true);
+  }, []);
+
+  const handleCloseGraph = useCallback(() => {
+    setGraphViewerOpen(false);
+  }, []);
 
   const loadSession = useCallback(async (t: string, targetChatId: string) => {
     setSessionReady(false);
@@ -1460,51 +1544,69 @@ export default function ChatPage() {
   const displayThreadStats = buildThreadStats(messages, suggestions, inspectedIndex);
   const inspectorPayload = buildInspectorPayload(inspectedIndex, pendingMetadata, inspectorData);
   return (
-    <div className="grid grid-cols-1 gap-4 xl:h-[calc(100dvh-8rem)] xl:grid-cols-[minmax(0,1fr)_21rem] xl:items-start xl:overflow-hidden">
-      <div className="min-w-0 xl:h-full xl:min-h-0">
-        <ChatWorkspace
-          repoId={repoId}
-          repo={repo}
-          token={token}
-          chatId={chatId}
-          sessionReady={sessionReady && !sessionLoading}
-          showEmptyState={showEmptyState && !sessionLoading}
-          messages={messages}
-          inspectedIndex={inspectedIndex}
-          streaming={streaming}
-          streamedText={streamedText}
-          error={error}
-          retryPrompt={retryPrompt}
-          suggestions={suggestions}
-          isDev={isDev}
-          routedMode={routedMode}
-          input={input}
-          textareaRef={textareaRef}
-          messagesEndRef={messagesEndRef}
-          onInspect={handleInspect}
-          onSuggestion={handleSend}
-          onRetry={() => {
-            if (!retryPrompt) return;
-            void handleSend(retryPrompt);
-          }}
-          onTryAgainForAnswer={handleTryAgainForAnswer}
-          onEditQuestion={handleEditQuestion}
-          onInputChange={handleInputChange}
-          onKeyDown={(e) => handleKeyDown(e, input)}
-          onSubmit={() => handleSend(input)}
-          onCancel={cancelStream}
-          sessionLoading={sessionLoading}
-          onCreateQuickAsk={handleCreateQuickAsk}
-          onOpenReview={handleOpenReview}
-          threadStats={displayThreadStats}
-        />
-      </div>
+    <>
+      <div className="grid grid-cols-1 gap-4 xl:h-[calc(100dvh-8rem)] xl:grid-cols-[minmax(0,1fr)_21rem] xl:items-start xl:overflow-hidden">
+        <div className="min-w-0 xl:h-full xl:min-h-0">
+          <ChatWorkspace
+            repoId={repoId}
+            repo={repo}
+            token={token}
+            chatId={chatId}
+            sessionReady={sessionReady && !sessionLoading}
+            showEmptyState={showEmptyState && !sessionLoading}
+            messages={messages}
+            inspectedIndex={inspectedIndex}
+            streaming={streaming}
+            streamedText={streamedText}
+            error={error}
+            retryPrompt={retryPrompt}
+            suggestions={suggestions}
+            isDev={isDev}
+            routedMode={routedMode}
+            input={input}
+            textareaRef={textareaRef}
+            messagesEndRef={messagesEndRef}
+            onInspect={handleInspect}
+            onSuggestion={handleSend}
+            onRetry={() => {
+              if (!retryPrompt) return;
+              void handleSend(retryPrompt);
+            }}
+            onTryAgainForAnswer={handleTryAgainForAnswer}
+            onEditQuestion={handleEditQuestion}
+            onInputChange={handleInputChange}
+            onKeyDown={(e) => handleKeyDown(e, input)}
+            onSubmit={() => handleSend(input)}
+            onCancel={cancelStream}
+            sessionLoading={sessionLoading}
+            onCreateQuickAsk={handleCreateQuickAsk}
+            onOpenReview={handleOpenReview}
+            threadStats={displayThreadStats}
+            graphAvailability={graphAvailability}
+            graphKeys={cachedGraphKeys}
+            onOpenGraph={handleOpenGraph}
+          />
+        </div>
 
-      <div className="xl:sticky xl:top-0 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden">
-        <div className="min-h-[20rem] overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-full xl:min-h-0 xl:flex-1">
-          <AIInspector data={inspectorPayload} streaming={streaming} />
+        <div className="xl:sticky xl:top-0 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden">
+          <div className="min-h-[20rem] overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-full xl:min-h-0 xl:flex-1">
+            <AIInspector data={inspectorPayload} streaming={streaming} />
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* Relationship graph viewer modal — lazy loaded */}
+      {graphViewerOpen && token && (
+        <Suspense fallback={null}>
+          <RelationshipGraphViewer
+            repoId={repoId}
+            token={token}
+            focusSymbol={graphFocusSymbol}
+            onClose={handleCloseGraph}
+          />
+        </Suspense>
+      )}
+    </>
   );
 }
+

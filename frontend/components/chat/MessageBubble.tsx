@@ -6,8 +6,8 @@
  * response sections, inline grounding summary, and expandable inspector data.
  */
 import { motion } from 'framer-motion';
-import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2, RefreshCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-react';
-import { useState, lazy, Suspense } from 'react';
+import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2, RefreshCcw, Pencil, ThumbsUp, ThumbsDown, GitBranch } from 'lucide-react';
+import { useState, lazy, Suspense, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import type { Message, QueryMode } from '@/lib/types';
 
@@ -95,7 +95,12 @@ function parseIntelligenceSections(content: string): { plain: string; sections: 
 
 // ── Section Accordion ─────────────────────────────────────────────────────────
 
-function IntelSectionBlock({ def, content }: { def: IntelSection; content: string }) {
+function IntelSectionBlock({ def, content, graphKeys, onOpenGraph }: {
+  def: IntelSection;
+  content: string;
+  graphKeys?: Set<string>;
+  onOpenGraph?: (s: string) => void;
+}) {
   const [expanded, setExpanded] = useState(true);
   return (
     <div className="rounded-xl border border-border/60 overflow-hidden">
@@ -112,12 +117,13 @@ function IntelSectionBlock({ def, content }: { def: IntelSection; content: strin
       </button>
       {expanded && (
         <div className="px-3 py-2.5 bg-background/50 text-foreground">
-          <SimpleMarkdown content={content} />
+          <SimpleMarkdown content={content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
         </div>
       )}
     </div>
   );
 }
+
 
 interface MessageBubbleProps {
   message: Message;
@@ -127,9 +133,76 @@ interface MessageBubbleProps {
   onTryAgain?: () => void;
   onEdit?: () => void;
   actionsDisabled?: boolean;
+  /** Cached set of graph-eligible symbol keys (from useGraphCache) */
+  graphKeys?: Set<string>;
+  /** Called when user clicks "See graph" on an inline code tag */
+  onOpenGraph?: (symbol: string) => void;
 }
 
-function SimpleMarkdown({ content }: { content: string }) {
+// ── Inline code tag with optional hover "See graph" popover ───────────────
+
+function InlineCodeTag({
+  text,
+  graphKeys,
+  onOpenGraph,
+}: {
+  text: string;
+  graphKeys?: Set<string>;
+  onOpenGraph?: (symbol: string) => void;
+}) {
+  const [popoverVisible, setPopoverVisible] = useState(false);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isGraphEligible = !!graphKeys && graphKeys.size > 0 && graphKeys.has(text);
+
+  const showPopover = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    if (isGraphEligible) setPopoverVisible(true);
+  }, [isGraphEligible]);
+
+  const scheduleHide = useCallback(() => {
+    hideTimerRef.current = setTimeout(() => setPopoverVisible(false), 150);
+  }, []);
+
+  const cancelHide = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+  }, []);
+
+  return (
+    <span className="relative inline-block">
+      <code
+        className="font-code text-brand text-xs bg-background border border-border px-1.5 py-0.5 rounded"
+        style={isGraphEligible ? { cursor: 'pointer' } : undefined}
+        onMouseEnter={showPopover}
+        onMouseLeave={scheduleHide}
+      >
+        {text}
+      </code>
+      {isGraphEligible && popoverVisible && (
+        <span
+          className="absolute bottom-full left-1/2 z-30 mb-1.5 -translate-x-1/2 rounded-xl border border-border bg-card shadow-lg px-2 py-1.5 flex items-center gap-1.5 whitespace-nowrap"
+          onMouseEnter={cancelHide}
+          onMouseLeave={scheduleHide}
+          style={{ boxShadow: '0 4px 16px color-mix(in oklab, var(--background) 30%, transparent)' }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setPopoverVisible(false);
+              onOpenGraph?.(text);
+            }}
+            className="flex items-center gap-1 rounded-lg bg-brand/10 border border-brand/20 px-2 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-brand/20 cursor-pointer"
+          >
+            <GitBranch size={10} />
+            See graph
+          </button>
+        </span>
+      )}
+    </span>
+  );
+}
+
+function SimpleMarkdown({ content, graphKeys, onOpenGraph }: { content: string; graphKeys?: Set<string>; onOpenGraph?: (s: string) => void }) {
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -210,7 +283,7 @@ function SimpleMarkdown({ content }: { content: string }) {
               <tr className="bg-secondary/50 text-left">
                 {headers.map((h, idx) => (
                   <th key={idx} className="border-b border-border/70 px-3 py-2 font-semibold text-foreground whitespace-nowrap">
-                    {renderInline(h)}
+                    {renderInline(h, graphKeys, onOpenGraph)}
                   </th>
                 ))}
               </tr>
@@ -220,7 +293,7 @@ function SimpleMarkdown({ content }: { content: string }) {
                 <tr key={ridx} className="odd:bg-background even:bg-background/70">
                   {headers.map((_, cidx) => (
                     <td key={cidx} className="border-b border-border/50 px-3 py-2 align-top">
-                      {renderInline(row[cidx] || '')}
+                      {renderInline(row[cidx] || '', graphKeys, onOpenGraph)}
                     </td>
                   ))}
                 </tr>
@@ -237,7 +310,7 @@ function SimpleMarkdown({ content }: { content: string }) {
       const level = headingMatch[1].length;
       const text = headingMatch[2].trim();
       const cls = level <= 2 ? 'font-heading font-semibold text-base mt-4 mb-1.5' : 'font-heading font-semibold text-sm mt-4 mb-1';
-      elements.push(<p key={i} className={cls}>{renderInline(text)}</p>);
+      elements.push(<p key={i} className={cls}>{renderInline(text, graphKeys, onOpenGraph)}</p>);
     } else if (/^\s*---+\s*$/.test(line) || /^\s*\*\*\*+\s*$/.test(line)) {
       elements.push(<hr key={i} className="my-3 border-border/70" />);
     } else if (/^\s*([-*])\s+/.test(line)) {
@@ -249,7 +322,7 @@ function SimpleMarkdown({ content }: { content: string }) {
       elements.push(
         <ul key={`ul-${i}`} className="ml-5 list-disc space-y-1 text-sm leading-relaxed">
           {items.map((item, idx) => (
-            <li key={idx}>{renderInline(item)}</li>
+            <li key={idx}>{renderInline(item, graphKeys, onOpenGraph)}</li>
           ))}
         </ul>
       );
@@ -263,7 +336,7 @@ function SimpleMarkdown({ content }: { content: string }) {
       elements.push(
         <ol key={`ol-${i}`} className="ml-5 list-decimal space-y-1 text-sm leading-relaxed">
           {items.map((item, idx) => (
-            <li key={idx}>{renderInline(item)}</li>
+            <li key={idx}>{renderInline(item, graphKeys, onOpenGraph)}</li>
           ))}
         </ol>
       );
@@ -273,7 +346,7 @@ function SimpleMarkdown({ content }: { content: string }) {
     } else {
       elements.push(
         <p key={i} className="text-sm leading-relaxed">
-          {renderInline(line)}
+          {renderInline(line, graphKeys, onOpenGraph)}
         </p>
       );
     }
@@ -283,11 +356,12 @@ function SimpleMarkdown({ content }: { content: string }) {
   return <div className="prose-dark space-y-0.5">{elements}</div>;
 }
 
-function renderInline(text: string): React.ReactNode {
+function renderInline(text: string, graphKeys?: Set<string>, onOpenGraph?: (s: string) => void): React.ReactNode {
   const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
   return parts.map((part, i) => {
     if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={i} className="font-code text-brand text-xs bg-background border border-border px-1.5 py-0.5 rounded">{part.slice(1, -1)}</code>;
+      const inner = part.slice(1, -1);
+      return <InlineCodeTag key={i} text={inner} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />;
     }
     if (part.startsWith('**') && part.endsWith('**')) {
       return <strong key={i} className="font-semibold text-foreground">{part.slice(2, -2)}</strong>;
@@ -299,7 +373,7 @@ function renderInline(text: string): React.ReactNode {
   });
 }
 
-export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false }: MessageBubbleProps) {
+export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false, graphKeys, onOpenGraph }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState<'up' | 'down' | null>(null);
   const isUser = message.role === 'user';
@@ -359,17 +433,17 @@ export default function MessageBubble({ message, onInspect, isInspected, index, 
               <div className="space-y-2">
                 {intelParsed.plain && (
                   <div className="text-foreground">
-                    <SimpleMarkdown content={intelParsed.plain} />
+                    <SimpleMarkdown content={intelParsed.plain} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
                   </div>
                 )}
                 {intelParsed.sections.map((s) => (
-                  <IntelSectionBlock key={s.def.key} def={s.def} content={s.content} />
+                  <IntelSectionBlock key={s.def.key} def={s.def} content={s.content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
                 ))}
               </div>
             ) : (
               /* Regular markdown content */
               <div className="text-foreground">
-                <SimpleMarkdown content={message.content} />
+                <SimpleMarkdown content={message.content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
               </div>
             )}
 

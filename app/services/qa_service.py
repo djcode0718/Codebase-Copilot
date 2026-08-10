@@ -254,20 +254,27 @@ def handle_user_query(
     if memory is None:
         memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
 
-    # ── Query Resolution (Context-Aware Query Rewriting) ───────────────────
-    resolved_query = resolve_ambiguous_query(query, memory)
-    if resolved_query != query:
-        logger.info(f"Resolved context-aware query: '{resolved_query}'")
+    # ── Route query (first check: RELATIONSHIP check on raw query) ─────────
+    from app.retrieval.query_router import _is_relationship_query
+    if _is_relationship_query(query):
+        resolved_query = query
+        query_mode = QueryMode.RELATIONSHIP
+        logger.info(f"Query mode: {query_mode.value} (bypassed rewriting)")
+    else:
+        # ── Query Resolution (Context-Aware Query Rewriting) ───────────────────
+        resolved_query = resolve_ambiguous_query(query, memory)
+        if resolved_query != query:
+            logger.info(f"Resolved context-aware query: '{resolved_query}'")
 
-    if is_general_knowledge_or_preference_query(query) or is_general_knowledge_or_preference_query(resolved_query):
-        from llama_index.core.base.llms.types import ChatMessage
-        memory.put(ChatMessage(role="user", content=query))
-        memory.put(ChatMessage(role="assistant", content=_NO_MATCH_CODE_LOOKUP_RESPONSE))
-        return _NO_MATCH_CODE_LOOKUP_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
+        if is_general_knowledge_or_preference_query(query) or is_general_knowledge_or_preference_query(resolved_query):
+            from llama_index.core.base.llms.types import ChatMessage
+            memory.put(ChatMessage(role="user", content=query))
+            memory.put(ChatMessage(role="assistant", content=_NO_MATCH_CODE_LOOKUP_RESPONSE))
+            return _NO_MATCH_CODE_LOOKUP_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
 
-    # ── Route query ────────────────────────────────────────────────────────
-    query_mode = classify_query(resolved_query)
-    logger.info(f"Query mode: {query_mode.value}")
+        # ── Route query ────────────────────────────────────────────────────────
+        query_mode = classify_query(resolved_query)
+        logger.info(f"Query mode: {query_mode.value}")
 
     if query_mode == QueryMode.RELATIONSHIP:
         from app.retrieval.query_router import extract_relationship_target

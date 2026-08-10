@@ -324,9 +324,16 @@ async def _stream_llm_response_with_guard(
 
 
 async def _resolve_query_mode(query: str, memory, classify_query):
+    from app.retrieval.query_router import _is_relationship_query, QueryMode
     from app.services.qa_service import resolve_ambiguous_query
     from app.llm.llm_client import configure_llamaindex_settings
 
+    # First check: Run RELATIONSHIP check on the raw, original query
+    if _is_relationship_query(query):
+        logger.info("Raw query classified as RELATIONSHIP (bypassed rewriting)")
+        return query, QueryMode.RELATIONSHIP
+
+    # If not a relationship query, proceed with normal resolution & classification
     def _resolve_query_with_settings():
         configure_llamaindex_settings()
         return resolve_ambiguous_query(query, memory)

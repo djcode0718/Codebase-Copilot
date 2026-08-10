@@ -910,3 +910,62 @@ export async function checkHealth(): Promise<boolean> {
     return false;
   }
 }
+
+// ── Relationship Graph ────────────────────────────────────────────────────
+
+/** Thrown when the server responds with 404 — graph not found, not a network error. */
+export class ApiNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApiNotFoundError';
+  }
+}
+
+/**
+ * GET /api/repo/{repo_id}/relationship-graph
+ * Full adjacency dict: { graph: { symbol: [ref_path, ...], ... } }
+ * Throws ApiNotFoundError on 404, Error on other failures.
+ */
+export async function getRelationshipGraph(
+  token: string,
+  repoId: string
+): Promise<import('./types').RelationshipGraph> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/relationship-graph`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (res.status === 404) {
+    const err = await res.json().catch(() => ({ detail: 'Graph not found' }));
+    throw new ApiNotFoundError(err.detail ?? 'Relationship graph not found for this repository.');
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to load relationship graph');
+  }
+  return res.json();
+}
+
+/**
+ * GET /api/repo/{repo_id}/relationship-graph/keys
+ * Lightweight symbol key list: { keys: ["symbol1", ...] }
+ * Throws ApiNotFoundError on 404, Error on other failures.
+ */
+export async function getRelationshipGraphKeys(
+  token: string,
+  repoId: string
+): Promise<import('./types').RelationshipGraphKeys> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/relationship-graph/keys`), {
+    headers: authHeaders(token),
+    cache: 'no-store',
+  });
+  if (res.status === 404) {
+    const err = await res.json().catch(() => ({ detail: 'Graph not found' }));
+    throw new ApiNotFoundError(err.detail ?? 'Relationship graph not found for this repository.');
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to load relationship graph keys');
+  }
+  return res.json();
+}
+
