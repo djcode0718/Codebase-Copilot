@@ -48,8 +48,8 @@ OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 # ─── Directories ─────────────────────────────────────────────────────────────
 BASE_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR  = os.path.join(BASE_DIR, "data")
-REPOS_DIR = os.path.join(DATA_DIR, "repos")
-INDEX_DIR = os.path.join(DATA_DIR, "index")
+REPOS_DIR = os.getenv("REPOS_DIR", os.path.join(DATA_DIR, "repos"))
+INDEX_DIR = os.getenv("INDEX_DIR", os.path.join(DATA_DIR, "index"))
 
 os.makedirs(REPOS_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)

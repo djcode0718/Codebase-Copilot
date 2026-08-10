@@ -113,7 +113,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import repo, chat, eval, suggestions, health, reviews, explorer, auth
+from api.routers import repo, chat, eval, suggestions, health, reviews, explorer, auth, graph
 from api.dependencies import enforce_guest_read_only
 
 
@@ -205,6 +205,7 @@ app.include_router(health.router,      prefix="/api/repo",  tags=["Repository He
 app.include_router(reviews.router,     prefix="/api/reviews", tags=["Engineering Review"], dependencies=[Depends(enforce_guest_read_only)])
 app.include_router(explorer.router,    prefix="/api/repo",  tags=["Repository Explorer"], dependencies=[Depends(enforce_guest_read_only)])
 app.include_router(auth.router,        prefix="/api/auth",  tags=["Authentication"])
+app.include_router(graph.router,       prefix="/api/repo",  tags=["Relationship Graph"], dependencies=[Depends(enforce_guest_read_only)])
 
 
 

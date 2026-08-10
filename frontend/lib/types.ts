@@ -606,3 +606,23 @@ export interface ExplorerHistory {
   test_runs: Array<Record<string, unknown>>;
   conversations: Array<Record<string, unknown>>;
 }
+
+// ── Relationship Graph ───────────────────────────────────────────────────────
+
+/** Full adjacency list returned by GET /api/repo/{repo_id}/relationship-graph */
+export interface RelationshipGraph {
+  /** symbol_or_file_key → list of file paths that reference it */
+  graph: Record<string, string[]>;
+}
+
+/** Lightweight key list returned by GET /api/repo/{repo_id}/relationship-graph/keys */
+export interface RelationshipGraphKeys {
+  keys: string[];
+}
+
+/** Four distinct states for graph availability used by the "View graph" button */
+export type GraphAvailability =
+  | 'loading'    // fetchKeys in progress, button shows spinner
+  | 'available'  // keys fetched, graph exists
+  | 'no_graph'   // clean 404 — repo not indexed or graph not built yet
+  | 'error';     // network/server error — couldn't determine availability
