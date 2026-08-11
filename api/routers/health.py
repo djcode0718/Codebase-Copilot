@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import uuid
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from supabase import Client
@@ -29,6 +30,47 @@ router = APIRouter()
 engine = RepositoryHealthEngine()
 logger = get_logger(__name__)
 
+_TRANSIENT_HEALTH_RUNS: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+_MAX_TRANSIENT_RUNS_PER_REPO = 50
+
+
+def _transient_key(repo_id: str, user_id: str) -> Tuple[str, str]:
+    return (repo_id, user_id)
+
+
+def _append_transient_run(repo_id: str, user_id: str, run_payload: Dict[str, Any]) -> None:
+    key = _transient_key(repo_id, user_id)
+    runs = _TRANSIENT_HEALTH_RUNS.get(key, [])
+    runs.append(run_payload)
+    _TRANSIENT_HEALTH_RUNS[key] = runs[-_MAX_TRANSIENT_RUNS_PER_REPO:]
+
+
+def _latest_transient_run(repo_id: str, user_id: str) -> Dict[str, Any] | None:
+    runs = _TRANSIENT_HEALTH_RUNS.get(_transient_key(repo_id, user_id), [])
+    return runs[-1] if runs else None
+
+
+def _transient_category_score_map(run_payload: Dict[str, Any]) -> Dict[str, int]:
+    scores: Dict[str, int] = {}
+    for row in run_payload.get("categories", []):
+        category = row.get("category")
+        if not category:
+            continue
+        scores[str(category)] = int(row.get("score", 0))
+    return scores
+
+
+def _transient_problem_titles(run_payload: Dict[str, Any]) -> List[str]:
+    titles: List[str] = []
+    for finding in run_payload.get("findings", []):
+        if finding.get("finding_type") == "problem" and finding.get("title"):
+            titles.append(str(finding.get("title")))
+    return titles
+
+
+def _health_run_from_payload(payload: Dict[str, Any]) -> HealthRunResponse:
+    return HealthRunResponse.model_validate(payload)
+
 
 def _load_previous_health_context(
     supabase: Client,
@@ -40,8 +82,18 @@ def _load_previous_health_context(
         repo_id=repo_id,
         user_id=user_id,
     )
-    previous_overall = int(latest_run["repository_health"]) if latest_run and latest_run.get("repository_health") is not None else None
-    return previous_scores, previous_findings, previous_overall
+    if latest_run and latest_run.get("repository_health") is not None:
+        previous_overall = int(latest_run["repository_health"])
+        return previous_scores, previous_findings, previous_overall
+
+    transient_latest = _latest_transient_run(repo_id, user_id)
+    if not transient_latest:
+        return None, None, None
+
+    transient_scores = _transient_category_score_map(transient_latest)
+    transient_findings = _transient_problem_titles(transient_latest)
+    transient_overall = int(transient_latest.get("top_level", {}).get("repository_health", 0))
+    return transient_scores or None, transient_findings or None, transient_overall
 
 
 def _build_history_points(supabase: Client, runs: list[dict], user_id: str) -> list[HealthHistoryPoint]:
@@ -55,6 +107,26 @@ def _build_history_points(supabase: Client, runs: list[dict], user_id: str) -> l
                 repository_health=run["repository_health"],
                 grade=run["grade"],
                 category_scores=category_map,
+            )
+        )
+    return points
+
+
+def _build_transient_history_points(repo_id: str, user_id: str, limit: int) -> list[HealthHistoryPoint]:
+    runs = _TRANSIENT_HEALTH_RUNS.get(_transient_key(repo_id, user_id), [])
+    if not runs:
+        return []
+
+    points: list[HealthHistoryPoint] = []
+    for run_payload in list(reversed(runs[-max(1, limit):])):
+        top = run_payload.get("top_level", {})
+        points.append(
+            HealthHistoryPoint(
+                run_id=str(run_payload.get("run_id")),
+                created_at=run_payload.get("generated_at") or datetime.now(timezone.utc),
+                repository_health=int(top.get("repository_health", 0)),
+                grade=str(top.get("grade", "F")),
+                category_scores=_transient_category_score_map(run_payload),
             )
         )
     return points
@@ -120,10 +192,16 @@ async def run_repository_health_analysis(
             recommendations=run_payload["recommendations"],
         )
 
-        return _hydrate_health_run_response(supabase, run_record["id"], repo_id, user_id)
+        response = _hydrate_health_run_response(supabase, run_record["id"], repo_id, user_id)
+        payload = response.model_dump()
+        _append_transient_run(repo_id, user_id, payload)
+        return response
     except Exception as e:
         logger.warning(f"Health run persistence unavailable, returning transient result: {e}")
-        return _build_transient_health_run_response(repo_id=repo_id, run_payload=run_payload)
+        transient_response = _build_transient_health_run_response(repo_id=repo_id, run_payload=run_payload)
+        payload = transient_response.model_dump()
+        _append_transient_run(repo_id, user_id, payload)
+        return transient_response
 
 
 @router.get("/{repo_id}/health/latest", response_model=HealthLatestResponse)
@@ -136,7 +214,10 @@ async def get_latest_repository_health(
 
     run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
     if not run:
-        return HealthLatestResponse(repo_id=repo_id, latest=None)
+        transient_latest = _latest_transient_run(repo_id, user_id)
+        if not transient_latest:
+            return HealthLatestResponse(repo_id=repo_id, latest=None)
+        return HealthLatestResponse(repo_id=repo_id, latest=_health_run_from_payload(transient_latest))
     return HealthLatestResponse(repo_id=repo_id, latest=_hydrate_health_run_response(supabase, run["id"], repo_id, user_id))
 
 
@@ -151,7 +232,7 @@ async def get_repository_health_history(
     ensure_repo_access(supabase, repo_id, user_id)
 
     runs = supabase_service.get_health_history(supabase, repo_id=repo_id, user_id=user_id, days=days, limit=limit)
-    points = _build_history_points(supabase, runs, user_id)
+    points = _build_history_points(supabase, runs, user_id) if runs else _build_transient_history_points(repo_id, user_id, limit)
 
     latest = runs[0] if runs else None
     return HealthHistoryResponse(

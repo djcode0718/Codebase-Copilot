@@ -193,5 +193,3 @@ def test_repository_health_category_trends_follow_score_delta():
         assert follow_up["top_level"]["trend"] == 0
     finally:
         shutil.rmtree(repo_path, ignore_errors=True)
-
-

@@ -46,5 +46,3 @@ def test_get_health_comparison_context_returns_none_for_empty_history(monkeypatc
     assert run is None
     assert scores is None
     assert findings is None
-
-

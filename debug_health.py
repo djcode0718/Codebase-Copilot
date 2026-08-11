@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv(override=False)
 
 # Now import after environment is loaded
-from app.config import REPOS_DIR
+from api.services import supabase_service
 from api.services.repository_health_engine import RepositoryHealthEngine
 from supabase import create_client
 
@@ -37,9 +37,10 @@ def main():
         supabase = create_client(url, key)
         
         # Fetch repository metadata
-        repo_response = supabase.table('repositories').select('id, name, index_name').eq('id', repo_id).single().execute()
+        repo_response = supabase.table('repositories').select('id, user_id, name, index_name').eq('id', repo_id).single().execute()
         repo_data = repo_response.data
         repo_name = repo_data.get('name') or repo_data.get('index_name')
+        user_id = repo_data.get('user_id')
         
         print(f"\n{'='*60}")
         print(f"Running health check for repo: {repo_id}")
@@ -55,7 +56,24 @@ def main():
             'index_name': repo_name,
         }
         
-        result = engine.run(repo_dict)
+        previous_scores = None
+        previous_findings = None
+        previous_overall = None
+        if user_id:
+            latest_run, previous_scores, previous_findings = supabase_service.get_health_comparison_context(
+                supabase,
+                repo_id=repo_id,
+                user_id=str(user_id),
+            )
+            if latest_run and latest_run.get('repository_health') is not None:
+                previous_overall = int(latest_run.get('repository_health'))
+
+        result = engine.run(
+            repo_dict,
+            previous_scores=previous_scores,
+            previous_findings=previous_findings,
+            previous_overall_score=previous_overall,
+        )
         
         # Extract top-level score information
         top_level = result.get('top_level', {})
@@ -96,4 +114,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

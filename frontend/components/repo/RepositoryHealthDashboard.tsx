@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -46,6 +46,10 @@ function healthCacheKey(repoId: string): string {
   return `codebase:health-latest:${repoId}`;
 }
 
+function healthHistoryCacheKey(repoId: string): string {
+  return `codebase:health-runs:${repoId}`;
+}
+
 function readCachedRun(repoId: string): HealthRun | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -69,6 +73,43 @@ function writeCachedRun(repoId: string, run: HealthRun | null): void {
   } catch {
     // Ignore local storage errors.
   }
+}
+
+function readCachedRunHistory(repoId: string): HealthRun[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(healthHistoryCacheKey(repoId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) => item && typeof item === 'object') as HealthRun[];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedRunHistory(repoId: string, runs: HealthRun[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!runs.length) {
+      window.localStorage.removeItem(healthHistoryCacheKey(repoId));
+      return;
+    }
+    window.localStorage.setItem(healthHistoryCacheKey(repoId), JSON.stringify(runs));
+  } catch {
+    // Ignore local storage errors.
+  }
+}
+
+function appendRunHistory(existing: HealthRun[], nextRun: HealthRun | null, maxItems = 60): HealthRun[] {
+  if (!nextRun) return existing;
+
+  const byId = new Map(existing.map((item) => [item.run_id, item]));
+  byId.set(nextRun.run_id, nextRun);
+
+  return [...byId.values()]
+    .sort((a, b) => new Date(a.generated_at).getTime() - new Date(b.generated_at).getTime())
+    .slice(-maxItems);
 }
 
 const CATEGORY_ORDER: HealthCategoryName[] = [
@@ -116,7 +157,21 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
   const [running, setRunning] = useState(false);
   const [run, setRun] = useState<HealthRun | null>(null);
   const [history, setHistory] = useState<HealthHistoryResponse | null>(null);
+  const [localRunHistory, setLocalRunHistory] = useState<HealthRun[]>(() => readCachedRunHistory(repoId));
   const [selectedCategory, setSelectedCategory] = useState<HealthCategoryName>('Architecture');
+  const isTransientRun = Boolean(run?.run_id?.startsWith('transient-'));
+
+  const rememberRun = useCallback((nextRun: HealthRun | null) => {
+    setLocalRunHistory((prev) => {
+      const updated = appendRunHistory(prev, nextRun);
+      writeCachedRunHistory(repoId, updated);
+      return updated;
+    });
+  }, [repoId]);
+
+  useEffect(() => {
+    setLocalRunHistory(readCachedRunHistory(repoId));
+  }, [repoId]);
 
   useEffect(() => {
     if (!token) return;
@@ -132,12 +187,14 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
           setRun(nextRun);
           onRunChange?.(nextRun);
           writeCachedRun(repoId, nextRun);
+          rememberRun(nextRun);
         }
       } catch (err) {
         nextRun = readCachedRun(repoId);
         if (active) {
           setRun(nextRun);
           onRunChange?.(nextRun);
+          rememberRun(nextRun);
           if (!nextRun) {
             toast.error(err instanceof Error ? err.message : 'Failed to load repository health intelligence');
           }
@@ -164,7 +221,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     return () => {
       active = false;
     };
-  }, [onRunChange, repoId, token]);
+  }, [onRunChange, rememberRun, repoId, token]);
 
   const categories = useMemo(() => {
     if (!run) return [];
@@ -214,10 +271,24 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       });
     }
 
+    for (const cachedRun of localRunHistory) {
+      if (map.has(cachedRun.run_id)) continue;
+      const categoryScores: Record<string, number> = {};
+      for (const category of cachedRun.categories) {
+        categoryScores[category.category] = category.score;
+      }
+      map.set(cachedRun.run_id, {
+        run_id: cachedRun.run_id,
+        created_at: cachedRun.generated_at ?? new Date().toISOString(),
+        repository_health: cachedRun.top_level.repository_health,
+        category_scores: categoryScores,
+      });
+    }
+
     return [...map.values()]
       .filter((point) => Number.isFinite(new Date(point.created_at).getTime()))
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-  }, [history, run]);
+  }, [history, localRunHistory, run]);
 
   const chartData = useMemo(() => {
     if (normalizedHistoryPoints.length === 0) return [];
@@ -293,6 +364,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       setRun(nextRun);
       onRunChange?.(nextRun);
       writeCachedRun(repoId, nextRun);
+      rememberRun(nextRun);
       const historyRes = await getRepositoryHealthHistory(token, repoId, 30, 100);
       setHistory(historyRes);
       toast.success('Repository health analysis completed');
@@ -331,6 +403,11 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
   return (
     <section className="space-y-5">
       <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm">
+        {isTransientRun && (
+          <div className="mb-3 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            Health history persistence is currently unavailable on the backend. Trend values are being computed from this browser session.
+          </div>
+        )}
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="font-heading text-lg font-semibold tracking-tight">Repository Health Intelligence</h2>
