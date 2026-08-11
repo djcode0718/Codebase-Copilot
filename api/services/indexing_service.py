@@ -246,23 +246,20 @@ def _try_persist_post_index_health_run(supabase, repo_id: str) -> None:
             return
 
 
-        previous_run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
-        previous_scores = None
-        previous_findings = None
-        if previous_run:
-            previous_scores = supabase_service.get_health_category_score_map(
-                supabase,
-                run_id=previous_run["id"],
-                user_id=user_id,
-            )
-            previous_findings = supabase_service.get_health_problem_titles(
-                supabase,
-                run_id=previous_run["id"],
-                user_id=user_id,
-            )
+        latest_run, previous_scores, previous_findings = supabase_service.get_health_comparison_context(
+            supabase,
+            repo_id=repo_id,
+            user_id=user_id,
+        )
+        previous_overall = int(latest_run["repository_health"]) if latest_run and latest_run.get("repository_health") is not None else None
 
         engine = RepositoryHealthEngine()
-        run_payload = engine.run(repo=repo, previous_scores=previous_scores, previous_findings=previous_findings)
+        run_payload = engine.run(
+            repo=repo,
+            previous_scores=previous_scores,
+            previous_findings=previous_findings,
+            previous_overall_score=previous_overall,
+        )
 
         run_record = supabase_service.insert_health_run(
             supabase,

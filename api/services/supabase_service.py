@@ -1241,6 +1241,63 @@ def get_latest_health_run(supabase: Client, *, repo_id: str, user_id: str) -> Op
         return None
 
 
+def get_recent_health_runs(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("repository_health_runs")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(max(1, int(limit)))
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        if _is_missing_health_table_error(e):
+            return []
+        logger.warning(f"get_recent_health_runs failed for repo_id='{repo_id}': {e}")
+        return []
+
+
+def get_health_comparison_context(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    lookback_runs: int = 20,
+) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, int]], Optional[List[str]]]:
+    """Return latest run + best available category baseline for trend deltas.
+
+    Overall trend must compare against the immediately previous top-level score,
+    while category trends need a run that actually has category snapshots.
+    """
+    runs = get_recent_health_runs(
+        supabase,
+        repo_id=repo_id,
+        user_id=user_id,
+        limit=max(2, lookback_runs),
+    )
+    latest_run = runs[0] if runs else None
+    if not latest_run:
+        return None, None, None
+
+    for run in runs:
+        score_map = get_health_category_score_map(supabase, run_id=run["id"], user_id=user_id)
+        if not score_map:
+            continue
+        problem_titles = get_health_problem_titles(supabase, run_id=run["id"], user_id=user_id)
+        return latest_run, score_map, problem_titles
+
+    return latest_run, None, None
+
+
 def get_health_run_by_id(supabase: Client, *, run_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     try:
         result = (

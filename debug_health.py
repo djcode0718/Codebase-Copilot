@@ -1,52 +1,99 @@
+import argparse
 import os
-import shutil
 import sys
-import uuid
 
 sys.path.insert(0, '.')
 
+# Load environment variables FIRST
+from dotenv import load_dotenv
+load_dotenv(override=False)
 
-def _set_debug_env_defaults() -> None:
-    os.environ.setdefault('LLM_PROVIDER', 'groq')
-    # Keep test key values clearly non-secret and scanner-safe.
-    os.environ.setdefault('GROQ_API_KEY', 'debug-placeholder-key')
-    os.environ.setdefault('SUPABASE_URL', 'https://example.supabase.co')
-    os.environ.setdefault('SUPABASE_SERVICE_KEY', 'debug-placeholder-service-key')
-    os.environ.setdefault('OLLAMA_EMBED_MODEL', 'nomic-embed-text')
-    os.environ.setdefault('USE_FAST_LLM', 'false')
-    os.environ.setdefault('USE_COLBERT', 'false')
-
-
-def _create_sample_service(repo_path: str) -> None:
-    sample_key_var = 'debug_token'
-    with open(os.path.join(repo_path, 'services', 'payments.py'), 'w', encoding='utf-8') as f:
-        f.write(f"TEST_CREDENTIAL = '{sample_key_var}'\n")
-        f.write('def charge(items):\n')
-        f.write('    return sum(items)\n')
-
-
-_set_debug_env_defaults()
-
+# Now import after environment is loaded
 from app.config import REPOS_DIR
-from api.services.repository_health_engine import RepositoryHealthEngine, _resolve_repos_dir
+from api.services.repository_health_engine import RepositoryHealthEngine
+from supabase import create_client
 
-repo_name = 'debug-health-' + uuid.uuid4().hex[:6]
-repo_path = os.path.join(REPOS_DIR, repo_name)
-os.makedirs(os.path.join(repo_path, 'services'), exist_ok=True)
 
-_create_sample_service(repo_path)
+def main():
+    """
+    Debug script to run health analysis on a repository.
+    Usage: python debug_health.py --repo-id "repo-uuid-here"
+    """
+    parser = argparse.ArgumentParser(description='Run health analysis on a repository')
+    parser.add_argument('--repo-id', required=True, help='Repository UUID to analyze')
+    args = parser.parse_args()
+    
+    repo_id = args.repo_id
+    
+    # Get Supabase credentials
+    url = os.getenv('SUPABASE_URL')
+    key = os.getenv('SUPABASE_SERVICE_KEY')
+    
+    if not url or not key:
+        print(f"Error: SUPABASE_URL and SUPABASE_SERVICE_KEY not found in .env")
+        sys.exit(1)
+    
+    try:
+        supabase = create_client(url, key)
+        
+        # Fetch repository metadata
+        repo_response = supabase.table('repositories').select('id, name, index_name').eq('id', repo_id).single().execute()
+        repo_data = repo_response.data
+        repo_name = repo_data.get('name') or repo_data.get('index_name')
+        
+        print(f"\n{'='*60}")
+        print(f"Running health check for repo: {repo_id}")
+        print(f"{'='*60}\n")
+        
+        # Run health analysis using the correct engine.run() signature
+        engine = RepositoryHealthEngine()
+        
+        # Build repo dict as expected by engine.run()
+        repo_dict = {
+            'id': repo_id,
+            'name': repo_name,
+            'index_name': repo_name,
+        }
+        
+        result = engine.run(repo_dict)
+        
+        # Extract top-level score information
+        top_level = result.get('top_level', {})
+        repository_health = top_level.get('repository_health', 'N/A')
+        grade = top_level.get('grade', 'N/A')
+        status = top_level.get('status', 'N/A')
+        trend = top_level.get('trend', 0)
+        
+        # Format and display output as per documentation
+        print(f"Health Score: {repository_health}")
+        print(f"Grade: {grade}")
+        print(f"Status: {status}")
+        print(f"Trend: {trend:+d}")
+        print(f"Categories Analyzed: {len(result.get('categories', []))}")
+        
+        # Show category breakdown
+        categories = result.get('categories', [])
+        if categories:
+            print(f"\n{'Category':<20} | {'Score':<6} | {'Grade':<6} | {'Trend':<7}")
+            print("-" * 52)
+            for cat in categories:
+                category = cat.get('category', 'Unknown')[:19]
+                score = cat.get('score', 0)
+                cat_grade = cat.get('grade', 'N/A')
+                cat_trend = f"{cat.get('trend', 0):+d}"
+                print(f"{category:<20} | {score:>5} | {cat_grade:>5} | {cat_trend:>6}")
+        
+        print(f"\n{'='*60}")
+        print("✓ Health analysis completed successfully")
+        print(f"{'='*60}\n")
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
-print('REPOS_DIR:', REPOS_DIR)
-print('_resolve_repos_dir():', _resolve_repos_dir())
 
-engine = RepositoryHealthEngine()
-print('engine._repos_dir:', engine._repos_dir)
-
-result = engine.run(repo={'id': 'r1', 'name': repo_name, 'index_name': repo_name})
-sec = next(c for c in result['categories'] if c['category'] == 'Security')
-print('Security score:', sec['score'])
-print('detected_problems:', sec['detected_problems'])
-print('findings:', [(f['title'], f['finding_type']) for f in result['findings'][:5]])
-
-shutil.rmtree(repo_path, ignore_errors=True)
+if __name__ == '__main__':
+    main()
 

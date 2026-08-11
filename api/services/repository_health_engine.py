@@ -1196,6 +1196,7 @@ class RepositoryHealthEngine:
         repo: Dict[str, Any],
         previous_scores: Optional[Dict[str, int]] = None,
         previous_findings: Optional[Iterable[str]] = None,
+        previous_overall_score: Optional[int] = None,
     ) -> Dict[str, Any]:
         snapshot = self._build_snapshot(repo)
         category_results = [analyzer.analyze(snapshot) for analyzer in self.analyzers]
@@ -1204,7 +1205,9 @@ class RepositoryHealthEngine:
             previous_scores,
         )
         overall_score = self._aggregate_score(category_results)
-        if previous_scores:
+        if previous_overall_score is not None:
+            trend_delta = overall_score - int(previous_overall_score)
+        elif previous_scores:
             previous_overall = int(round(sum(previous_scores.values()) / max(1, len(previous_scores))))
             trend_delta = overall_score - previous_overall
         grade = self._grade_for_score(overall_score)

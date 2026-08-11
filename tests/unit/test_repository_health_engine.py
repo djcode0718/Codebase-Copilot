@@ -138,3 +138,60 @@ def test_performance_analyzer_ignores_non_blocking_async_retry_helpers():
     finally:
         shutil.rmtree(repo_path, ignore_errors=True)
 
+
+def test_repository_health_trend_uses_previous_overall_score_baseline():
+    repo_name = f"health-trend-overall-{uuid.uuid4().hex[:8]}"
+    repo_path = os.path.join(REPOS_DIR, repo_name)
+    os.makedirs(repo_path, exist_ok=True)
+
+    try:
+        _write_batch([
+            (os.path.join(repo_path, "service.py"), "def ok():\n    return 1\n"),
+            (os.path.join(repo_path, "README.md"), "# Trend Fixture\n"),
+        ])
+
+        engine = RepositoryHealthEngine()
+        first = engine.run(repo={"id": "repo-4", "name": repo_name, "index_name": repo_name})
+        current_score = int(first["top_level"]["repository_health"])
+
+        # Intentionally conflicting previous category scores; top-level trend
+        # must still follow previous_overall_score.
+        second = engine.run(
+            repo={"id": "repo-4", "name": repo_name, "index_name": repo_name},
+            previous_scores={"Architecture": 100, "Security": 100},
+            previous_overall_score=current_score - 8,
+        )
+
+        assert second["top_level"]["trend"] == 8
+    finally:
+        shutil.rmtree(repo_path, ignore_errors=True)
+
+
+def test_repository_health_category_trends_follow_score_delta():
+    repo_name = f"health-trend-category-{uuid.uuid4().hex[:8]}"
+    repo_path = os.path.join(REPOS_DIR, repo_name)
+    os.makedirs(repo_path, exist_ok=True)
+
+    try:
+        _write_batch([
+            (os.path.join(repo_path, "app", "main.py"), "def hello():\n    return 'world'\n"),
+            (os.path.join(repo_path, "README.md"), "# Category Trend Fixture\n"),
+        ])
+
+        engine = RepositoryHealthEngine()
+        baseline = engine.run(repo={"id": "repo-5", "name": repo_name, "index_name": repo_name})
+        previous_scores = {c["category"]: int(c["score"]) for c in baseline["categories"]}
+
+        follow_up = engine.run(
+            repo={"id": "repo-5", "name": repo_name, "index_name": repo_name},
+            previous_scores=previous_scores,
+            previous_overall_score=int(baseline["top_level"]["repository_health"]),
+        )
+
+        deltas = {c["category"]: int(c["trend"]) for c in follow_up["categories"]}
+        assert all(delta == 0 for delta in deltas.values())
+        assert follow_up["top_level"]["trend"] == 0
+    finally:
+        shutil.rmtree(repo_path, ignore_errors=True)
+
+

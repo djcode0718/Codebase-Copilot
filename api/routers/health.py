@@ -30,22 +30,18 @@ engine = RepositoryHealthEngine()
 logger = get_logger(__name__)
 
 
-def _load_previous_health_context(supabase: Client, repo_id: str, user_id: str) -> tuple[dict | None, set[str] | None]:
-    previous_run = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
-    if not previous_run:
-        return None, None
-
-    previous_scores = supabase_service.get_health_category_score_map(
+def _load_previous_health_context(
+    supabase: Client,
+    repo_id: str,
+    user_id: str,
+) -> tuple[dict | None, list[str] | None, int | None]:
+    latest_run, previous_scores, previous_findings = supabase_service.get_health_comparison_context(
         supabase,
-        run_id=previous_run["id"],
+        repo_id=repo_id,
         user_id=user_id,
     )
-    previous_findings = supabase_service.get_health_problem_titles(
-        supabase,
-        run_id=previous_run["id"],
-        user_id=user_id,
-    )
-    return previous_scores, previous_findings
+    previous_overall = int(latest_run["repository_health"]) if latest_run and latest_run.get("repository_health") is not None else None
+    return previous_scores, previous_findings, previous_overall
 
 
 def _build_history_points(supabase: Client, runs: list[dict], user_id: str) -> list[HealthHistoryPoint]:
@@ -71,9 +67,14 @@ async def run_repository_health_analysis(
     supabase: Client = Depends(get_supabase),
 ):
     repo = ensure_repo_access(supabase, repo_id, user_id)
-    previous_scores, previous_findings = _load_previous_health_context(supabase, repo_id, user_id)
+    previous_scores, previous_findings, previous_overall = _load_previous_health_context(supabase, repo_id, user_id)
 
-    run_payload = engine.run(repo=repo, previous_scores=previous_scores, previous_findings=previous_findings)
+    run_payload = engine.run(
+        repo=repo,
+        previous_scores=previous_scores,
+        previous_findings=previous_findings,
+        previous_overall_score=previous_overall,
+    )
 
 
     try:
