@@ -32,7 +32,7 @@ const INTELLIGENCE_ACTIONS: Action[] = [
     icon: ShieldAlert,
     label: 'Security Review',
     description: 'Auth, input validation, secrets & API risks',
-    prompt: 'Perform a comprehensive security intelligence review. Analyze: authentication, authorization, input validation, secret management, token handling, API security, dependency vulnerabilities. For each finding provide: Severity (Critical/High/Medium/Low), Impact, Risk, and Recommendation with file evidence.',
+    prompt: 'Conduct a best-practices security code review. Evaluate defensive programming patterns, input validation, secure credential storage, API robust design, and dependency management. For any areas of concern, suggest remediation: Severity (Critical/High/Medium/Low), Potential Impact, Potential Risk, and Recommendations for hardening code with file references.',
     color: 'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/25 hover:border-rose-400 dark:hover:border-rose-400/50',
   },
   {

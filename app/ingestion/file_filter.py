@@ -12,7 +12,7 @@ VALID_EXTENSIONS = {
 
 # Directories to ignore
 IGNORE_DIRS = {
-    'node_modules', '.git', '.github', 'dist', 'build', '__pycache__',
+    'node_modules', '.git', 'dist', 'build', '__pycache__',
     'venv', 'env', '.idea', '.vscode', 'out', 'target'
 }
 
