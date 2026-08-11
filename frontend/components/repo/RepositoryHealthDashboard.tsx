@@ -405,7 +405,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-lg shadow-black/5 backdrop-blur-sm">
         {isTransientRun && (
           <div className="mb-3 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-            Health history persistence is currently unavailable on the backend. Trend values are being computed from this browser session.
+            Health history persistence is currently unavailable in Supabase. Trend values are being stored in a backend fallback store until the health tables are restored.
           </div>
         )}
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">

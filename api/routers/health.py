@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import uuid
+import json
+import os
+import threading
 from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,6 +28,7 @@ from api.routers._repo_access import ensure_repo_access
 from api.services import supabase_service
 from api.services.repository_health_engine import RepositoryHealthEngine
 from app.utils.logger import get_logger
+from app.config import DATA_DIR
 
 router = APIRouter()
 engine = RepositoryHealthEngine()
@@ -32,20 +36,78 @@ logger = get_logger(__name__)
 
 _TRANSIENT_HEALTH_RUNS: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
 _MAX_TRANSIENT_RUNS_PER_REPO = 50
+_TRANSIENT_STORE_PATH = os.path.join(DATA_DIR, "health_transient_runs.json")
+_TRANSIENT_STORE_LOCK = threading.Lock()
+_TRANSIENT_STORE_LOADED = False
 
 
 def _transient_key(repo_id: str, user_id: str) -> Tuple[str, str]:
     return (repo_id, user_id)
 
 
+def _serialize_transient_key(repo_id: str, user_id: str) -> str:
+    return f"{repo_id}::{user_id}"
+
+
+def _deserialize_transient_key(value: str) -> Tuple[str, str] | None:
+    if "::" not in value:
+        return None
+    repo_id, user_id = value.split("::", 1)
+    if not repo_id or not user_id:
+        return None
+    return repo_id, user_id
+
+
+def _load_transient_store_if_needed() -> None:
+    global _TRANSIENT_STORE_LOADED
+    if _TRANSIENT_STORE_LOADED:
+        return
+
+    with _TRANSIENT_STORE_LOCK:
+        if _TRANSIENT_STORE_LOADED:
+            return
+        if not os.path.exists(_TRANSIENT_STORE_PATH):
+            _TRANSIENT_STORE_LOADED = True
+            return
+        try:
+            with open(_TRANSIENT_STORE_PATH, "r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+            if isinstance(raw, dict):
+                for key, runs in raw.items():
+                    parsed_key = _deserialize_transient_key(str(key))
+                    if not parsed_key or not isinstance(runs, list):
+                        continue
+                    _TRANSIENT_HEALTH_RUNS[parsed_key] = [r for r in runs if isinstance(r, dict)][-_MAX_TRANSIENT_RUNS_PER_REPO:]
+        except Exception as e:
+            logger.warning(f"Failed to load transient health store: {e}")
+        finally:
+            _TRANSIENT_STORE_LOADED = True
+
+
+def _save_transient_store() -> None:
+    with _TRANSIENT_STORE_LOCK:
+        try:
+            os.makedirs(os.path.dirname(_TRANSIENT_STORE_PATH), exist_ok=True)
+            payload: Dict[str, List[Dict[str, Any]]] = {}
+            for (repo_id, user_id), runs in _TRANSIENT_HEALTH_RUNS.items():
+                payload[_serialize_transient_key(repo_id, user_id)] = runs[-_MAX_TRANSIENT_RUNS_PER_REPO:]
+            with open(_TRANSIENT_STORE_PATH, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=True)
+        except Exception as e:
+            logger.warning(f"Failed to persist transient health store: {e}")
+
+
 def _append_transient_run(repo_id: str, user_id: str, run_payload: Dict[str, Any]) -> None:
+    _load_transient_store_if_needed()
     key = _transient_key(repo_id, user_id)
     runs = _TRANSIENT_HEALTH_RUNS.get(key, [])
     runs.append(run_payload)
     _TRANSIENT_HEALTH_RUNS[key] = runs[-_MAX_TRANSIENT_RUNS_PER_REPO:]
+    _save_transient_store()
 
 
 def _latest_transient_run(repo_id: str, user_id: str) -> Dict[str, Any] | None:
+    _load_transient_store_if_needed()
     runs = _TRANSIENT_HEALTH_RUNS.get(_transient_key(repo_id, user_id), [])
     return runs[-1] if runs else None
 
@@ -113,6 +175,7 @@ def _build_history_points(supabase: Client, runs: list[dict], user_id: str) -> l
 
 
 def _build_transient_history_points(repo_id: str, user_id: str, limit: int) -> list[HealthHistoryPoint]:
+    _load_transient_store_if_needed()
     runs = _TRANSIENT_HEALTH_RUNS.get(_transient_key(repo_id, user_id), [])
     if not runs:
         return []
@@ -193,13 +256,13 @@ async def run_repository_health_analysis(
         )
 
         response = _hydrate_health_run_response(supabase, run_record["id"], repo_id, user_id)
-        payload = response.model_dump()
+        payload = response.model_dump(mode="json")
         _append_transient_run(repo_id, user_id, payload)
         return response
     except Exception as e:
         logger.warning(f"Health run persistence unavailable, returning transient result: {e}")
         transient_response = _build_transient_health_run_response(repo_id=repo_id, run_payload=run_payload)
-        payload = transient_response.model_dump()
+        payload = transient_response.model_dump(mode="json")
         _append_transient_run(repo_id, user_id, payload)
         return transient_response
 
