@@ -247,10 +247,11 @@ async def stream_message(
 
     # Persist user message to DB immediately (before streaming)
     # This ensures it shows even if the stream fails halfway
-    _persist_user_message(supabase, chat_id, query)
+    user_content = body.display_text if body.display_text else query
+    _persist_user_message(supabase, chat_id, user_content)
 
     # Update chat title on first message
-    await _maybe_update_first_message_title(supabase, chat_id, [m.get("content", "") for m in persisted_history if m.get("role") == "user"] + [query])
+    await _maybe_update_first_message_title(supabase, chat_id, [m.get("content", "") for m in persisted_history if m.get("role") == "user"] + [user_content])
 
     async def event_generator():
         """
@@ -269,6 +270,7 @@ async def stream_message(
                 chat_id,
                 memory_context=memory_context,
                 persisted_history=persisted_history,
+                is_cta_followup=body.is_cta_followup,
             ):
                 yield sse_line
 

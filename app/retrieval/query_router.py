@@ -285,3 +285,148 @@ def classify_query(query: str) -> QueryMode:
         # Safe fallback — CODE_LOOKUP is the more conservative mode
         logger.warning(f"LLM classifier failed: {e} — defaulting to CODE_LOOKUP")
         return QueryMode.CODE_LOOKUP
+
+
+# Named constant for low-confidence similarity threshold.
+# NOTE: This value is measured against the maximum similarity score of retrieved nodes
+# (CrossEncoder sigmoid scores when USE_COLBERT=True, or Cosine similarity when False).
+# TODO: This will need empirical tuning based on active retrieval/embeddings and query behavior.
+LOW_CONFIDENCE_SIMILARITY_THRESHOLD = 0.40
+
+ADJECTIVE_MAPPING = {
+    "security_review": ["secure", "vulnerable", "safety", "threat", "leak", "secret"],
+    "tech_debt_scan": ["complex", "messy", "debt", "quality", "cleanliness", "smell"],
+    "test_intelligence": ["tested", "covered", "test", "coverage", "testing"],
+    "dependency_graph": ["coupled", "dependent", "dependency", "dependencies", "depend"],
+}
+
+ACTION_DISPLAY_NAMES = {
+    "security_review": "Security Review",
+    "tech_debt_scan": "Tech Debt Scan",
+    "test_intelligence": "Test Intelligence",
+    "dependency_graph": "Dependency Graph",
+    "architecture_map": "Architecture Map",
+    "business_flows": "Business Flows",
+    "code_quality": "Code Quality",
+    "impact_analysis": "Impact Analysis",
+    "onboarding_guide": "Onboarding Guide",
+    "api_documentation": "API Documentation",
+    "engineering_report": "Engineering Report",
+    "digital_twin": "Digital Twin",
+}
+
+def detect_excluded_folder(query: str) -> Optional[str]:
+    """
+    Check if the query references an excluded path segment in IGNORE_DIRS.
+    Returns the name of the folder if matched, else None.
+    """
+    from app.ingestion.file_filter import IGNORE_DIRS
+    
+    q_lower = (query or "").lower()
+    tokens = re.split(r'[\s\'"`(),;]', q_lower)
+    for token in tokens:
+        if not token:
+            continue
+        segments = token.replace("\\", "/").split("/")
+        for seg in segments:
+            if seg in IGNORE_DIRS:
+                return seg
+    return None
+
+AGGREGATION_PATTERN = re.compile(
+    r"\b(how\s+many|total\s+number\s+of|count\s+of|list\s+all)\b",
+    re.IGNORECASE
+)
+
+def detect_aggregation(query: str) -> bool:
+    """
+    Check if the query matches aggregation/counting regex patterns.
+    """
+    return bool(AGGREGATION_PATTERN.search(query or ""))
+
+SUPERLATIVE_PATTERN = re.compile(
+    r"\b(most|least|best|worst|riskiest|messiest)\b",
+    re.IGNORECASE
+)
+
+def has_superlative(query: str) -> bool:
+    """
+    Check if the query contains superlative keywords.
+    """
+    return bool(SUPERLATIVE_PATTERN.search(query or ""))
+
+def match_adjective_action(query: str) -> Optional[str]:
+    """
+    Match adjective keywords from adjective mapping to an action key.
+    """
+    q_lower = (query or "").lower()
+    for action, keywords in ADJECTIVE_MAPPING.items():
+        if any(kw in q_lower for kw in keywords):
+            return action
+    return None
+
+def classify_superlative_with_llm(query: str) -> Optional[str]:
+    """
+    LLM fallback classifier for superlative queries.
+    Uses context-minimal prompt containing only query text and action names.
+    """
+    from llama_index.core import Settings
+    
+    actions_list = [
+        "Architecture Map",
+        "Security Review",
+        "Business Flows",
+        "Code Quality",
+        "Impact Analysis",
+        "Test Intelligence",
+        "Onboarding Guide",
+        "API Documentation",
+        "Dependency Graph",
+        "Engineering Report",
+        "Tech Debt Scan",
+        "Digital Twin"
+    ]
+    
+    prompt = (
+        "Classify the user's query into exactly one of these 12 intelligence actions "
+        "if it is asking for a full-repo judgment/superlative analysis. "
+        "If it does not match any action, respond with 'NONE'.\n\n"
+        "Actions:\n" + "\n".join(f"- {a}" for a in actions_list) + "\n\n"
+        f"Query: {query}\n\n"
+        "Respond with ONLY the exact name of the matched action (e.g., 'Security Review'), or 'NONE'."
+    )
+    
+    try:
+        response = Settings.llm.complete(prompt)
+        res = str(response).strip()
+        for action in actions_list:
+            if action.lower() in res.lower():
+                return action.lower().replace(" ", "_")
+    except Exception as e:
+        logger.warning(f"LLM superlative classifier failed: {e}")
+        
+    return None
+
+def check_superlative_intent(query: str) -> Optional[dict]:
+    """
+    Check if the query is a judgment/superlative query that should route to
+    a repository intelligence action.
+    
+    Returns a dict with suggested_action and message if matched, else None.
+    """
+    if not has_superlative(query):
+        return None
+        
+    action_key = match_adjective_action(query)
+    
+    if not action_key:
+        action_key = classify_superlative_with_llm(query)
+        
+    if action_key:
+        display_name = ACTION_DISPLAY_NAMES.get(action_key, action_key.replace("_", " ").title())
+        return {
+            "suggested_action": action_key,
+            "message": f"That needs a full-repo analysis — run {display_name}?"
+        }
+        
+    return None

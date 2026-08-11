@@ -324,7 +324,7 @@ async def _stream_llm_response_with_guard(
 
 
 async def _resolve_query_mode(query: str, memory, classify_query):
-    from app.retrieval.query_router import _is_relationship_query, QueryMode
+    from app.retrieval.query_router import _is_relationship_query
     from app.services.qa_service import resolve_ambiguous_query
     from app.llm.llm_client import configure_llamaindex_settings
 
@@ -501,12 +501,66 @@ async def _prepare_stream_prompt(
     chat_id: str,
     memory_context: Optional[str],
     persisted_history: Optional[List[Dict[str, Any]]] = None,
+    is_cta_followup: bool = False,
 ):
     from app.retrieval.query_router import classify_query
     from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
 
     vector_index, bm25_retriever = await _load_indexes(index_name)
     memory = _get_or_create_memory(repo_id, chat_id, persisted_history)
+
+    if not is_cta_followup:
+        # ── Check 1: Excluded Folder Check ─────────────────────────────────────
+        from app.retrieval.query_router import detect_excluded_folder
+        excluded_folder = detect_excluded_folder(query)
+        if excluded_folder:
+            logger.info(f"Stream early exit: Excluded folder '{excluded_folder}' referenced")
+            err_msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
+            return {
+                "memory": memory,
+                "resolved_query": query,
+                "query_mode": QueryMode.CODE_LOOKUP,
+                "reranked_nodes": [],
+                "retrieved_files": [],
+                "t_retrieval_ms": 0,
+                "full_prompt": "",
+                "early_response": err_msg,
+            }
+
+        # ── Check 2: Aggregation Check ──────────────────────────────────────────
+        from app.retrieval.query_router import detect_aggregation
+        if detect_aggregation(query):
+            logger.info("Stream early exit: Aggregation query detected")
+            from app.services.repo_stats_service import handle_aggregation_query
+            response_str = handle_aggregation_query(query, index_name)
+            return {
+                "memory": memory,
+                "resolved_query": query,
+                "query_mode": QueryMode.CODE_LOOKUP,
+                "reranked_nodes": [],
+                "retrieved_files": [],
+                "t_retrieval_ms": 0,
+                "full_prompt": "",
+                "early_response": response_str,
+            }
+
+        # ── Check 3: Superlative / Action Suggestion Check ──────────────────────
+        from app.retrieval.query_router import check_superlative_intent
+        superlative_suggest = check_superlative_intent(query)
+        if superlative_suggest:
+            logger.info(f"Stream early exit: Superlative query matched action '{superlative_suggest['suggested_action']}'")
+            import json
+            response_str = json.dumps(superlative_suggest)
+            return {
+                "memory": memory,
+                "resolved_query": query,
+                "query_mode": QueryMode.CODE_LOOKUP,
+                "reranked_nodes": [],
+                "retrieved_files": [],
+                "t_retrieval_ms": 0,
+                "full_prompt": "",
+                "early_response": response_str,
+            }
 
     resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
 
@@ -663,6 +717,7 @@ async def stream_chat_response(
     chat_id: str,
     memory_context: Optional[str] = None,
     persisted_history: Optional[List[Dict[str, Any]]] = None,
+    is_cta_followup: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     SSE generator for /chat/{chat_id}/message/stream.
@@ -711,6 +766,7 @@ async def stream_chat_response(
             chat_id=chat_id,
             memory_context=memory_context,
             persisted_history=persisted_history,
+            is_cta_followup=is_cta_followup,
         )
         memory = prep["memory"]
         resolved_query = prep["resolved_query"]
@@ -720,6 +776,25 @@ async def stream_chat_response(
         t_retrieval_ms = prep["t_retrieval_ms"]
         full_prompt = prep["full_prompt"]
         query_mode_value = query_mode.value
+
+        if "early_response" in prep:
+            early_resp = prep["early_response"]
+            yield to_sse_data({'type': 'token', 'content': early_resp})
+            t_total_ms = int((time.time() - t_start) * 1000)
+            metadata = _build_metadata_event(
+                query_mode_value=query_mode_value,
+                retrieved_files=[],
+                t_retrieval_ms=0,
+                t_llm_ms=0,
+                t_total_ms=t_total_ms,
+                llm_provider=None,
+                llm_model=None
+            )
+            yield to_sse_data(metadata)
+            yield to_sse_data({"type": "suggestions", "questions": _repo_focused_rephrase_suggestions()})
+            yield to_sse_data({"type": "done"})
+            _persist_memory_turn(repo_id, chat_id, memory, query, early_resp, query_mode)
+            return
 
         if is_general_knowledge_or_preference_query(query) or is_general_knowledge_or_preference_query(resolved_query):
             for evt in _build_no_match_events(
@@ -732,6 +807,27 @@ async def stream_chat_response(
             return
 
         top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
+
+        # ── Low Confidence Check (Streaming) ──────────────────────────────────
+        from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
+        if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
+            clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
+            yield to_sse_data({'type': 'token', 'content': clarification})
+            t_total_ms = int((time.time() - t_start) * 1000)
+            metadata = _build_metadata_event(
+                query_mode_value=query_mode_value,
+                retrieved_files=retrieved_files,
+                t_retrieval_ms=t_retrieval_ms,
+                t_llm_ms=0,
+                t_total_ms=t_total_ms,
+                llm_provider=None,
+                llm_model=None
+            )
+            yield to_sse_data(metadata)
+            yield to_sse_data({"type": "suggestions", "questions": _repo_focused_rephrase_suggestions()})
+            yield to_sse_data({"type": "done"})
+            _persist_memory_turn(repo_id, chat_id, memory, query, clarification, query_mode)
+            return
         # No-match guard: only applied for CODE_LOOKUP mode.
         # ARCHITECTURAL mode is designed for broad reasoning — CrossEncoder scores
         # for natural-language architecture queries are always low (sigmoid ≈ 0.50)
@@ -760,9 +856,51 @@ async def stream_chat_response(
         try:
             from app.services.llm_fallback import get_last_llm_usage, reset_last_llm_usage
             reset_last_llm_usage()
+
+            buffer = ""
+            is_refusal = False
+            refusal_indicators = [
+                "i cannot", "i'm sorry", "i am sorry", "as an ai", 
+                "i am not able", "i cannot fulfill", "unable to comply",
+                "cannot fulfill this request"
+            ]
+
             async for delta in _stream_llm_response_with_guard(full_prompt):
-                full_response += delta
-                yield to_sse_data({'type': 'token', 'content': delta})
+                if not is_refusal:
+                    buffer += delta
+                    lower_buf = buffer.strip().lower()
+                    if any(ind in lower_buf for ind in refusal_indicators):
+                        is_refusal = True
+                        break
+                    
+                    if len(buffer) >= 60 or "\n" in delta or "." in delta:
+                        full_response += buffer
+                        yield to_sse_data({'type': 'token', 'content': buffer})
+                        buffer = ""
+                else:
+                    full_response += delta
+                    yield to_sse_data({'type': 'token', 'content': delta})
+
+            if is_refusal:
+                logger.warning("Gemini safety refusal detected! Retrying with fallback reworded prompt...")
+                import re
+                orig_match = re.search(r"The user specifically asked: '([^']+)'", full_prompt)
+                original_question = orig_match.group(1) if orig_match else "the requested review"
+                fallback_prompt = (
+                    f"The user asked: '{original_question}'. "
+                    "Please conduct a general best-practices code review of the repository. "
+                    "Focus on safe programming structures, input verification, modular design, "
+                    "and general code architecture. First explicitly name the most relevant file(s) "
+                    "with your reasons, then list standard architectural recommendations."
+                )
+                full_response = ""
+                async for delta in _stream_llm_response_with_guard(fallback_prompt):
+                    full_response += delta
+                    yield to_sse_data({'type': 'token', 'content': delta})
+            else:
+                if buffer:
+                    full_response += buffer
+                    yield to_sse_data({'type': 'token', 'content': buffer})
 
             # Guarantee the UI receives at least one token event.
             if not full_response.strip():
@@ -834,6 +972,7 @@ async def get_full_response_for_persistence(
     index_name: str,
     repo_id: str,
     chat_id: str,
+    is_cta_followup: bool = False,
 ) -> Tuple[str, str, List[dict], int]:
     """
     Non-streaming version — used when we need to persist to DB
@@ -844,13 +983,14 @@ async def get_full_response_for_persistence(
     _ensure_llamaindex()
 
     from app.services.qa_service import handle_user_query
+    from functools import partial
 
     chat_engine, memory, last_mode = _get_or_init_session(repo_id, chat_id)
 
     t_start = time.time()
     response_str, new_engine, new_memory, query_mode = await asyncio.get_event_loop().run_in_executor(
         None,
-        handle_user_query,
+        partial(handle_user_query, is_cta_followup=is_cta_followup),
         query,
         index_name,
         chat_engine,

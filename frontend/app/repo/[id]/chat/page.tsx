@@ -522,7 +522,7 @@ function ChatMessageList({
   error: string | null;
   retryPrompt: string | null;
   suggestions: string[];
-  onSuggestion: (q: string) => void;
+  onSuggestion: (query: string, displayText?: string, isCtaFollowup?: boolean) => void;
   onRetry: () => void;
   onTryAgainForAnswer: (index: number, msg: Message) => void;
   onEditQuestion: (msg: Message) => void;
@@ -547,6 +547,8 @@ function ChatMessageList({
           actionsDisabled={streaming || !sessionReady}
           graphKeys={graphKeys}
           onOpenGraph={onOpenGraph}
+          onSuggestion={onSuggestion}
+          previousUserQuery={i > 0 && messages[i - 1].role === 'user' ? messages[i - 1].content : undefined}
         />
       ))}
 
@@ -1010,7 +1012,7 @@ function useChatInteractionHandlers({
   chatId: string | null;
   token: string;
   streaming: boolean;
-  sendMessage: (chatId: string, query: string, token: string) => Promise<StreamedResponse | null>;
+  sendMessage: (chatId: string, query: string, token: string, displayText?: string, isCtaFollowup?: boolean) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedText: string;
   streamedTextRef: React.MutableRefObject<string>;
@@ -1119,7 +1121,7 @@ function useMessageMutationHandlers({
   chatId: string | null;
   token: string;
   streaming: boolean;
-  sendMessage: (chatId: string, query: string, token: string) => Promise<StreamedResponse | null>;
+  sendMessage: (chatId: string, query: string, token: string, displayText?: string, isCtaFollowup?: boolean) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedTextRef: React.MutableRefObject<string>;
   pendingMetadata: Omit<StreamedResponse, 'content'> | null;
@@ -1153,17 +1155,17 @@ function useMessageMutationHandlers({
     };
   }
 
-  const handleSend = useCallback(async (query: string) => {
+  const handleSend = useCallback(async (query: string, displayText?: string, isCtaFollowup?: boolean) => {
     if (!chatId || !token || !query.trim() || streaming) return;
     const initialMessageCount = messages.length;
-    const userQuery = query.trim();
-    const modelQuery = withMermaidGuardrails(userQuery);
+    const userQuery = (displayText || query).trim();
+    const modelQuery = withMermaidGuardrails(query.trim());
     const userMsg: Message = { id: `u-${Date.now()}`, chat_id: chatId, role: 'user', content: userQuery, created_at: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
     setRetryPrompt(null);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    const result = await sendMessage(chatId, modelQuery, token);
+    const result = await sendMessage(chatId, modelQuery, token, displayText, isCtaFollowup);
     // Use ref (non-stale) for partial recovery — the state closure captured
     // the empty value from before sendMessage started.
     const latestStreamedText = streamedTextRef.current;

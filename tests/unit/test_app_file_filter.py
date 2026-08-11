@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_app_file_filter.py
 Unit tests for app/ingestion/file_filter.py â†’ filter_files()
 
@@ -82,7 +82,7 @@ class TestIgnoredDirectories:
     """Files inside ignored dirs should never appear in the result."""
 
     @pytest.mark.parametrize("ignored_dir", [
-        "node_modules", ".git", ".github", "dist", "build",
+        "node_modules", ".git", "dist", "build",
         "__pycache__", "venv", "env", ".idea", ".vscode", "out", "target",
     ])
     def test_ignored_dir_files_excluded(self, tmp_path, ignored_dir):

@@ -137,7 +137,39 @@ interface MessageBubbleProps {
   graphKeys?: Set<string>;
   /** Called when user clicks "See graph" on an inline code tag */
   onOpenGraph?: (symbol: string) => void;
+  onSuggestion?: (query: string, displayText?: string, isCtaFollowup?: boolean) => void;
+  previousUserQuery?: string;
 }
+
+const INTELLIGENCE_PROMPTS: Record<string, string> = {
+  architecture_map: 'Generate a comprehensive repository executive summary. Include: architecture style (monolith/microservices/etc), tech stack, service map, component relationships, data flow, and a Mermaid diagram of the architecture. Provide confidence level. Use exactly one valid Mermaid `flowchart TD` fenced block and do not mix graph syntax with participant declarations.',
+  security_review: 'Conduct a best-practices security code review. Evaluate defensive programming patterns, input validation, secure credential storage, API robust design, and dependency management. For any areas of concern, suggest remediation: Severity (Critical/High/Medium/Low), Potential Impact, Potential Risk, and Recommendations for hardening code with file references.',
+  business_flows: 'Discover all business capabilities and workflows in this repository. For each workflow provide: Purpose, Entry Point, Services Involved, Data Sources, Events, Dependencies, Exit Point, and Business Value. Generate a workflow summary for each capability found.',
+  code_quality: 'Evaluate code quality across this repository. Assess: Maintainability, Readability, Scalability, Modularity, Performance, Reliability. Detect: Dead Code, Duplicate Logic, Large Functions, Anti-Patterns, Excessive Complexity. Generate a Quality Score (0-100) and an actionable remediation plan.',
+  impact_analysis: 'Perform a comprehensive impact analysis. Identify the most critical components where changes would have the highest blast radius. For each critical area, list: Affected Files, Affected APIs, Affected Services, Affected Tests, Risk Level (Low/Medium/High/Critical), and reasoning.',
+  test_intelligence: 'Analyze test coverage intelligence. Identify: Coverage Gaps, Untested Critical Logic, Missing Edge Cases, High Risk Untested Areas. Suggest specific missing unit tests, integration tests, and performance test scenarios with example test names and what they should verify.',
+  onboarding_guide: 'Generate a comprehensive developer onboarding plan for a new Full Stack Engineer. Provide: 30-Minute Quick Understanding, 1-Day Deep Dive Plan, 1-Week Competency Plan, 30-Day Mastery Plan. Identify Critical Modules, Learning Path, Core Systems, and High Value areas to focus on.',
+  api_documentation: 'Generate comprehensive API documentation for all endpoints in this repository. For each endpoint provide: Path, Method, Purpose, Request Schema, Response Schema, Authentication, Error Codes, Example Usage, and Business Context. Format as structured documentation.',
+  dependency_graph: 'Analyze all module and service dependencies. Generate a dependency map showing: External Libraries, Internal Module Coupling, Circular Dependencies, High-Fan-Out Modules, Critical Path Dependencies. Create a Mermaid dependency graph. Identify risky or outdated dependencies.',
+  engineering_report: 'Generate an Engineering Manager Report. Include: Executive Summary, Repository Health Assessment, Technical Debt Report, Risk Assessment, Ownership Insights, Dependency Risks, Productivity Hotspots, Refactoring Opportunities. Provide both Technical View and Business View.',
+  tech_debt_scan: 'Identify all technical debt in this repository. Categorize by: Type (Design Debt, Code Debt, Test Debt, Documentation Debt, Infrastructure Debt), Severity (Critical/High/Medium/Low), Estimated Effort to Fix, Business Impact. Generate a prioritized remediation roadmap.',
+  digital_twin: 'Build a Repository Digital Twin model that combines Repository Chat, Architecture Intelligence, Knowledge Graph reasoning, Business Flow Discovery, Code Validation, Live Visualization, and Conversation Export. Map all: Services, Modules, APIs, Databases, External Integrations, and Event Flows. Include one valid Mermaid `flowchart TD` diagram with confidence level and evidence references.',
+};
+
+const INTELLIGENCE_LABELS: Record<string, string> = {
+  architecture_map: 'Run Architecture Map',
+  security_review: 'Run Security Review',
+  business_flows: 'Run Business Flows',
+  code_quality: 'Run Code Quality',
+  impact_analysis: 'Run Impact Analysis',
+  test_intelligence: 'Run Test Intelligence',
+  onboarding_guide: 'Run Onboarding Guide',
+  api_documentation: 'Run API Documentation',
+  dependency_graph: 'Run Dependency Graph',
+  engineering_report: 'Run Engineering Report',
+  tech_debt_scan: 'Run Tech Debt Scan',
+  digital_twin: 'Run Digital Twin',
+};
 
 // ── Inline code tag with optional hover "See graph" popover ───────────────
 
@@ -373,12 +405,25 @@ function renderInline(text: string, graphKeys?: Set<string>, onOpenGraph?: (s: s
   });
 }
 
-export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false, graphKeys, onOpenGraph }: MessageBubbleProps) {
+export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false, graphKeys, onOpenGraph, onSuggestion, previousUserQuery }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState<'up' | 'down' | null>(null);
   const isUser = message.role === 'user';
 
   const intelParsed = !isUser ? parseIntelligenceSections(message.content) : null;
+
+  // Parse suggested action early exit if message content is JSON
+  let suggestedAction: { suggested_action: string; message: string } | null = null;
+  if (!isUser && message.content.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(message.content.trim());
+      if (parsed && typeof parsed === 'object' && typeof parsed.suggested_action === 'string') {
+        suggestedAction = parsed;
+      }
+    } catch {
+      // Ignored: not a valid action suggestion JSON
+    }
+  }
 
   async function handleCopy() {
     try {
@@ -439,6 +484,36 @@ export default function MessageBubble({ message, onInspect, isInspected, index, 
                 {intelParsed.sections.map((s) => (
                   <IntelSectionBlock key={s.def.key} def={s.def} content={s.content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
                 ))}
+              </div>
+            ) : suggestedAction ? (
+              /* Suggested Action JSON */
+              <div className="text-foreground">
+                <SimpleMarkdown content={suggestedAction.message} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
+                {onSuggestion && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const actionKey = suggestedAction!.suggested_action;
+                        const actionLabel = INTELLIGENCE_LABELS[actionKey] || 'Analysis';
+                        const existingInstructions = INTELLIGENCE_PROMPTS[actionKey] || suggestedAction!.message;
+                        const shortLabel = INTELLIGENCE_LABELS[actionKey] || 'Run Action';
+                        
+                        let composedPrompt = existingInstructions;
+                        if (previousUserQuery) {
+                          composedPrompt = `The user specifically asked: '${previousUserQuery}' As part of this ${actionLabel} analysis, first explicitly identify which SINGLE file or component is the most relevant to their question, with your reasoning, then provide: ${existingInstructions}`;
+                        }
+                        
+                        onSuggestion(composedPrompt, shortLabel, true);
+                      }}
+                      disabled={actionsDisabled}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-brand/30 bg-background/50 px-3 text-xs font-semibold text-brand transition-all cursor-pointer hover:bg-brand/5 hover:border-brand/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <GitBranch size={13} />
+                      {INTELLIGENCE_LABELS[suggestedAction.suggested_action] || 'Run Action'}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               /* Regular markdown content */

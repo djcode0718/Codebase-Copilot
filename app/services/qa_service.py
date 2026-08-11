@@ -230,6 +230,7 @@ def handle_user_query(
     chat_engine=None,
     memory: Optional[ChatMemoryBuffer] = None,
     last_mode: Optional[QueryMode] = None,
+    is_cta_followup: bool = False,
 ) -> Tuple[str, object, ChatMemoryBuffer, QueryMode]:
     """
     Main query entrypoint.
@@ -253,6 +254,41 @@ def handle_user_query(
     # ── Memory ─────────────────────────────────────────────────────────────
     if memory is None:
         memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
+
+    if not is_cta_followup:
+        # ── Check 1: Excluded Folder Check ─────────────────────────────────────
+        from app.retrieval.query_router import detect_excluded_folder
+        excluded_folder = detect_excluded_folder(query)
+        if excluded_folder:
+            logger.info(f"Early exit: Excluded folder '{excluded_folder}' referenced")
+            from llama_index.core.base.llms.types import ChatMessage
+            err_msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
+            memory.put(ChatMessage(role="user", content=query))
+            memory.put(ChatMessage(role="assistant", content=err_msg))
+            return err_msg, chat_engine, memory, QueryMode.CODE_LOOKUP
+
+        # ── Check 2: Aggregation Check ──────────────────────────────────────────
+        from app.retrieval.query_router import detect_aggregation
+        if detect_aggregation(query):
+            logger.info("Early exit: Aggregation query detected")
+            from app.services.repo_stats_service import handle_aggregation_query
+            from llama_index.core.base.llms.types import ChatMessage
+            response_str = handle_aggregation_query(query, index_name)
+            memory.put(ChatMessage(role="user", content=query))
+            memory.put(ChatMessage(role="assistant", content=response_str))
+            return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
+
+        # ── Check 3: Superlative / Action Suggestion Check ──────────────────────
+        from app.retrieval.query_router import check_superlative_intent
+        superlative_suggest = check_superlative_intent(query)
+        if superlative_suggest:
+            logger.info(f"Early exit: Superlative query matched action '{superlative_suggest['suggested_action']}'")
+            import json
+            from llama_index.core.base.llms.types import ChatMessage
+            response_str = json.dumps(superlative_suggest)
+            memory.put(ChatMessage(role="user", content=query))
+            memory.put(ChatMessage(role="assistant", content=response_str))
+            return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
 
     # ── Route query (first check: RELATIONSHIP check on raw query) ─────────
     from app.retrieval.query_router import _is_relationship_query
@@ -345,6 +381,17 @@ def handle_user_query(
             raw_nodes = retriever.retrieve(condensed_query)
             reranked_nodes = rerank_with_colbert(resolved_query, raw_nodes, top_k=TOP_K_RERANK)
 
+            # ── Low Confidence Check (ColBERT) ──────────────────────────────────
+            top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
+            from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
+            if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
+                logger.info(f"Low confidence (ColBERT): top_score {top_score:.3f} < {LOW_CONFIDENCE_SIMILARITY_THRESHOLD}")
+                from llama_index.core.base.llms.types import ChatMessage
+                clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
+                memory.put(ChatMessage(role="user", content=query))
+                memory.put(ChatMessage(role="assistant", content=clarification))
+                return clarification, chat_engine, memory, query_mode
+
             # Build response using reranked context
             from llama_index.core.response_synthesizers import get_response_synthesizer
             from llama_index.core import QueryBundle
@@ -363,21 +410,80 @@ def handle_user_query(
             response = Settings.llm.complete(full_prompt)
             response_str = str(response).strip()
 
+            # Refusal check and fallback retry
+            refusal_indicators = [
+                "i cannot", "i'm sorry", "i am sorry", "as an ai", 
+                "i am not able", "i cannot fulfill", "unable to comply",
+                "cannot fulfill this request"
+            ]
+            if any(ind in response_str.lower() for ind in refusal_indicators):
+                logger.warning("Safety refusal detected in ColBERT Q&A! Retrying with fallback reworded prompt...")
+                import re
+                orig_match = re.search(r"The user specifically asked: '([^']+)'", full_prompt)
+                original_question = orig_match.group(1) if orig_match else "the requested review"
+                fallback_prompt = (
+                    f"The user asked: '{original_question}'. "
+                    "Please conduct a general best-practices code review of the repository. "
+                    "Focus on safe programming structures, input verification, modular design, "
+                    "and general code architecture. First explicitly name the most relevant file(s) "
+                    "with your reasons, then list standard architectural recommendations."
+                )
+                response = Settings.llm.complete(fallback_prompt)
+                response_str = str(response).strip()
+
             # Update memory manually (storing the ORIGINAL user question)
             from llama_index.core.base.llms.types import ChatMessage
             memory.put(ChatMessage(role="user", content=query))
             memory.put(ChatMessage(role="assistant", content=response_str))
 
-            logger.info(f"ColBERT reranked response generated")
             return response_str, chat_engine, memory, query_mode
-
         except Exception as e:
             logger.warning(f"ColBERT pipeline failed: {e} — falling back to chat engine")
-    # ── END COLBERT ON ───────────────────────────────────────────────────
+
+    # ── Low Confidence Check (Standard) ─────────────────────────────────────
+    try:
+        retriever = chat_engine._retriever
+        raw_nodes = retriever.retrieve(resolved_query)
+        top_score = max((float(n.score or 0.0) for n in raw_nodes), default=0.0)
+        from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
+        if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
+            logger.info(f"Low confidence (RAG): top_score {top_score:.3f} < {LOW_CONFIDENCE_SIMILARITY_THRESHOLD}")
+            from llama_index.core.base.llms.types import ChatMessage
+            clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
+            memory.put(ChatMessage(role="user", content=query))
+            memory.put(ChatMessage(role="assistant", content=clarification))
+            return clarification, chat_engine, memory, query_mode
+    except Exception as e:
+        logger.warning(f"Failed to check low confidence threshold: {e}")
 
     # Standard path (ColBERT disabled or failed)
     start = time.time()
     response = chat_engine.chat(resolved_query)
-    logger.info(f"Response in {time.time() - start:.2f}s")
+    response_str = str(response).strip()
+    refusal_indicators = [
+        "i cannot", "i'm sorry", "i am sorry", "as an ai", 
+        "i am not able", "i cannot fulfill", "unable to comply",
+        "cannot fulfill this request"
+    ]
+    if any(ind in response_str.lower() for ind in refusal_indicators):
+        logger.warning("Safety refusal detected in standard Q&A! Retrying with fallback reworded prompt...")
+        import re
+        orig_match = re.search(r"The user specifically asked: '([^']+)'", resolved_query)
+        original_question = orig_match.group(1) if orig_match else "the requested review"
+        fallback_prompt = (
+            f"The user asked: '{original_question}'. "
+            "Please conduct a general best-practices code review of the repository. "
+            "Focus on safe programming structures, input verification, modular design, "
+            "and general code architecture. First explicitly name the most relevant file(s) "
+            "with your reasons, then list standard architectural recommendations."
+        )
+        response = Settings.llm.complete(fallback_prompt)
+        response_str = str(response).strip()
+        
+        # We manually overwrite the assistant message content in memory
+        from llama_index.core.base.llms.types import ChatMessage
+        memory.put(ChatMessage(role="user", content=query))
+        memory.put(ChatMessage(role="assistant", content=response_str))
+        return response_str, chat_engine, memory, query_mode
 
-    return str(response), chat_engine, memory, query_mode
+    return response_str, chat_engine, memory, query_mode
