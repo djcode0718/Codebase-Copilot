@@ -125,7 +125,7 @@ from app.ingestion.repo_loader import load_repository
 from app.ingestion.file_filter import filter_files
 from app.parsing.code_parser import load_documents, parse_documents
 from app.indexing.context_builder import build_codebase_context
-from app.indexing.index_builder import build_vector_index, build_summary_index
+from app.indexing.index_builder import build_vector_index
 from app.llm.llm_client import configure_llamaindex_settings
 from app.utils.logger import get_logger
 
@@ -135,7 +135,7 @@ logger = get_logger(__name__)
 def process_repository(source: str) -> Optional[str]:
     """
     Full indexing pipeline. Returns index_name on success, None on failure.
-    Safe to re-run — ChromaDB, summary index, and context doc are all
+    Safe to re-run — ChromaDB and context doc are all
     cached to disk and skipped if they already exist.
     """
     try:
@@ -149,6 +149,22 @@ def process_repository(source: str) -> Optional[str]:
         # ── 1. Clone / validate ────────────────────────────────────────────────
         repo_path = load_repository(source)
         index_name = os.path.basename(os.path.normpath(repo_path))
+
+        # Check if manifest exists and run incremental indexing
+        from app.indexing.incremental import run_incremental_indexing
+        try:
+            if run_incremental_indexing(repo_path, index_name):
+                logger.info(f"Incremental update succeeded for {index_name}. Skipping full indexing steps.")
+                from app.parsing.relationship_graph import RelationshipGraphBuilder
+                import json
+                graph_builder = RelationshipGraphBuilder(repo_path)
+                graph = graph_builder.build_graph(filter_files(repo_path))
+                graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
+                with open(graph_path, "w", encoding="utf-8") as gf:
+                    json.dump(graph, gf, indent=2)
+                return index_name
+        except Exception as ie:
+            logger.warning(f"Incremental indexing failed/skipped: {ie}; falling back to full indexing.")
 
         # ── 2. Filter files ────────────────────────────────────────────────────
         valid_files = filter_files(repo_path)
@@ -186,8 +202,19 @@ def process_repository(source: str) -> Optional[str]:
         # ── 7. VectorStoreIndex (ChromaDB + nomic-embed-text) ──────────────────
         build_vector_index(nodes, index_name)
 
-        # ── 8. DocumentSummaryIndex ────────────────────────────────────────────
-        build_summary_index(documents, index_name)
+        # Build initial manifest
+        from app.indexing.incremental import build_initial_manifest
+        try:
+            build_initial_manifest(nodes, repo_path, index_name)
+        except Exception as me:
+            logger.warning(f"Failed to build initial manifest: {me}")
+
+        # ── 8. Git History Indexing ───────────────────────────────────────────
+        try:
+            from app.ingestion.git_history import build_and_save_full_git_history
+            build_and_save_full_git_history(valid_files, repo_path, index_name)
+        except Exception as ge:
+            logger.warning(f"Failed to build git history: {ge}", exc_info=True)
 
         # ── 9. Call/Symbol Relationship Graph ──────────────────────────────────
         try:

@@ -73,13 +73,13 @@ TOP_K_RERANK  = 5    # final chunks passed to LLM prompt
 CHUNK_LINES        = 50    # lines per chunk for CodeSplitter
 CHUNK_MAX_CHARS    = 1500  # hard char cap per chunk
 
-# ─── ColBERT ──────────────────────────────────────────────────────────────────
-# Set to False to disable ColBERT reranking entirely.
+# ─── Reranker ─────────────────────────────────────────────────────────────────
+# Set to False to disable CrossEncoder reranking entirely.
 # When False: pipeline uses RRF fusion scores from QueryFusionRetriever.
-# When True:  ColBERT reranks the top TOP_K_CHUNKS results (~2-3s extra/query).
+# When True:  CrossEncoder reranks the top TOP_K_CHUNKS results (~2-3s extra/query).
 #
-# TO DISABLE COLBERT: set USE_COLBERT=false in .env
-USE_COLBERT = os.getenv("USE_COLBERT", "true").lower() == "true"
+# TO DISABLE RERANKER: set USE_RERANKER=false in .env
+USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
 
 # ─── LLM Fallback Configuration ──────────────────────────────────────────────
 # Maximum retry-after delay (in seconds) that we will wait for before falling back to the next model.
@@ -116,3 +116,10 @@ GUEST_READ_ONLY_MODE = os.getenv("GUEST_READ_ONLY_MODE", "false").lower() == "tr
 LLAMAINDEX_PREWARM_ON_STARTUP = os.getenv("LLAMAINDEX_PREWARM_ON_STARTUP", "false").lower() == "true"
 # Optional delay before background prewarm task starts.
 LLAMAINDEX_PREWARM_DELAY_SECONDS = float(os.getenv("LLAMAINDEX_PREWARM_DELAY_SECONDS", "0"))
+
+# -- Git history controls -----------------------------------------------------
+INDEX_GIT_HISTORY = os.getenv("INDEX_GIT_HISTORY", "true").lower() == "true"
+GIT_HISTORY_MAX_COMMITS_PER_FILE = int(os.getenv("GIT_HISTORY_MAX_COMMITS_PER_FILE", "50"))
+
+# -- Citation validation controls ---------------------------------------------
+CITATION_VALIDATION_MODE = os.getenv("CITATION_VALIDATION_MODE", "log").lower()

@@ -22,28 +22,23 @@ logger = logging.getLogger(__name__)
 
 _STREAM_BRIDGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm-sync-stream")
 
-_last_llm_usage_lock = threading.Lock()
-_last_llm_usage: dict = {"provider": None, "model": None}
+import contextvars
+
+_last_llm_usage_var: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "last_llm_usage", default={"provider": None, "model": None}
+)
 
 
 def _record_llm_usage(provider: str, model_name: str) -> None:
-    with _last_llm_usage_lock:
-        _last_llm_usage["provider"] = provider
-        _last_llm_usage["model"] = model_name
+    _last_llm_usage_var.set({"provider": provider, "model": model_name})
 
 
 def get_last_llm_usage() -> dict:
-    with _last_llm_usage_lock:
-        return {
-            "provider": _last_llm_usage.get("provider"),
-            "model": _last_llm_usage.get("model"),
-        }
+    return _last_llm_usage_var.get()
 
 
 def reset_last_llm_usage() -> None:
-    with _last_llm_usage_lock:
-        _last_llm_usage["provider"] = None
-        _last_llm_usage["model"] = None
+    _last_llm_usage_var.set({"provider": None, "model": None})
 
 
 def _sleep_safe(seconds: float) -> None:

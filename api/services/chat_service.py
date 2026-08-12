@@ -25,7 +25,7 @@ from llama_index.core.memory import ChatMemoryBuffer
 from app.llm.llm_client import configure_llamaindex_settings
 from app.retrieval.query_router import QueryMode, is_general_knowledge_or_preference_query
 from app.config import (
-    USE_COLBERT,
+    USE_RERANKER,
     TOP_K_CHUNKS,
     TOP_K_RERANK,
     LLM_PROVIDER,
@@ -122,20 +122,20 @@ def _looks_repository_intent(query: str) -> bool:
     return any(marker in text for marker in ("/", "\\", "::", "()", "{", "}"))
 
 
-def _should_force_no_match(query: str, top_score: float, use_colbert: bool = True) -> bool:
+def _should_force_no_match(query: str, top_score: float, use_reranker: bool = True) -> bool:
     """Short-circuit clearly out-of-scope prompts to the strict no-match response.
 
     Score-scale contract:
-    - When use_colbert=True:  top_score is CrossEncoder sigmoid-normalized → (0, 1).
+    - When use_reranker=True:  top_score is CrossEncoder sigmoid-normalized → (0, 1).
         Relevant queries score ≥ 0.60; out-of-scope queries cluster at ≈ 0.50.
         Threshold 0.60 confirmed by 7-query calibration (4 answerable + 3 OOS).
-    - When use_colbert=False: top_score is an RRF score in [0, ~0.10].
+    - When use_reranker=False: top_score is an RRF score in [0, ~0.10].
         RRF scores are never meaningful as an out-of-scope signal (max ≈ 0.033
         even for on-topic queries). Skip the score check entirely.
     """
     if _looks_repository_intent(query):
         return False
-    if not use_colbert:
+    if not use_reranker:
         # RRF scores max at ~0.03 regardless of relevance — score threshold is
         # meaningless here; rely solely on _looks_repository_intent.
         return False
@@ -162,12 +162,12 @@ async def _retrieve_nodes(retriever, resolved_query: str):
     return await asyncio.get_event_loop().run_in_executor(None, retriever.retrieve, resolved_query)
 
 
-async def _rerank_nodes(resolved_query: str, raw_nodes):
-    if USE_COLBERT and raw_nodes:
-        from app.retrieval.reranker import rerank_with_colbert
+async def _rerank_nodes(resolved_query: str, raw_nodes, index_name: Optional[str] = None):
+    if USE_RERANKER and raw_nodes:
+        from app.retrieval.reranker import rerank_with_cross_encoder
 
         return await asyncio.get_event_loop().run_in_executor(
-            None, rerank_with_colbert, resolved_query, raw_nodes, TOP_K_RERANK
+            None, rerank_with_cross_encoder, resolved_query, raw_nodes, TOP_K_RERANK, index_name
         )
 
     return sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
@@ -480,11 +480,11 @@ def _get_or_create_memory(repo_id: str, chat_id: str, persisted_history: Optiona
     return memory
 
 
-async def _retrieve_ranked_nodes(query_mode, vector_index, bm25_retriever, resolved_query: str):
+async def _retrieve_ranked_nodes(query_mode, vector_index, bm25_retriever, resolved_query: str, index_name: Optional[str] = None):
     t_ret_start = time.time()
     retriever = _build_retriever(query_mode, vector_index, bm25_retriever)
     raw_nodes = await _retrieve_nodes(retriever, resolved_query)
-    reranked_nodes = await _rerank_nodes(resolved_query, raw_nodes)
+    reranked_nodes = await _rerank_nodes(resolved_query, raw_nodes, index_name)
     t_retrieval_ms = int((time.time() - t_ret_start) * 1000)
     return reranked_nodes, t_retrieval_ms
 
@@ -546,7 +546,7 @@ async def _prepare_stream_prompt(
 
         # ── Check 3: Superlative / Action Suggestion Check ──────────────────────
         from app.retrieval.query_router import check_superlative_intent
-        superlative_suggest = check_superlative_intent(query)
+        superlative_suggest = check_superlative_intent(query, index_name=index_name)
         if superlative_suggest:
             logger.info(f"Stream early exit: Superlative query matched action '{superlative_suggest['suggested_action']}'")
             import json
@@ -565,12 +565,27 @@ async def _prepare_stream_prompt(
     resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
 
     if query_mode == QueryMode.RELATIONSHIP:
-        from app.retrieval.query_router import extract_relationship_target
+        from app.retrieval.query_router import extract_relationship_target, is_real_identifier
         from app.llm.prompts import RELATIONSHIP_PROMPT
         import os
 
         target = extract_relationship_target(resolved_query)
         logger.info(f"Stage -1: RELATIONSHIP query detected in stream. Target symbol: '{target}'")
+
+        if not is_real_identifier(target, index_name):
+            logger.info(f"Stage -1: RELATIONSHIP target '{target}' is not a real identifier. Forcing clarification.")
+            clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
+            return {
+                "memory": memory,
+                "resolved_query": resolved_query,
+                "query_mode": query_mode,
+                "reranked_nodes": [],
+                "retrieved_files": [],
+                "t_retrieval_ms": 0,
+                "full_prompt": "",
+                "early_response": clarification,
+            }
+
         refs = []
         if target:
             from app.config import INDEX_DIR
@@ -618,6 +633,7 @@ async def _prepare_stream_prompt(
         vector_index,
         bm25_retriever,
         resolved_query,
+        index_name,
     )
     retrieved_files = _build_retrieved_files(reranked_nodes)
     context_str = _build_context_str(reranked_nodes)
@@ -810,7 +826,7 @@ async def stream_chat_response(
 
         # ── Low Confidence Check (Streaming) ──────────────────────────────────
         from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
-        if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
+        if query_mode != QueryMode.RELATIONSHIP and top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
             clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
             yield to_sse_data({'type': 'token', 'content': clarification})
             t_total_ms = int((time.time() - t_start) * 1000)
@@ -834,7 +850,7 @@ async def stream_chat_response(
         # since the retrieved content is code, not natural language. Silencing those
         # queries defeats the purpose of ARCHITECTURAL mode.
         # RELATIONSHIP mode is handled separately above (returns before this point).
-        if query_mode == QueryMode.CODE_LOOKUP and _should_force_no_match(query, top_score, use_colbert=USE_COLBERT):
+        if query_mode == QueryMode.CODE_LOOKUP and _should_force_no_match(query, top_score, use_reranker=USE_RERANKER):
             full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
             for evt in _build_no_match_events(
                 t_start=t_start,

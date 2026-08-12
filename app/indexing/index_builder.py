@@ -26,7 +26,6 @@ from pathlib import Path
 import chromadb
 from llama_index.core import (
     VectorStoreIndex,
-    DocumentSummaryIndex,
     StorageContext,
     load_index_from_storage,
     Settings,
@@ -41,8 +40,6 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-print("ACTIVE EMBED MODEL:", Settings.embed_model)
-print("EMBED MODEL TYPE:", type(Settings.embed_model))
 
 def _get_chroma_collection(index_name: str):
     """Return (chroma_client, collection) for a given index name."""
@@ -84,44 +81,6 @@ def build_vector_index(nodes: List[BaseNode], index_name: str) -> VectorStoreInd
 
     logger.info(f"VectorStoreIndex built in {time.time() - start:.2f}s")
     return index
-
-
-def build_summary_index(documents, index_name: str) -> DocumentSummaryIndex:
-    """
-    Build a DocumentSummaryIndex — LLM writes a summary for each file.
-    Used for coarse file-level retrieval before dense chunk search.
-    Replaces the old file_map_builder + TF-IDF file summaries.
-
-    Summaries are persisted to disk and reused on subsequent runs.
-    """
-    summary_path = os.path.join(INDEX_DIR, index_name, "summary")
-    os.makedirs(summary_path, exist_ok=True)
-
-    # Reuse persisted summaries if they exist
-    if os.path.exists(os.path.join(summary_path, "docstore.json")):
-        logger.info("Loading existing DocumentSummaryIndex from disk...")
-        storage_context = StorageContext.from_defaults(persist_dir=summary_path)
-        return load_index_from_storage(storage_context)
-
-    logger.info(f"Building DocumentSummaryIndex for {len(documents)} files...")
-    start = time.time()
-
-    storage_context = StorageContext.from_defaults()
-
-    summary_index = DocumentSummaryIndex.from_documents(
-        documents,
-        storage_context=storage_context,
-        show_progress=True,
-        # Response synthesizer prompt is kept brief to stay fast on local LLM
-        summary_query=(
-            "Summarize what this code file does in 2-3 sentences. "
-            "Focus on its purpose and key functions, not implementation details."
-        ),
-    )
-
-    summary_index.storage_context.persist(persist_dir=summary_path)
-    logger.info(f"DocumentSummaryIndex built and saved in {time.time() - start:.2f}s")
-    return summary_index
 
 
 def build_bm25_retriever(nodes: List[BaseNode], top_k: int = TOP_K_CHUNKS) -> BM25Retriever:

@@ -42,7 +42,7 @@ def main():
             continue
 
         print("Thinking...\n")
-        response, chat_engine, memory = handle_user_query(
+        response, chat_engine, memory, _ = handle_user_query(
             query=query,
             index_name=index_name,
             chat_engine=chat_engine,

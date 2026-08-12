@@ -194,8 +194,8 @@ def retrieve_with_timing(query: str, index_name: str):
     so we can measure each component's latency independently.
     Returns (nodes, retrieved_files, latency_retrieval, latency_rerank)
     """
-    from app.config import USE_COLBERT, TOP_K_CHUNKS, TOP_K_RERANK
-    from app.retrieval.reranker import rerank_with_colbert
+    from app.config import USE_RERANKER, TOP_K_CHUNKS, TOP_K_RERANK
+    from app.retrieval.reranker import rerank_with_cross_encoder
 
     vector_index, bm25_retriever = _get_indexes(index_name)
 
@@ -222,8 +222,8 @@ def retrieve_with_timing(query: str, index_name: str):
 
     # ── Reranking timing ──────────────────────────────────────────────────
     t1 = time.time()
-    if USE_COLBERT:
-        final_nodes = rerank_with_colbert(query, raw_nodes, top_k=TOP_K_RERANK)
+    if USE_RERANKER:
+        final_nodes = rerank_with_cross_encoder(query, raw_nodes, top_k=TOP_K_RERANK, index_name=index_name)
     else:
         final_nodes = sorted(raw_nodes, key=lambda n: n.score or 0, reverse=True)[:TOP_K_RERANK]
     latency_rerank = time.time() - t1
@@ -352,7 +352,7 @@ def evaluate_single(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_evaluation(index_name: str) -> EvalSummary:
-    from app.config import USE_COLBERT
+    from app.config import USE_RERANKER
 
     index_name = (index_name or "").strip()
     if not index_name:
@@ -363,7 +363,7 @@ def run_evaluation(index_name: str) -> EvalSummary:
     print("━" * 60)
     print(f"  Index:   {index_name}")
     print(f"  Queries: {len(EVAL_DATASET)}")
-    print(f"  ColBERT: {'ON' if USE_COLBERT else 'OFF'}")
+    print(f"  Reranker: {'ON' if USE_RERANKER else 'OFF'}")
     print("━" * 60)
 
     # ── LLM-as-judge evaluators ───────────────────────────────────────────
@@ -417,7 +417,7 @@ def run_evaluation(index_name: str) -> EvalSummary:
         avg_latency_retrieval = avg_retrieval,
         avg_latency_rerank    = avg_rerank,
         avg_latency_llm       = avg_llm,
-        colbert_enabled       = USE_COLBERT,
+        colbert_enabled       = USE_RERANKER,
         results               = [asdict(r) for r in results],
     )
 
@@ -459,7 +459,7 @@ def print_report(summary: EvalSummary):
     print(f"  Retrieval  {summary.avg_latency_retrieval:.2f}s  ({100*summary.avg_latency_retrieval/summary.avg_latency_total:.0f}%)")
     print(f"  Reranking  {summary.avg_latency_rerank:.2f}s  ({100*summary.avg_latency_rerank/summary.avg_latency_total:.0f}%)")
     print(f"  LLM        {summary.avg_latency_llm:.2f}s  ({100*summary.avg_latency_llm/summary.avg_latency_total:.0f}%)")
-    print(f"  ColBERT:   {'ON' if summary.colbert_enabled else 'OFF'}")
+    print(f"  Reranker:  {'ON' if summary.colbert_enabled else 'OFF'}")
 
     print(f"\n  DIAGNOSIS")
     if summary.hit_rate < 0.6:
@@ -468,7 +468,7 @@ def print_report(summary: EvalSummary):
         print("     Try: check that expected_files paths match actual paths")
     if summary.mrr < 0.4:
         print("  ❌ MRR low → right chunks retrieved but ranked poorly.")
-        print("     Try: enable ColBERT reranking (USE_COLBERT=True)")
+        print("     Try: enable CrossEncoder reranking (USE_RERANKER=True)")
     if summary.avg_faithfulness < 0.6:
         print("  ❌ Faithfulness low → LLM may be hallucinating.")
         print("     Try: tighten CODE_LOOKUP_PROMPT in prompts.py")
@@ -481,8 +481,8 @@ def print_report(summary: EvalSummary):
         print("     Try: add more keywords to _ARCHITECTURAL_KEYWORDS / _CODE_KEYWORDS")
         print("     in query_router.py for the query types that are misrouted")
     if summary.avg_latency_rerank > 5.0:
-        print("  ⚠️  ColBERT reranking slow (>5s avg).")
-        print("     Consider: USE_COLBERT=False for faster responses")
+        print("  ⚠️  CrossEncoder reranking slow (>5s avg).")
+        print("     Consider: USE_RERANKER=False for faster responses")
 
     if all([
         summary.hit_rate >= 0.7,

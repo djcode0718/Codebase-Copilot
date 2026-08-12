@@ -753,7 +753,7 @@ LLM_PROVIDER=ollama
 OLLAMA_LLM_MODEL=llama3.2:3b
 OLLAMA_EMBED_MODEL=nomic-embed-text
 
-USE_COLBERT=true
+USE_RERANKER=true
 USE_FAST_LLM=false
 GROQ_FAST_MODEL=llama-3.3-70b-versatile
 

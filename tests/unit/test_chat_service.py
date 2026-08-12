@@ -52,6 +52,7 @@ import enum as _enum
 class _QueryMode(_enum.Enum):
     CODE_LOOKUP  = "code_lookup"
     ARCHITECTURAL = "architectural"
+    RELATIONSHIP = "relationship"
 
 sys.modules["app.retrieval.query_router"].QueryMode = _QueryMode
 

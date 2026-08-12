@@ -55,236 +55,242 @@ class RelationshipGraphBuilder:
         return serialized_graph
 
     def _parse_python_definitions(self, fp: str, rel: str):
+        import tree_sitter_language_pack as tslp
         try:
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-        except Exception:
+            with open(fp, "rb") as f:
+                content = f.read()
+            parser = tslp.get_parser("python")
+            tree = parser.parse(content)
+        except Exception as e:
+            logger.warning(f"Tree-sitter Python parse failed for {fp}: {e}")
             return
 
-        scope_stack = []  # items: (indent_level, name)
-        in_signature = False
-        for line in lines:
-            stripped = line.lstrip()
-            if not stripped or stripped.startswith("#"):
-                continue
+        def walk(node, current_scope: list):
+            is_def = False
+            name = ""
+            if node.type in ("class_definition", "function_definition"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8", errors="ignore")
+                    is_def = True
+            
+            elif node.type == "assignment" and len(current_scope) == 0:
+                left_node = node.child_by_field_name("left")
+                if not left_node and node.children:
+                    left_node = node.children[0]
+                if left_node:
+                    def find_identifiers(n):
+                        if n.type == "identifier":
+                            return [n.text.decode("utf-8", errors="ignore")]
+                        ids = []
+                        for c in n.children:
+                            ids.extend(find_identifiers(c))
+                        return ids
+                    for name in find_identifiers(left_node):
+                        if name and name.isupper():
+                            self._add_definition(name, f"{rel}:{name}")
 
-            indent = len(line) - len(stripped)
+            if is_def and name:
+                new_scope = current_scope + [name]
+                full_scope = ".".join(new_scope)
+                self._add_definition(name, f"{rel}:{full_scope}")
+                self._add_definition(rel, f"{rel}:{full_scope}")
+                for child in node.children:
+                    walk(child, new_scope)
+                return
 
-            # Pop scope stack if indentation is less than or equal to top of stack,
-            # but only if we are not currently parsing a multiline signature.
-            if not in_signature:
-                while scope_stack and scope_stack[-1][0] >= indent:
-                    scope_stack.pop()
-            else:
-                # We are inside a signature, check if it terminates on this line
-                stripped_no_comment = re.sub(r"#.*$", "", line).strip()
-                if stripped_no_comment.endswith(":"):
-                    in_signature = False
+            if node.type == "import_statement":
+                for child in node.children:
+                    if child.type == "dotted_name":
+                        imported_module = child.text.decode("utf-8", errors="ignore")
+                        self._add_reference(imported_module, rel)
+            elif node.type == "import_from_statement":
+                for child in node.children:
+                    if child.type in ("dotted_name", "relative_import"):
+                        imported_module = child.text.decode("utf-8", errors="ignore")
+                        self._add_reference(imported_module, rel)
+                        break
 
-            # Match class or function definition
-            class_match = re.match(r"class\s+([a-zA-Z0-9_]+)", stripped)
-            def_match = re.match(r"def\s+([a-zA-Z0-9_]+)", stripped)
+            for child in node.children:
+                walk(child, current_scope)
 
-            if class_match:
-                name = class_match.group(1)
-                scope_stack.append((indent, name))
-                full_scope_name = ".".join([s[1] for s in scope_stack])
-                self._add_definition(name, f"{rel}:{full_scope_name}")
-                # File references itself
-                self._add_definition(rel, f"{rel}:{full_scope_name}")
-
-                # If this is a multiline signature, mark in_signature
-                stripped_no_comment = re.sub(r"#.*$", "", line).strip()
-                if not stripped_no_comment.endswith(":"):
-                    in_signature = True
-            elif def_match:
-                name = def_match.group(1)
-                scope_stack.append((indent, name))
-                full_scope_name = ".".join([s[1] for s in scope_stack])
-                self._add_definition(name, f"{rel}:{full_scope_name}")
-                # File references itself
-                self._add_definition(rel, f"{rel}:{full_scope_name}")
-
-                # If this is a multiline signature, mark in_signature
-                stripped_no_comment = re.sub(r"#.*$", "", line).strip()
-                if not stripped_no_comment.endswith(":"):
-                    in_signature = True
-
-            # Also match imports
-            import_match = re.match(r"import\s+([a-zA-Z0-9_\.]+)", stripped)
-            from_import_match = re.match(r"from\s+([a-zA-Z0-9_\.]+)\s+import", stripped)
-            if import_match:
-                imported_module = import_match.group(1)
-                self._add_reference(imported_module, rel)
-            elif from_import_match:
-                imported_module = from_import_match.group(1)
-                self._add_reference(imported_module, rel)
+        walk(tree.root_node, [])
 
     def _trace_python_references(self, fp: str, rel: str):
+        import tree_sitter_language_pack as tslp
         try:
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-        except Exception:
+            with open(fp, "rb") as f:
+                content = f.read()
+            parser = tslp.get_parser("python")
+            tree = parser.parse(content)
+        except Exception as e:
+            logger.warning(f"Tree-sitter Python parse failed for reference tracing in {fp}: {e}")
             return
 
-        scope_stack = []
-        in_signature = False
-        for line in lines:
-            stripped = line.lstrip()
-            if not stripped or stripped.startswith("#"):
-                continue
+        def walk(node, current_scope: str):
+            is_def = False
+            name = ""
+            name_node = None
+            if node.type in ("class_definition", "function_definition"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8", errors="ignore")
+                    is_def = True
+            
+            if is_def and name:
+                new_scope = f"{current_scope}.{name}" if ":" in current_scope else f"{current_scope}:{name}"
+                for child in node.children:
+                    if child != name_node:
+                        walk(child, new_scope)
+                return
 
-            indent = len(line) - len(stripped)
-            if not in_signature:
-                while scope_stack and scope_stack[-1][0] >= indent:
-                    scope_stack.pop()
-            else:
-                # We are inside a signature, check if it terminates on this line
-                stripped_no_comment = re.sub(r"#.*$", "", line).strip()
-                if stripped_no_comment.endswith(":"):
-                    in_signature = False
-
-            # Determine current scope
-            current_scope = f"{rel}:" + ".".join([s[1] for s in scope_stack]) if scope_stack else rel
-
-            class_match = re.match(r"class\s+([a-zA-Z0-9_]+)", stripped)
-            def_match = re.match(r"def\s+([a-zA-Z0-9_]+)", stripped)
-            if class_match:
-                name = class_match.group(1)
-                scope_stack.append((indent, name))
-                stripped_no_comment = re.sub(r"#.*$", "", line).strip()
-                if not stripped_no_comment.endswith(":"):
-                    in_signature = True
-                continue
-            elif def_match:
-                name = def_match.group(1)
-                scope_stack.append((indent, name))
-                stripped_no_comment = re.sub(r"#.*$", "", line).strip()
-                if not stripped_no_comment.endswith(":"):
-                    in_signature = True
-                continue
-
-            # Find all potential symbol references (words)
-            words = re.findall(r"\b([a-zA-Z0-9_]+)\b", stripped)
-            for word in words:
-                # Reference tracking is scoped to symbols defined within this repository.
-                # Third-party/imported library symbols (e.g. LlamaIndex classes) are not tracked
-                # and will correctly return no references.
+            if node.type == "identifier":
+                word = node.text.decode("utf-8", errors="ignore")
                 if word in self.definitions:
-                    # Ignore referencing yourself
                     for def_loc in self.definitions[word]:
                         if def_loc != current_scope and not def_loc.startswith(current_scope + "."):
                             self._add_reference(word, current_scope)
+
+            for child in node.children:
+                walk(child, current_scope)
+
+        walk(tree.root_node, rel)
 
     def _parse_js_ts_definitions(self, fp: str, rel: str):
+        import tree_sitter_language_pack as tslp
         try:
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-        except Exception:
+            with open(fp, "rb") as f:
+                content = f.read()
+            ext = Path(fp).suffix.lower()
+            lang = "typescript" if ext in (".ts", ".tsx") else "javascript"
+            parser = tslp.get_parser(lang)
+            tree = parser.parse(content)
+        except Exception as e:
+            logger.warning(f"Tree-sitter JS/TS parse failed for {fp}: {e}")
             return
 
-        scope_stack = []  # items: (brace_depth, name)
-        brace_depth = 0
-        for line in lines:
-            brace_depth += line.count("{")
-            brace_depth -= line.count("}")
+        def walk(node, current_scope: list):
+            is_def = False
+            name = ""
+            if node.type in ("class_declaration", "function_declaration"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8", errors="ignore")
+                    is_def = True
+            elif node.type == "method_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8", errors="ignore")
+                    is_def = True
+            elif node.type == "variable_declarator":
+                val_node = node.child_by_field_name("value")
+                if val_node and val_node.type in ("arrow_function", "function_expression"):
+                    name_node = node.child_by_field_name("name")
+                    if name_node:
+                        name = name_node.text.decode("utf-8", errors="ignore")
+                        is_def = True
+                elif len(current_scope) == 0:
+                    name_node = node.child_by_field_name("name")
+                    if name_node:
+                        def find_js_identifiers(n):
+                            if n.type == "identifier":
+                                return [n.text.decode("utf-8", errors="ignore")]
+                            ids = []
+                            for c in n.children:
+                                ids.extend(find_js_identifiers(c))
+                            return ids
+                        for name in find_js_identifiers(name_node):
+                            if name and name.isupper():
+                                self._add_definition(name, f"{rel}:{name}")
 
-            while scope_stack and scope_stack[-1][0] > brace_depth:
-                scope_stack.pop()
+            if is_def and name:
+                new_scope = current_scope + [name]
+                full_scope = ".".join(new_scope)
+                self._add_definition(name, f"{rel}:{full_scope}")
+                self._add_definition(rel, f"{rel}:{full_scope}")
+                for child in node.children:
+                    walk(child, new_scope)
+                return
 
-            stripped = line.strip()
-            if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
-                continue
+            if node.type == "import_statement":
+                for child in node.children:
+                    if child.type == "string":
+                        import_path = child.text.decode("utf-8", errors="ignore").strip("'\"")
+                        self._add_reference(import_path, rel)
+                        break
+            elif node.type == "call_expression":
+                func_node = node.child_by_field_name("function")
+                if func_node and func_node.type == "identifier" and func_node.text == b"require":
+                    args_node = node.child_by_field_name("arguments")
+                    if args_node and args_node.children:
+                        for arg in args_node.children:
+                            if arg.type == "string":
+                                import_path = arg.text.decode("utf-8", errors="ignore").strip("'\"")
+                                self._add_reference(import_path, rel)
+                                break
 
-            # Match class or function definitions
-            class_match = re.search(r"\bclass\s+([a-zA-Z0-9_]+)", stripped)
-            func_match = re.search(r"\bfunction\s+([a-zA-Z0-9_]+)", stripped)
-            const_func_match = re.search(r"\bconst\s+([a-zA-Z0-9_]+)\s*=\s*(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>", stripped)
-            method_match = re.search(r"\b(?!class\b|function\b|if\b|for\b|while\b|switch\b|catch\b)(?:async\s+)?([a-zA-Z0-9_]+)\s*\([^)]*\)\s*\{", stripped)
+            for child in node.children:
+                walk(child, current_scope)
 
-            if class_match:
-                name = class_match.group(1)
-                scope_stack.append((brace_depth, name))
-                full_scope_name = ".".join([s[1] for s in scope_stack])
-                self._add_definition(name, f"{rel}:{full_scope_name}")
-                self._add_definition(rel, f"{rel}:{full_scope_name}")
-            elif func_match:
-                name = func_match.group(1)
-                scope_stack.append((brace_depth, name))
-                full_scope_name = ".".join([s[1] for s in scope_stack])
-                self._add_definition(name, f"{rel}:{full_scope_name}")
-                self._add_definition(rel, f"{rel}:{full_scope_name}")
-            elif const_func_match:
-                name = const_func_match.group(1)
-                scope_stack.append((brace_depth, name))
-                full_scope_name = ".".join([s[1] for s in scope_stack])
-                self._add_definition(name, f"{rel}:{full_scope_name}")
-                self._add_definition(rel, f"{rel}:{full_scope_name}")
-            elif method_match:
-                name = method_match.group(1)
-                scope_stack.append((brace_depth, name))
-                full_scope_name = ".".join([s[1] for s in scope_stack])
-                self._add_definition(name, f"{rel}:{full_scope_name}")
-                self._add_definition(rel, f"{rel}:{full_scope_name}")
-
-            # Match imports
-            import_match = re.search(r"\bimport\s+.*\s+from\s+['\"]([^'\"]+)['\"]", stripped)
-            require_match = re.search(r"\brequire\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", stripped)
-            if import_match:
-                imported = import_match.group(1)
-                self._add_reference(imported, rel)
-            elif require_match:
-                imported = require_match.group(1)
-                self._add_reference(imported, rel)
+        walk(tree.root_node, [])
 
     def _trace_js_ts_references(self, fp: str, rel: str):
+        import tree_sitter_language_pack as tslp
         try:
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-        except Exception:
+            with open(fp, "rb") as f:
+                content = f.read()
+            ext = Path(fp).suffix.lower()
+            lang = "typescript" if ext in (".ts", ".tsx") else "javascript"
+            parser = tslp.get_parser(lang)
+            tree = parser.parse(content)
+        except Exception as e:
+            logger.warning(f"Tree-sitter JS/TS parse failed for reference tracing in {fp}: {e}")
             return
 
-        scope_stack = []
-        brace_depth = 0
-        for line in lines:
-            brace_depth += line.count("{")
-            brace_depth -= line.count("}")
+        def walk(node, current_scope: str):
+            is_def = False
+            name = ""
+            name_node = None
+            if node.type in ("class_declaration", "function_declaration"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8", errors="ignore")
+                    is_def = True
+            elif node.type == "method_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8", errors="ignore")
+                    is_def = True
+            elif node.type == "variable_declarator":
+                val_node = node.child_by_field_name("value")
+                if val_node and val_node.type in ("arrow_function", "function_expression"):
+                    name_node = node.child_by_field_name("name")
+                    if name_node:
+                        name = name_node.text.decode("utf-8", errors="ignore")
+                        is_def = True
 
-            while scope_stack and scope_stack[-1][0] > brace_depth:
-                scope_stack.pop()
+            if is_def and name:
+                new_scope = f"{current_scope}.{name}" if ":" in current_scope else f"{current_scope}:{name}"
+                for child in node.children:
+                    if child != name_node:
+                        walk(child, new_scope)
+                return
 
-            current_scope = f"{rel}:" + ".".join([s[1] for s in scope_stack]) if scope_stack else rel
-
-            stripped = line.strip()
-            if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
-                continue
-
-            class_match = re.search(r"\bclass\s+([a-zA-Z0-9_]+)", stripped)
-            func_match = re.search(r"\bfunction\s+([a-zA-Z0-9_]+)", stripped)
-            const_func_match = re.search(r"\bconst\s+([a-zA-Z0-9_]+)\s*=\s*(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>", stripped)
-            method_match = re.search(r"\b(?!class\b|function\b|if\b|for\b|while\b|switch\b|catch\b)(?:async\s+)?([a-zA-Z0-9_]+)\s*\([^)]*\)\s*\{", stripped)
-            if class_match:
-                scope_stack.append((brace_depth, class_match.group(1)))
-                continue
-            elif func_match:
-                scope_stack.append((brace_depth, func_match.group(1)))
-                continue
-            elif const_func_match:
-                scope_stack.append((brace_depth, const_func_match.group(1)))
-                continue
-            elif method_match:
-                scope_stack.append((brace_depth, method_match.group(1)))
-                continue
-
-            words = re.findall(r"\b([a-zA-Z0-9_]+)\b", stripped)
-            for word in words:
+            if node.type in ("identifier", "property_identifier"):
+                word = node.text.decode("utf-8", errors="ignore")
                 if word in self.definitions:
                     for def_loc in self.definitions[word]:
                         if def_loc != current_scope and not def_loc.startswith(current_scope + "."):
                             self._add_reference(word, current_scope)
+
+            for child in node.children:
+                walk(child, current_scope)
+
+        walk(tree.root_node, rel)
 
     def _add_definition(self, symbol: str, location: str):
         self.definitions.setdefault(symbol, []).append(location)
+        self.graph.setdefault(symbol, set())
 
     def _add_reference(self, key: str, referrer: str):
         self.graph.setdefault(key, set()).add(referrer)

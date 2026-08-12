@@ -34,9 +34,9 @@ numpy>=1.26.0
 # faiss-cpu      → replaced by ChromaDB
 # scikit-learn   → replaced by LlamaIndex BM25 + nomic-embed-text
 
-# ─── ColBERT reranking ────────────────────────────────────────────────────────
-# Used for late-interaction reranking (especially strong on code)
-# To disable: set USE_COLBERT=False in config.py (no uninstall needed)
+# ─── CrossEncoder reranking ───────────────────────────────────────────────────
+# Used for CrossEncoder reranking (especially strong on code)
+# To disable: set USE_RERANKER=False in config.py (no uninstall needed)
 ragatouille
 
 llama-index-postprocessor-colbert-rerank
