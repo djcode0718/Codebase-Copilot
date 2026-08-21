@@ -452,6 +452,9 @@ async def update_recommendation_status(
     if not fingerprint:
         raise HTTPException(status_code=400, detail="Recommendation fingerprint unavailable")
 
+    requested_status = str(body.status).strip().upper()
+    ignore_reason = body.reason if requested_status in {"IGNORED", "DISMISSED"} else None
+
     saved = supabase_service.upsert_health_recommendation_state(
         supabase,
         repo_id=repo_id,
@@ -460,7 +463,7 @@ async def update_recommendation_status(
         category=str(target.get("category") or ""),
         title=str(target.get("title") or ""),
         status=body.status,
-        dismissed_reason=body.reason if body.status == "IGNORED" else None,
+        dismissed_reason=ignore_reason,
     )
     persisted_status = str((saved or {}).get("status") or body.status)
     updated_at = (saved or {}).get("updated_at") or datetime.now(timezone.utc)

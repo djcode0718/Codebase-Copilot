@@ -12,7 +12,8 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { consumeQueuedChatContext, type ChatContextScope } from '@/lib/chat-context';
+import { consumeQueuedChatContext, queueExplorerFocus, type ChatContextScope } from '@/lib/chat-context';
+import { getContextualEngineeringActions, type EngineeringActionContext, type EngineeringActionId } from '@/lib/engineering-actions';
 import MessageBubble from '@/components/chat/MessageBubble';
 import AIInspector from '@/components/chat/AIInspector';
 import ExportMenu from '@/components/repo/ExportMenu';
@@ -39,6 +40,95 @@ import { toast } from 'sonner';
 import type { Chat, Message, Repo, QueryMode, GraphAvailability, RetrievedFile } from '@/lib/types';
 
 const ARCHITECTURE_QUERY_RE = /(architect|architecture|diagram|mermaid|service map|component relationships|data flow|executive summary)/i;
+
+function looksLikeTestPath(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  return /(^|\/)(tests?|__tests__)\//.test(normalized)
+    || /(^|\/)test_[^/]+\.[a-z0-9]+$/.test(normalized)
+    || /\.(spec|test)\.[a-z0-9]+$/.test(normalized);
+}
+
+function looksLikeDependencyManifest(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  return [
+    'requirements.txt',
+    'requirements-api.txt',
+    'requirements-minimal.txt',
+    'package.json',
+    'package-lock.json',
+    'pnpm-lock.yaml',
+    'poetry.lock',
+    'pyproject.toml',
+    'go.mod',
+    'go.sum',
+    'pom.xml',
+    'cargo.toml',
+    'cargo.lock',
+  ].some((name) => normalized.endsWith(name));
+}
+
+function deriveChatActionContext(scope: ChatContextScope | null): EngineeringActionContext | null {
+  if (!scope) return null;
+  const selectedFile = (scope.selected_file || '').trim();
+  if (scope.selected_symbol) {
+    return { kind: 'symbol', filePath: selectedFile || undefined, symbol: scope.selected_symbol };
+  }
+  if (scope.finding_id) {
+    return { kind: 'finding', filePath: selectedFile || undefined };
+  }
+  if (selectedFile && looksLikeDependencyManifest(selectedFile)) {
+    return { kind: 'dependency', filePath: selectedFile };
+  }
+  if (selectedFile && looksLikeTestPath(selectedFile)) {
+    return { kind: 'test', filePath: selectedFile };
+  }
+  if (scope.commit_sha) {
+    return { kind: 'commit', commitSha: scope.commit_sha };
+  }
+  if (selectedFile) {
+    return { kind: 'file', filePath: selectedFile };
+  }
+  return null;
+}
+
+function parseSelectedLineRange(value?: string): { lineStart?: number; lineEnd?: number } {
+  const raw = (value || '').trim();
+  if (!raw) return {};
+  const match = raw.match(/(\d+)(?:\s*[-:,]\s*(\d+))?/);
+  if (!match) return {};
+  const first = Number(match[1]);
+  const second = match[2] ? Number(match[2]) : undefined;
+  if (!Number.isFinite(first) || first <= 0) return {};
+  if (second == null || !Number.isFinite(second) || second <= 0) {
+    return { lineStart: Math.floor(first) };
+  }
+  const start = Math.floor(Math.min(first, second));
+  const end = Math.floor(Math.max(first, second));
+  return { lineStart: start, lineEnd: end };
+}
+
+function isInternalChatErrorContent(content: string): boolean {
+  const text = (content || '').toLowerCase();
+  return text.includes('i ran into an internal error while answering');
+}
+
+function buildContextScopedRetryPrompt(query: string, scope: ChatContextScope | null): string {
+  const base = (query || '').trim();
+  if (!scope) return base;
+  const file = (scope.selected_file || '').trim();
+  if (!file) return base;
+
+  const symbol = (scope.selected_symbol || '').trim();
+  const lines = (scope.selected_lines || '').trim();
+  const scopeHints = [
+    `Target file: ${file}`,
+    symbol ? `Target symbol: ${symbol}` : '',
+    lines ? `Target lines: ${lines}` : '',
+    'Use this file as the primary evidence source before broadening to related code.',
+  ].filter(Boolean).join('\n');
+
+  return `${base}\n\n${scopeHints}`;
+}
 
 function withMermaidGuardrails(query: string): string {
   if (!ARCHITECTURE_QUERY_RE.test(query)) return query;
@@ -514,6 +604,8 @@ function ChatMessageList({
   graphKeys,
   onOpenGraph,
   onOpenEvidence,
+  contextActions,
+  onRunContextAction,
 }: {
   showEmptyState: boolean;
   messages: Message[];
@@ -724,6 +816,8 @@ function ChatWorkspace({
   graphKeys,
   onOpenGraph,
   onOpenEvidence,
+  contextActions,
+  onRunContextAction,
 }: {
   repoId: string;
   repo: Repo | null;
@@ -760,6 +854,8 @@ function ChatWorkspace({
   graphKeys?: Set<string>;
   onOpenGraph: (symbol?: string) => void;
   onOpenEvidence: (file: RetrievedFile) => void;
+  contextActions: Array<{ id: EngineeringActionId; label: string }>;
+  onRunContextAction: (actionId: EngineeringActionId) => void;
 }) {
   return (
     <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:flex xl:h-[calc(100dvh-8rem)] xl:flex-col">
@@ -832,6 +928,23 @@ function ChatWorkspace({
         </div>
 
         <div className="flex h-full min-h-0 flex-col">
+          {contextActions.length > 0 && (
+            <div className="border-b border-border bg-card/40 px-4 py-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Context Actions</span>
+              {contextActions.map((action) => (
+                <Button
+                  key={`ctx-${action.id}`}
+                  size="sm"
+                  variant="outline"
+                  className="h-7 border-border px-2 text-[11px]"
+                  onClick={() => onRunContextAction(action.id)}
+                  disabled={!sessionReady || streaming}
+                >
+                  {action.label}
+                </Button>
+              ))}
+            </div>
+          )}
           {sessionLoading ? (
             <div className="flex flex-1 items-center justify-center py-20 text-muted-foreground">
               <div className="flex flex-col items-center gap-3">
@@ -1056,6 +1169,7 @@ function useChatInteractionHandlers({
   pendingContextScope: ChatContextScope | null;
   setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
 }) {
+  const autoPromptDispatchingRef = useRef(false);
   useEffect(() => {
     if (chatId && suggestions.length > 0) {
       try {
@@ -1175,6 +1289,7 @@ function useMessageMutationHandlers({
   pendingContextScope: ChatContextScope | null;
   setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
 }) {
+  const autoPromptDispatchingRef = useRef(false);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -1203,9 +1318,23 @@ function useMessageMutationHandlers({
     setRetryPrompt(null);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    const result = await sendMessage(chatId, modelQuery, token, displayText, isCtaFollowup, pendingContextScope);
-    if (pendingContextScope) {
+    const requestContextScope = pendingContextScope;
+    let result = await sendMessage(chatId, modelQuery, token, displayText, isCtaFollowup, requestContextScope);
+    if (requestContextScope) {
       setPendingContextScope(null);
+    }
+
+    if (
+      result?.content &&
+      isInternalChatErrorContent(result.content) &&
+      requestContextScope?.selected_file
+    ) {
+      const retryPrompt = buildContextScopedRetryPrompt(modelQuery, requestContextScope);
+      const retryDisplay = buildContextScopedRetryPrompt(userQuery, requestContextScope);
+      const retry = await sendMessage(chatId, retryPrompt, token, retryDisplay, true, requestContextScope);
+      if (retry?.content?.trim()) {
+        result = retry;
+      }
     }
     // Use ref (non-stale) for partial recovery — the state closure captured
     // the empty value from before sendMessage started.
@@ -1302,11 +1431,16 @@ function useMessageMutationHandlers({
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
+    if (autoPromptDispatchingRef.current) return;
     const prompt = (pendingAutoPromptRef.current || '').trim();
     if (!prompt) return;
+    const shouldRunAsCtaFollowup = Boolean(pendingContextScope);
     pendingAutoPromptRef.current = null;
-    void handleSend(prompt);
-  }, [autoPromptTick, chatId, handleSend, sessionReady, streaming, pendingAutoPromptRef]);
+    autoPromptDispatchingRef.current = true;
+    void handleSend(prompt, prompt, shouldRunAsCtaFollowup).finally(() => {
+      autoPromptDispatchingRef.current = false;
+    });
+  }, [autoPromptTick, chatId, handleSend, sessionReady, streaming, pendingAutoPromptRef, pendingContextScope]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>, input: string) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1355,14 +1489,12 @@ export default function ChatPage() {
   const [graphFocusSymbol, setGraphFocusSymbol] = useState<string | null>(null);
   const [cachedGraphKeys, setCachedGraphKeys] = useState<Set<string> | undefined>(undefined);
 
-  // ── Adjust state during rendering when graphAvailability changes ──────────
-  const [prevAvailability, setPrevAvailability] = useState(graphAvailability);
-  if (graphAvailability !== prevAvailability) {
-    setPrevAvailability(graphAvailability);
+  // Keep cache coherent with graph availability transitions.
+  useEffect(() => {
     if (graphAvailability !== 'available') {
       setCachedGraphKeys(undefined);
     }
-  }
+  }, [graphAvailability]);
   const pendingAutoPromptRef = useRef<string | null>(null);
   const [autoPromptTick, setAutoPromptTick] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1475,29 +1607,33 @@ export default function ChatPage() {
     router.push(`/repo/${repoId}/review`);
   }, [messages, repoId, router]);
   const handleOpenEvidence = useCallback((file: RetrievedFile) => {
-    const files = [file.path].filter(Boolean);
-    const lineHint = file.line_start && file.line_end && file.line_end !== file.line_start
-      ? `L${file.line_start}-L${file.line_end}`
-      : file.line_start
-      ? `L${file.line_start}`
-      : null;
-    const prompt = lineHint
-      ? `Review evidence for ${file.path} at ${lineHint}. Explain why this code was retrieved and assess correctness, security, and test impact.`
-      : `Review evidence for ${file.path}. Explain why this code was retrieved and assess correctness, security, and test impact.`;
-
-    try {
-      sessionStorage.setItem(`codebase:review-prefill:${repoId}`, JSON.stringify({ files, prompt }));
-    } catch {
-      // Ignore storage failures and continue navigation.
+    const path = (file.path || '').trim();
+    if (!path) {
+      toast.error('Evidence path is missing.');
+      return;
     }
-    router.push(`/repo/${repoId}/review`);
+    queueExplorerFocus(repoId, {
+      path,
+      line_start: file.line_start ?? null,
+      line_end: file.line_end ?? null,
+      source: 'chat_evidence',
+    });
+    router.push(`/repo/${repoId}/explorer`);
   }, [repoId, router]);
   const handleOpenSession = useCallback(async (targetChatId: string) => {
     if (!token || streaming || sessionLoading) return;
     try {
       await loadSession(token, targetChatId);
       const saved = localStorage.getItem(`chat_suggestions_${targetChatId}`);
-      setSuggestions(saved ? JSON.parse(saved) : []);
+      if (!saved) {
+        setSuggestions([]);
+      } else {
+        try {
+          setSuggestions(JSON.parse(saved));
+        } catch {
+          setSuggestions([]);
+        }
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to open conversation');
     }
@@ -1605,6 +1741,76 @@ export default function ChatPage() {
     });
   }, []);
 
+  const activeChatActionContext = useMemo(
+    () => deriveChatActionContext(pendingContextScope),
+    [pendingContextScope],
+  );
+
+  const contextActions = useMemo(
+    () => activeChatActionContext ? getContextualEngineeringActions(activeChatActionContext).slice(0, 6) : [],
+    [activeChatActionContext],
+  );
+
+  const handleRunContextAction = useCallback((actionId: EngineeringActionId) => {
+    const scope = pendingContextScope;
+    if (!scope) return;
+
+    const file = (scope.selected_file || '').trim();
+    const symbol = (scope.selected_symbol || '').trim();
+    const commit = (scope.commit_sha || '').trim();
+    const actionLabel = actionId.replace(/_/g, ' ');
+
+    if (actionId === 'open_evidence') {
+      if (!file) {
+        toast.message('No evidence file is attached to this context.');
+        return;
+      }
+      const lineRange = parseSelectedLineRange(scope.selected_lines);
+      queueExplorerFocus(repoId, {
+        path: file,
+        line_start: lineRange.lineStart ?? null,
+        line_end: lineRange.lineEnd ?? null,
+        source: 'chat_context_action',
+      });
+      router.push(`/repo/${repoId}/explorer`);
+      return;
+    }
+
+    if (actionId === 'show_diff' || actionId === 'review' || actionId === 'security' || actionId === 'performance' || actionId === 'architecture' || actionId === 'impact' || actionId === 'find_bugs' || actionId === 'dependency_risk' || actionId === 'upgrade_impact' || actionId === 'license' || actionId === 'generate_upgrade_plan') {
+      const prompt = [
+        `Requested action: ${actionLabel}`,
+        file ? `File: ${file}` : '',
+        symbol ? `Symbol: ${symbol}` : '',
+        commit ? `Commit: ${commit}` : '',
+        scope.finding_id ? `Finding: ${scope.finding_id}` : '',
+        scope.recommendation_id ? `Recommendation: ${scope.recommendation_id}` : '',
+      ].filter(Boolean).join('\n');
+
+      try {
+        sessionStorage.setItem(
+          `codebase:review-prefill:${repoId}`,
+          JSON.stringify({ files: file ? [file] : [], prompt }),
+        );
+      } catch {
+        // Ignore storage failures and continue navigation.
+      }
+      router.push(`/repo/${repoId}/review`);
+      return;
+    }
+
+    const followupPrompt = [
+      `Perform ${actionLabel} for the current chat context.`,
+      file ? `Focus file: ${file}` : '',
+      symbol ? `Focus symbol: ${symbol}` : '',
+      commit ? `Focus commit: ${commit}` : '',
+      scope.finding_id ? `Focus finding: ${scope.finding_id}` : '',
+      scope.recommendation_id ? `Focus recommendation: ${scope.recommendation_id}` : '',
+      'Provide evidence-backed reasoning and concrete next engineering steps.',
+    ].filter(Boolean).join('\n');
+
+    void handleSend(followupPrompt, `Context Action: ${actionLabel}`, true);
+  }, [handleSend, pendingContextScope, repoId, router]);
+
   const isDev = process.env.NODE_ENV !== 'production';
   const displayThreadStats = buildThreadStats(messages, suggestions, inspectedIndex);
   const inspectorPayload = buildInspectorPayload(inspectedIndex, pendingMetadata, inspectorData);
@@ -1651,6 +1857,8 @@ export default function ChatPage() {
             graphAvailability={graphAvailability}
             graphKeys={cachedGraphKeys}
             onOpenGraph={handleOpenGraph}
+            contextActions={contextActions}
+            onRunContextAction={handleRunContextAction}
           />
         </div>
 

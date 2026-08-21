@@ -1715,8 +1715,9 @@ def upsert_health_recommendation_state(
     status: str,
     dismissed_reason: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    normalized_status = _canonical_recommendation_status(status)
-    if not fingerprint or status not in _RECOMMENDATION_LIFECYCLE_STATUS:
+    raw_status = str(status or "").strip().upper()
+    normalized_status = _canonical_recommendation_status(raw_status)
+    if not fingerprint or raw_status not in _RECOMMENDATION_LIFECYCLE_STATUS:
         return None
     now = datetime.now(timezone.utc).isoformat()
     payload = {

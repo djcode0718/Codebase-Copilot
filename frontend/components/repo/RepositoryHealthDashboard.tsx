@@ -30,7 +30,7 @@ import type {
 import { toast } from 'sonner';
 import { getContextualEngineeringActions, type EngineeringActionId } from '@/lib/engineering-actions';
 import { queueChatContext } from '@/lib/chat-context';
-import { canonicalLifecycleStatus, lifecycleLabel } from '@/lib/recommendation-lifecycle';
+import { canonicalLifecycleStatus, lifecycleLabel, LIFECYCLE_FLOW } from '@/lib/recommendation-lifecycle';
 import {
   Line,
   LineChart,
@@ -440,7 +440,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
   async function handleRecommendationAction(rec: HealthRun['recommendations'][number], actionId: EngineeringActionId) {
     if (actionId === 'ignore') {
       if (rec.recommendation_id) {
-        await handleRecommendationStatus(rec.recommendation_id, 'DISMISSED', 'Ignored from recommendation actions');
+        await handleRecommendationStatus(rec.recommendation_id, 'IGNORED', 'Ignored from recommendation actions');
       }
       return;
     }
@@ -454,13 +454,25 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       return;
     }
     if (actionId === 'explain' || actionId === 'open_ai_chat') {
+      const affectedFiles = (rec.affected_files || []).slice(0, 6);
+      const affectedSymbols = (rec.affected_symbols || []).slice(0, 6);
+      const evidenceKeys = Object.keys(rec.evidence || {});
       queueChatContext(
         repoId,
-        `Explain recommendation: ${rec.title}. Include evidence, affected files, risk, and a safe implementation plan.`,
+        [
+          `Explain recommendation: ${rec.title}`,
+          `Category: ${rec.category}`,
+          `Severity: ${rec.severity}`,
+          affectedFiles.length > 0 ? `Affected files: ${affectedFiles.join(', ')}` : 'Affected files: not provided',
+          affectedSymbols.length > 0 ? `Affected symbols: ${affectedSymbols.join(', ')}` : '',
+          evidenceKeys.length > 0 ? `Evidence keys: ${evidenceKeys.join(', ')}` : '',
+          'Include concrete evidence, risk assessment, and a safe implementation plan focused on the affected code.',
+        ].filter(Boolean).join('\n'),
         {
           repo_id: repoId,
           recommendation_id: rec.recommendation_id,
           selected_file: rec.affected_files?.[0],
+          selected_symbol: rec.affected_symbols?.[0],
           evidence_hint: JSON.stringify(rec.evidence || {}),
         },
       );
@@ -473,6 +485,100 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       sessionStorage.setItem(
         `codebase:review-prefill:${repoId}`,
         JSON.stringify({ files: rec.affected_files || [], prompt: reviewPrompt }),
+      );
+    } catch {
+      // Ignore storage write failures and continue navigation.
+    }
+    router.push(`/repo/${repoId}/review`);
+  }
+
+  function deriveRecommendationActionContext(rec: HealthRun['recommendations'][number]) {
+    if ((rec.category || '').toLowerCase() === 'dependencies') {
+      return { kind: 'dependency' as const, filePath: rec.affected_files?.[0] };
+    }
+    if (rec.affected_symbols?.length) {
+      return { kind: 'symbol' as const, filePath: rec.affected_files?.[0], symbol: rec.affected_symbols[0] };
+    }
+    return { kind: 'recommendation' as const, filePath: rec.affected_files?.[0] };
+  }
+
+  async function handleFindingAction(finding: HealthRun['findings'][number], actionId: EngineeringActionId) {
+    if (actionId === 'open_evidence') {
+      setSelectedCategory(finding.category);
+      toast.message('Evidence highlighted in Category Details section');
+      return;
+    }
+    if (actionId === 'ignore') {
+      const linkedStatus = findingLifecycle.get(finding.id);
+      if (!linkedStatus) {
+        toast.message('No linked recommendation lifecycle found for this finding.');
+        return;
+      }
+      toast.message(`Linked recommendation status: ${lifecycleLabel(linkedStatus)}`);
+      return;
+    }
+
+    if (actionId === 'explain' || actionId === 'open_ai_chat') {
+      const evidenceKeys = Object.keys(finding.evidence || {});
+      queueChatContext(
+        repoId,
+        [
+          `Explain finding: ${finding.title}`,
+          `Category: ${finding.category}`,
+          `Severity: ${finding.severity}`,
+          finding.affected_files?.length ? `Affected files: ${finding.affected_files.slice(0, 6).join(', ')}` : 'Affected files: not provided',
+          evidenceKeys.length ? `Evidence keys: ${evidenceKeys.join(', ')}` : '',
+          'Include concrete evidence and next safe engineering actions focused on the affected code.',
+        ].filter(Boolean).join('\n'),
+        {
+          repo_id: repoId,
+          finding_id: finding.id,
+          selected_file: finding.affected_files?.[0],
+          evidence_hint: JSON.stringify(finding.evidence || {}),
+        },
+      );
+      router.push(`/repo/${repoId}/chat`);
+      return;
+    }
+
+    const reviewPrompt = `${finding.title}\n\nCategory: ${finding.category}\nSeverity: ${finding.severity}\nAction: ${actionId.replace(/_/g, ' ')}\n\nEvidence: ${JSON.stringify(finding.evidence || {})}`;
+    try {
+      sessionStorage.setItem(
+        `codebase:review-prefill:${repoId}`,
+        JSON.stringify({ files: finding.affected_files || [], prompt: reviewPrompt }),
+      );
+    } catch {
+      // Ignore storage write failures and continue navigation.
+    }
+    router.push(`/repo/${repoId}/review`);
+  }
+
+  async function handleCommitAction(actionId: EngineeringActionId) {
+    const commitSha = run?.analysis_context?.commit_sha;
+    if (!commitSha) {
+      toast.message('Commit context is unavailable for this health run.');
+      return;
+    }
+
+    if (actionId === 'explain' || actionId === 'open_ai_chat') {
+      queueChatContext(
+        repoId,
+        `Analyze commit ${commitSha} in this repository. Explain change risk, impacted modules, test impact, and recommended next checks.`,
+        {
+          repo_id: repoId,
+          commit_sha: commitSha,
+          branch: run?.analysis_context?.branch || undefined,
+        },
+      );
+      router.push(`/repo/${repoId}/chat`);
+      return;
+    }
+
+    const reviewPrompt = `Commit context review\n\nCommit: ${commitSha}\nBranch: ${run?.analysis_context?.branch || 'unknown'}\nAction: ${actionId.replace(/_/g, ' ')}\n\nReview this commit context for risk, test impact, and required follow-up.`;
+    try {
+      sessionStorage.setItem(
+        `codebase:review-prefill:${repoId}`,
+        JSON.stringify({ files: run?.recommendations.flatMap((r) => r.affected_files || []).slice(0, 12) || [], prompt: reviewPrompt }),
       );
     } catch {
       // Ignore storage write failures and continue navigation.
@@ -545,6 +651,21 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
             <div className="mt-2 text-[11px] text-muted-foreground">
               Context: {run.analysis_context?.repository || repoId} • {run.analysis_context?.branch || 'unknown'} • {(run.analysis_context?.commit_sha || 'unknown').slice(0, 7)} • {run.analysis_context?.index_version || 'unknown'}
             </div>
+            {run.analysis_context?.commit_sha && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {getContextualEngineeringActions({ kind: 'commit', commitSha: run.analysis_context.commit_sha }).slice(0, 4).map((action) => (
+                  <Button
+                    key={`commit-${action.id}`}
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => void handleCommitAction(action.id)}
+                  >
+                    {action.label}
+                  </Button>
+                ))}
+              </div>
+            )}
             <div className="mt-3 space-y-2">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground">Strongest areas</p>
@@ -669,6 +790,22 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                         Files: {finding.affected_files.slice(0, 3).join(', ')}
                       </p>
                     )}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {getContextualEngineeringActions({ kind: 'finding', filePath: finding.affected_files?.[0] }).slice(0, 5).map((action) => (
+                        <Button
+                          key={`${finding.id}-${action.id}`}
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-[11px]"
+                          onClick={() => void handleFindingAction(finding, action.id)}
+                        >
+                          {action.label}
+                        </Button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] mt-1 text-muted-foreground">
+                      Lifecycle: {lifecycleLabel(findingLifecycle.get(finding.id) || 'NEW')}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -687,8 +824,10 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {[run.recommendations.slice(0, 5), run.recommendations.slice(5, 10)].map((column, colIndex) => (
             <div key={colIndex} className="space-y-3">
-              {column.map((rec) => (
-                <div key={`${rec.rank}-${rec.title}`} className="rounded-2xl border border-border/70 bg-background/60 px-4 py-3">
+              {column.map((rec) => {
+                const currentStatus = canonicalLifecycleStatus(rec.current_status);
+                return (
+                  <div key={`${rec.rank}-${rec.title}`} className="rounded-2xl border border-border/70 bg-background/60 px-4 py-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium">{rec.rank}. {rec.title}</p>
@@ -698,7 +837,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                     <div className="text-right">
                       <p className="text-sm font-semibold text-brand">+{rec.expected_score_gain}</p>
                       <p className="text-[11px] text-muted-foreground">impact {rec.impact_score}</p>
-                      <p className="text-[11px] text-muted-foreground mt-1">{rec.current_status}</p>
+                      <p className="text-[11px] text-muted-foreground mt-1">{lifecycleLabel(currentStatus)}</p>
                     </div>
                   </div>
                   {rec.affected_files.length > 0 && (
@@ -708,7 +847,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                     <p className="text-[11px] mt-1 text-muted-foreground">Evidence keys: {Object.keys(rec.evidence || {}).slice(0, 5).join(', ')}</p>
                   )}
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {getContextualEngineeringActions({ kind: 'recommendation' }).slice(0, 6).map((action) => (
+                    {getContextualEngineeringActions(deriveRecommendationActionContext(rec)).slice(0, 6).map((action) => (
                       <Button
                         key={`${rec.rank}-${action.id}`}
                         size="sm"
@@ -722,40 +861,30 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                   </div>
                   {rec.recommendation_id && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 px-2 text-[11px]"
-                        disabled={statusUpdatingByRec[rec.recommendation_id]}
-                        onClick={() => void handleRecommendationStatus(rec.recommendation_id, 'ACCEPTED')}
-                      >
-                        Accept
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 px-2 text-[11px]"
-                        disabled={statusUpdatingByRec[rec.recommendation_id]}
-                        onClick={() => void handleRecommendationStatus(rec.recommendation_id, 'RESOLVED')}
-                      >
-                        Resolve
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 px-2 text-[11px]"
-                        disabled={statusUpdatingByRec[rec.recommendation_id]}
-                        onClick={() => {
-                          const reason = window.prompt('Optional dismissal reason') || undefined;
-                          void handleRecommendationStatus(rec.recommendation_id, 'DISMISSED', reason);
-                        }}
-                      >
-                        Dismiss
-                      </Button>
+                      {LIFECYCLE_FLOW.map((status) => (
+                        <Button
+                          key={`${rec.recommendation_id}-${status}`}
+                          size="sm"
+                          variant={currentStatus === status ? 'default' : 'outline'}
+                          className="h-7 px-2 text-[11px]"
+                          disabled={statusUpdatingByRec[rec.recommendation_id]}
+                          onClick={() => {
+                            if (status === 'IGNORED') {
+                              const reason = window.prompt('Optional ignore reason') || undefined;
+                              void handleRecommendationStatus(rec.recommendation_id, status, reason);
+                              return;
+                            }
+                            void handleRecommendationStatus(rec.recommendation_id, status);
+                          }}
+                        >
+                          {lifecycleLabel(status)}
+                        </Button>
+                      ))}
                     </div>
                   )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>

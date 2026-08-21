@@ -32,8 +32,10 @@ export interface EngineeringAction {
 }
 
 export type EngineeringActionContext = {
-  kind: 'file' | 'recommendation' | 'finding' | 'branch';
+  kind: 'file' | 'symbol' | 'test' | 'dependency' | 'recommendation' | 'finding' | 'branch' | 'commit';
   filePath?: string;
+  symbol?: string;
+  commitSha?: string;
 };
 
 const ACTIONS: Record<EngineeringActionId, EngineeringAction> = {
@@ -98,6 +100,21 @@ export function getContextualEngineeringActions(context: EngineeringActionContex
     return toActions(['compare', 'analyze', 'health', 'security', 'impact', 'run_tests', 'review']);
   }
 
+  if (context.kind === 'commit') {
+    return toActions([
+      'explain',
+      'review',
+      'find_bugs',
+      'security',
+      'performance',
+      'architecture',
+      'impact',
+      'show_diff',
+      'run_tests',
+      'open_ai_chat',
+    ]);
+  }
+
   if (context.kind === 'recommendation') {
     return toActions([
       'explain',
@@ -117,12 +134,39 @@ export function getContextualEngineeringActions(context: EngineeringActionContex
       'explain',
       'open_evidence',
       'review',
+      'find_bugs',
+      'security',
       'generate_fix',
       'generate_tests',
       'show_diff',
       'run_tests',
+      'open_ai_chat',
       'ignore',
     ]);
+  }
+
+  if (context.kind === 'symbol') {
+    return toActions([
+      'explain',
+      'review',
+      'find_bugs',
+      'security',
+      'performance',
+      'architecture',
+      'generate_tests',
+      'generate_fix',
+      'impact',
+      'show_diff',
+      'open_ai_chat',
+    ]);
+  }
+
+  if (context.kind === 'test') {
+    return toActions(['explain', 'coverage', 'missing_cases', 'generate_tests', 'run_tests', 'review', 'open_ai_chat']);
+  }
+
+  if (context.kind === 'dependency') {
+    return toActions(['dependency_risk', 'security', 'upgrade_impact', 'license', 'generate_upgrade_plan', 'review']);
   }
 
   const filePath = (context.filePath || '').trim();

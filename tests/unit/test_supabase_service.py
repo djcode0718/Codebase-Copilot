@@ -206,6 +206,72 @@ class TestRepoWorkspaceContext:
         assert ctx["active_branch"] == "hotfix/login"
 
 
+class TestRecommendationLifecycle:
+    def test_canonical_status_maps_legacy_values(self):
+        assert supabase_service._canonical_recommendation_status("OPEN") == "NEW"
+        assert supabase_service._canonical_recommendation_status("accepted") == "ACKNOWLEDGED"
+        assert supabase_service._canonical_recommendation_status("verified") == "RESOLVED"
+
+    def test_upsert_accepts_lowercase_lifecycle_status(self):
+        mock = MagicMock()
+
+        existing_chain = MagicMock()
+        existing_chain.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+        insert_chain = MagicMock()
+        insert_chain.execute.return_value = MagicMock(data=[{"status": "ACKNOWLEDGED", "fingerprint": "fp-1"}])
+
+        table = MagicMock()
+        table.select.return_value = existing_chain
+        table.insert.return_value = insert_chain
+        mock.table.return_value = table
+
+        result = supabase_service.upsert_health_recommendation_state(
+            mock,
+            repo_id="repo-1",
+            user_id="user-1",
+            fingerprint="fp-1",
+            category="Security",
+            title="Harden auth",
+            status="accepted",
+            dismissed_reason=None,
+        )
+
+        assert result is not None
+        payload = table.insert.call_args.args[0]
+        assert payload["status"] == "ACKNOWLEDGED"
+
+    def test_upsert_maps_legacy_dismissed_to_ignored_with_reason(self):
+        mock = MagicMock()
+
+        existing_chain = MagicMock()
+        existing_chain.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+        insert_chain = MagicMock()
+        insert_chain.execute.return_value = MagicMock(data=[{"status": "IGNORED", "fingerprint": "fp-2"}])
+
+        table = MagicMock()
+        table.select.return_value = existing_chain
+        table.insert.return_value = insert_chain
+        mock.table.return_value = table
+
+        result = supabase_service.upsert_health_recommendation_state(
+            mock,
+            repo_id="repo-1",
+            user_id="user-1",
+            fingerprint="fp-2",
+            category="Security",
+            title="Remove hard-coded secrets",
+            status="DISMISSED",
+            dismissed_reason="False positive in generated recommendation",
+        )
+
+        assert result is not None
+        payload = table.insert.call_args.args[0]
+        assert payload["status"] == "IGNORED"
+        assert payload["dismissed_reason"] == "False positive in generated recommendation"
+
+
 # â”€â”€ Chats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestCreateChat:

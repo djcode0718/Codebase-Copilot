@@ -103,7 +103,14 @@ export default function EngineeringActionRunTimeline({
                 variant="outline"
                 disabled={!selectedRecommendation || statusUpdating}
                 className="h-7 text-[11px]"
-                onClick={() => void onSetLifecycleStatus(status)}
+                onClick={() => {
+                  if (status === 'IGNORED') {
+                    const reason = window.prompt('Optional ignore reason') || undefined;
+                    void onSetLifecycleStatus(status, reason);
+                    return;
+                  }
+                  void onSetLifecycleStatus(status);
+                }}
               >
                 {lifecycleLabel(status)}
               </Button>
