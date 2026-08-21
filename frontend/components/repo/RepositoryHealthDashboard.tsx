@@ -17,6 +17,7 @@ import {
   getLatestRepositoryHealth,
   getRepositoryHealthHistory,
   runRepositoryHealthAnalysis,
+  updateRepositoryHealthRecommendationStatus,
 } from '@/lib/api';
 import type {
   HealthCategoryName,
@@ -159,6 +160,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
   const [history, setHistory] = useState<HealthHistoryResponse | null>(null);
   const [localRunHistory, setLocalRunHistory] = useState<HealthRun[]>(() => readCachedRunHistory(repoId));
   const [selectedCategory, setSelectedCategory] = useState<HealthCategoryName>('Architecture');
+  const [statusUpdatingByRec, setStatusUpdatingByRec] = useState<Record<string, boolean>>({});
   const isTransientRun = Boolean(run?.run_id?.startsWith('transient-'));
 
   const rememberRun = useCallback((nextRun: HealthRun | null) => {
@@ -325,6 +327,9 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     });
   }, [normalizedHistoryPoints]);
 
+  const hasSufficientHistory = Boolean(history?.has_sufficient_history || run?.history_state?.has_sufficient_history);
+  const baselineMessage = history?.baseline_message || run?.history_state?.baseline_message || null;
+
   // Compute trend from the immediately previous analysis when available.
   const effectiveTrend = useMemo<number | null>(() => {
     if (normalizedHistoryPoints.length >= 2) {
@@ -372,6 +377,34 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       toast.error(err instanceof Error ? err.message : 'Failed to run analysis');
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function handleRecommendationStatus(
+    recommendationId: string | undefined,
+    status: 'OPEN' | 'ACCEPTED' | 'FIX_GENERATED' | 'DIFF_REVIEW' | 'TESTING' | 'VERIFIED' | 'RESOLVED' | 'DISMISSED',
+    reason?: string,
+  ) {
+    if (!token || !recommendationId) return;
+    setStatusUpdatingByRec((prev) => ({ ...prev, [recommendationId]: true }));
+    try {
+      await updateRepositoryHealthRecommendationStatus(token, repoId, recommendationId, status, reason);
+      setRun((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          recommendations: prev.recommendations.map((rec) =>
+            rec.recommendation_id === recommendationId
+              ? { ...rec, current_status: status, dismissed_reason: reason ?? null, lifecycle_updated_at: new Date().toISOString() }
+              : rec
+          ),
+        };
+      });
+      toast.success(`Recommendation marked ${status.replace('_', ' ').toLowerCase()}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update recommendation status');
+    } finally {
+      setStatusUpdatingByRec((prev) => ({ ...prev, [recommendationId]: false }));
     }
   }
 
@@ -437,6 +470,9 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
               <span>Size: {run.top_level.repository_size}</span>
               <span>Lang: {run.top_level.language_detection.join(', ') || 'Auto'}</span>
             </div>
+            <div className="mt-2 text-[11px] text-muted-foreground">
+              Context: {run.analysis_context?.repository || repoId} • {run.analysis_context?.branch || 'unknown'} • {(run.analysis_context?.commit_sha || 'unknown').slice(0, 7)} • {run.analysis_context?.index_version || 'unknown'}
+            </div>
             <div className="mt-3 space-y-2">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground">Strongest areas</p>
@@ -463,25 +499,31 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
           </div>
 
           <div className="rounded-2xl border border-border/70 bg-background/60 p-4 h-[190px]">
-            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">Health Trend (30 days)</p>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 5, right: 10, left: -18, bottom: 0 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" interval={Math.max(0, Math.floor(chartData.length / 5) - 1)} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                <Tooltip
-                  formatter={(value: number | string) => [`${value}/100`, 'Score']}
-                  labelFormatter={(_, payload) => {
-                    const point = payload?.[0]?.payload as { createdAt?: string; name?: string } | undefined;
-                    if (!point?.createdAt) return point?.name || '';
-                    const date = new Date(point.createdAt);
-                    return Number.isNaN(date.getTime()) ? (point?.name || '') : date.toLocaleString();
-                  }}
-                />
-                <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: 'hsl(var(--primary))' }} activeDot={{ r: 5 }}>
-                  <LabelList dataKey="score" position="top" fontSize={10} fill="hsl(var(--muted-foreground))" />
-                </Line>
-              </LineChart>
-            </ResponsiveContainer>
+            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">{hasSufficientHistory ? 'Health Trend (30 days)' : 'Health History'}</p>
+            {!hasSufficientHistory ? (
+              <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-border/70 bg-background/40 px-4 text-center text-xs text-muted-foreground">
+                {baselineMessage || 'Health baseline established. Future analyses will appear here.'}
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 5, right: 10, left: -18, bottom: 0 }}>
+                  <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" interval={Math.max(0, Math.floor(chartData.length / 5) - 1)} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+                  <Tooltip
+                    formatter={(value: number | string) => [`${value}/100`, 'Score']}
+                    labelFormatter={(_, payload) => {
+                      const point = payload?.[0]?.payload as { createdAt?: string; name?: string } | undefined;
+                      if (!point?.createdAt) return point?.name || '';
+                      const date = new Date(point.createdAt);
+                      return Number.isNaN(date.getTime()) ? (point?.name || '') : date.toLocaleString();
+                    }}
+                  />
+                  <Line type="monotone" dataKey="score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3, fill: 'hsl(var(--primary))' }} activeDot={{ r: 5 }}>
+                    <LabelList dataKey="score" position="top" fontSize={10} fill="hsl(var(--muted-foreground))" />
+                  </Line>
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
       </div>
@@ -579,15 +621,50 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                     <div>
                       <p className="text-sm font-medium">{rec.rank}. {rec.title}</p>
                       <p className="text-xs text-muted-foreground mt-1">{rec.description}</p>
-                      <p className="text-[11px] mt-2 text-muted-foreground">Category: {rec.category} · Effort: {rec.estimated_effort}</p>
+                      <p className="text-[11px] mt-2 text-muted-foreground">Category: {rec.category} · Effort: {rec.estimated_effort} · Confidence: {Math.round((rec.confidence || 0) * 100)}%</p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-semibold text-brand">+{rec.expected_score_gain}</p>
                       <p className="text-[11px] text-muted-foreground">impact {rec.impact_score}</p>
+                      <p className="text-[11px] text-muted-foreground mt-1">{rec.current_status}</p>
                     </div>
                   </div>
                   {rec.affected_files.length > 0 && (
                     <p className="text-[11px] mt-2 text-muted-foreground">Affected: {rec.affected_files.slice(0, 4).join(', ')}</p>
+                  )}
+                  {rec.recommendation_id && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px]"
+                        disabled={statusUpdatingByRec[rec.recommendation_id]}
+                        onClick={() => void handleRecommendationStatus(rec.recommendation_id, 'ACCEPTED')}
+                      >
+                        Accept
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px]"
+                        disabled={statusUpdatingByRec[rec.recommendation_id]}
+                        onClick={() => void handleRecommendationStatus(rec.recommendation_id, 'RESOLVED')}
+                      >
+                        Resolve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px]"
+                        disabled={statusUpdatingByRec[rec.recommendation_id]}
+                        onClick={() => {
+                          const reason = window.prompt('Optional dismissal reason') || undefined;
+                          void handleRecommendationStatus(rec.recommendation_id, 'DISMISSED', reason);
+                        }}
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
                   )}
                 </div>
               ))}

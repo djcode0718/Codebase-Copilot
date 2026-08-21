@@ -46,7 +46,21 @@ def _ensure_repo_access(supabase: Client, user_id: str, repo_id: str) -> dict:
     return repo
 
 
+def _review_analysis_context(repo: dict) -> dict:
+    return {
+        "repository": repo.get("name") or repo.get("id"),
+        "branch": repo.get("active_branch") or repo.get("default_branch") or "unknown",
+        "commit_sha": repo.get("active_commit_sha") or "unknown",
+        "index_version": repo.get("index_name") or "unknown",
+        "indexed_at": repo.get("indexed_at"),
+    }
+
+
 def _to_review_response(record: dict) -> ReviewRunResponse:
+    context = dict(record.get("analysis_context") or {})
+    if not context:
+        request_payload = record.get("request_payload") or {}
+        context = dict(request_payload.get("analysis_context") or {})
     return ReviewRunResponse(
         review_id=record["id"],
         repo_id=record["repo_id"],
@@ -56,6 +70,7 @@ def _to_review_response(record: dict) -> ReviewRunResponse:
         findings=record.get("findings") or [],
         changed_files=record.get("changed_files") or [],
         commit_hash=record.get("commit_hash"),
+        analysis_context=context,
         created_at=record.get("created_at"),
     )
 
@@ -67,6 +82,7 @@ async def review_file_endpoint(
     supabase: Client = Depends(get_supabase),
 ):
     repo = _ensure_repo_access(supabase, user_id, body.repo_id)
+    analysis_context = _review_analysis_context(repo)
     try:
         result = await review_files(repo=repo, file_paths=[body.filename], prompt=body.prompt)
     except Exception as err:
@@ -79,7 +95,7 @@ async def review_file_endpoint(
         summary=result["summary"],
         findings=result["findings"],
         changed_files=result["changed_files"],
-        request_payload=body.model_dump(),
+        request_payload={**body.model_dump(), "analysis_context": analysis_context},
     )
     return _to_review_response(record)
 
@@ -94,6 +110,7 @@ async def review_files_endpoint(
         raise HTTPException(status_code=400, detail="files must not be empty")
 
     repo = _ensure_repo_access(supabase, user_id, body.repo_id)
+    analysis_context = _review_analysis_context(repo)
     try:
         result = await review_files(repo=repo, file_paths=body.files, prompt=body.prompt)
     except Exception as err:
@@ -106,7 +123,7 @@ async def review_files_endpoint(
         summary=result["summary"],
         findings=result["findings"],
         changed_files=result["changed_files"],
-        request_payload=body.model_dump(),
+        request_payload={**body.model_dump(), "analysis_context": analysis_context},
     )
     return _to_review_response(record)
 
@@ -118,6 +135,7 @@ async def review_commit_endpoint(
     supabase: Client = Depends(get_supabase),
 ):
     repo = _ensure_repo_access(supabase, user_id, body.repo_id)
+    analysis_context = _review_analysis_context(repo)
     try:
         result = await review_commit(repo=repo, commit_hash=body.commit_hash, prompt=body.prompt)
     except Exception as err:
@@ -131,7 +149,7 @@ async def review_commit_endpoint(
         findings=result["findings"],
         changed_files=result["changed_files"],
         commit_hash=body.commit_hash,
-        request_payload=body.model_dump(),
+        request_payload={**body.model_dump(), "analysis_context": analysis_context},
     )
     return _to_review_response(record)
 
@@ -143,6 +161,7 @@ async def review_pr_endpoint(
     supabase: Client = Depends(get_supabase),
 ):
     repo = _ensure_repo_access(supabase, user_id, body.repo_id)
+    analysis_context = _review_analysis_context(repo)
     if not body.changed_files and not body.diff.strip():
         raise HTTPException(status_code=400, detail="changed_files or diff must be provided")
 
@@ -163,7 +182,7 @@ async def review_pr_endpoint(
         summary=result["summary"],
         findings=result["findings"],
         changed_files=result["changed_files"],
-        request_payload=body.model_dump(),
+        request_payload={**body.model_dump(), "analysis_context": analysis_context},
     )
     return _to_review_response(record)
 
@@ -250,6 +269,7 @@ async def list_reviews_endpoint(
             summary=row.get("summary") or "",
             commit_hash=row.get("commit_hash"),
             changed_files=row.get("changed_files") or [],
+            analysis_context=row.get("analysis_context") or (row.get("request_payload") or {}).get("analysis_context") or {},
             created_at=row.get("created_at"),
         )
         for row in rows

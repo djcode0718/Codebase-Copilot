@@ -40,6 +40,7 @@ class ReviewRunResponse(BaseModel):
     findings: List[ReviewFinding] = Field(default_factory=list)
     changed_files: List[str] = Field(default_factory=list)
     commit_hash: Optional[str] = None
+    analysis_context: Dict[str, Any] = Field(default_factory=dict)
     created_at: Optional[datetime] = None
 
 
@@ -51,6 +52,7 @@ class ReviewHistoryItem(BaseModel):
     summary: str
     commit_hash: Optional[str] = None
     changed_files: List[str] = Field(default_factory=list)
+    analysis_context: Dict[str, Any] = Field(default_factory=dict)
     created_at: Optional[datetime] = None
 
 

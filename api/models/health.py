@@ -56,15 +56,54 @@ class HealthCategoryScore(BaseModel):
 
 
 class HealthRecommendation(BaseModel):
+    recommendation_id: Optional[str] = None
+    fingerprint: Optional[str] = None
     rank: int
     title: str
     description: str
     category: HealthCategory
+    severity: Literal["low", "medium", "high", "critical"] = "medium"
+    impact: str = "medium"
     estimated_effort: str
+    confidence: float = 0.0
+    confidence_basis: str = "evidence"
+    explanation: Optional[str] = None
+    evidence: Dict[str, Any] = Field(default_factory=dict)
     expected_score_gain: int
     impact_score: float
     action_items: List[str] = Field(default_factory=list)
     affected_files: List[str] = Field(default_factory=list)
+    affected_symbols: List[str] = Field(default_factory=list)
+    suggested_solution: Optional[str] = None
+    dependencies: List[str] = Field(default_factory=list)
+    risk: str = "medium"
+    current_status: Literal[
+        "OPEN",
+        "ACCEPTED",
+        "FIX_GENERATED",
+        "DIFF_REVIEW",
+        "TESTING",
+        "VERIFIED",
+        "RESOLVED",
+        "DISMISSED",
+    ] = "OPEN"
+    dismissed_reason: Optional[str] = None
+    lifecycle_updated_at: Optional[datetime] = None
+
+
+class HealthAnalysisContext(BaseModel):
+    repository: Optional[str] = None
+    branch: Optional[str] = None
+    commit_sha: Optional[str] = None
+    index_version: Optional[str] = None
+    indexed_at: Optional[datetime] = None
+    analysis_version: str = "health-v2"
+
+
+class HealthHistoryState(BaseModel):
+    has_sufficient_history: bool = False
+    baseline_message: Optional[str] = None
+    data_points: int = 0
 
 
 class HealthTopLevel(BaseModel):
@@ -86,6 +125,8 @@ class HealthRunResponse(BaseModel):
     categories: List[HealthCategoryScore]
     findings: List[HealthFinding]
     recommendations: List[HealthRecommendation]
+    analysis_context: Optional[HealthAnalysisContext] = None
+    history_state: Optional[HealthHistoryState] = None
     executive_summary: str
     strengths: List[str] = Field(default_factory=list)
     weaknesses: List[str] = Field(default_factory=list)
@@ -107,10 +148,35 @@ class HealthHistoryPoint(BaseModel):
 class HealthHistoryResponse(BaseModel):
     repo_id: str
     points: List[HealthHistoryPoint]
+    has_sufficient_history: bool = False
+    baseline_message: Optional[str] = None
+    data_points: int = 0
     improved_categories: List[str] = Field(default_factory=list)
     declining_categories: List[str] = Field(default_factory=list)
     new_risks: List[str] = Field(default_factory=list)
     resolved_risks: List[str] = Field(default_factory=list)
+
+
+class RecommendationStatusUpdateRequest(BaseModel):
+    status: Literal[
+        "OPEN",
+        "ACCEPTED",
+        "FIX_GENERATED",
+        "DIFF_REVIEW",
+        "TESTING",
+        "VERIFIED",
+        "RESOLVED",
+        "DISMISSED",
+    ]
+    reason: Optional[str] = None
+
+
+class RecommendationStatusUpdateResponse(BaseModel):
+    recommendation_id: str
+    fingerprint: str
+    status: str
+    reason: Optional[str] = None
+    updated_at: datetime
 
 
 class HealthCategoryDetailResponse(BaseModel):

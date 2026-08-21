@@ -112,9 +112,15 @@ def _build_memory_context(memory_hits: List[dict], current_context: str = "") ->
     return build_repository_memory_context(memory_hits, current_context)
 
 
-def _persist_user_message(supabase: Client, chat_id: str, query: str):
+def _persist_user_message(
+    supabase: Client,
+    chat_id: str,
+    query: str,
+    *,
+    metadata: Optional[dict] = None,
+):
     try:
-        supabase_service.save_message(supabase, chat_id, role="user", content=query)
+        supabase_service.save_message(supabase, chat_id, role="user", content=query, metadata=metadata)
     except Exception as e:
         logger.warning(f"Failed to persist user message: {e}")
 
@@ -221,6 +227,13 @@ async def stream_message(
 
     index_name = repo["index_name"]
     repo_id = repo["id"]
+    workspace_context = {
+        "repo_id": repo_id,
+        "active_branch": repo.get("active_branch") or repo.get("default_branch") or "unknown",
+        "active_commit_sha": repo.get("active_commit_sha") or "unknown",
+        "index_version": repo.get("index_name") or "unknown",
+        "indexed_at": repo.get("indexed_at"),
+    }
     memory_hits = get_repository_knowledge_context(
         supabase,
         user_id=user_id,
@@ -248,7 +261,15 @@ async def stream_message(
     # Persist user message to DB immediately (before streaming)
     # This ensures it shows even if the stream fails halfway
     user_content = body.display_text if body.display_text else query
-    _persist_user_message(supabase, chat_id, user_content)
+    _persist_user_message(
+        supabase,
+        chat_id,
+        user_content,
+        metadata={
+            **workspace_context,
+            "context_scope": body.context_scope or {},
+        },
+    )
 
     # Update chat title on first message
     await _maybe_update_first_message_title(supabase, chat_id, [m.get("content", "") for m in persisted_history if m.get("role") == "user"] + [user_content])
@@ -320,8 +341,9 @@ async def stream_message(
                     llm_provider=metadata_event.get("llm_provider") if metadata_event else None,
                     llm_model=metadata_event.get("llm_model") if metadata_event else None,
                     metadata={
-                        "repo_id": repo_id,
+                        **workspace_context,
                         "chat_id": chat_id,
+                        "context_scope": body.context_scope or {},
                         "latency_retrieval_ms": metadata_event.get("latency_retrieval_ms") if metadata_event else None,
                         "latency_llm_ms": metadata_event.get("latency_llm_ms") if metadata_event else None,
                     },

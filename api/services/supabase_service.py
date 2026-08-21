@@ -9,6 +9,7 @@ Tables used (see schema in blueprint):
 """
 
 import uuid
+import hashlib
 from typing import Optional, List, Dict, Any, Set
 from datetime import datetime, timezone, timedelta
 
@@ -20,6 +21,28 @@ _HEALTH_SCHEMA_CHECK_TTL_SECONDS = 60
 _REVIEW_SCHEMA_CHECK_TTL_SECONDS = 60
 _MISSING_REPO_MEMORY_TABLE_WARNED: Set[str] = set()
 _REPO_WORKSPACE_CONTEXT_CACHE: Dict[str, Dict[str, Any]] = {}
+_RECOMMENDATION_LIFECYCLE_STATUS = {
+    "OPEN",
+    "ACCEPTED",
+    "FIX_GENERATED",
+    "DIFF_REVIEW",
+    "TESTING",
+    "VERIFIED",
+    "RESOLVED",
+    "DISMISSED",
+}
+
+
+def _strip_record_keys(record: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
+    out = dict(record)
+    for key in keys:
+        out.pop(key, None)
+    return out
+
+
+def _recommendation_fingerprint(*, category: str, title: str) -> str:
+    stable = f"{(category or '').strip().lower()}::{(title or '').strip().lower()}"
+    return hashlib.sha1(stable.encode("utf-8")).hexdigest()[:24]
 
 
 def _is_missing_column_error(err: Exception, columns: List[str]) -> bool:
@@ -1103,6 +1126,7 @@ def insert_health_run(
     new_risks: List[str],
     resolved_risks: List[str],
     benchmark: Dict[str, Any],
+    analysis_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     record = {
         "id": str(uuid.uuid4()),
@@ -1128,8 +1152,16 @@ def insert_health_run(
         "new_risks": new_risks,
         "resolved_risks": resolved_risks,
         "benchmark": benchmark,
+        "analysis_context": analysis_context or {},
     }
-    result = supabase.table("repository_health_runs").insert(record).execute()
+    try:
+        result = supabase.table("repository_health_runs").insert(record).execute()
+    except Exception as e:
+        if not _is_missing_column_error(e, ["analysis_context"]):
+            raise
+        legacy = _strip_record_keys(record, ["analysis_context"])
+        result = supabase.table("repository_health_runs").insert(legacy).execute()
+        record = legacy
     return result.data[0] if result.data else record
 
 
@@ -1203,23 +1235,88 @@ def insert_health_recommendations(
 ) -> None:
     rows = []
     for r in recommendations:
+        fingerprint = str(r.get("fingerprint") or _recommendation_fingerprint(
+            category=str(r.get("category") or ""),
+            title=str(r.get("title") or ""),
+        ))
         rows.append({
             "id": str(uuid.uuid4()),
             "run_id": run_id,
             "repo_id": repo_id,
             "user_id": user_id,
+            "fingerprint": fingerprint,
             "priority_rank": int(r.get("rank", 0)),
             "category": r.get("category"),
             "title": r.get("title", ""),
             "description": r.get("description", ""),
+            "severity": r.get("severity", "medium"),
+            "impact": r.get("impact", "medium"),
             "estimated_effort": r.get("estimated_effort", ""),
+            "confidence": float(r.get("confidence", 0.0)),
+            "confidence_basis": r.get("confidence_basis", "evidence"),
+            "explanation": r.get("explanation"),
+            "evidence": r.get("evidence", {}),
             "expected_score_gain": int(r.get("expected_score_gain", 0)),
             "impact_score": float(r.get("impact_score", 0.0)),
             "action_items": r.get("action_items", []),
             "affected_files": r.get("affected_files", []),
+            "affected_symbols": r.get("affected_symbols", []),
+            "suggested_solution": r.get("suggested_solution"),
+            "dependencies": r.get("dependencies", []),
+            "risk": r.get("risk", "medium"),
         })
     if rows:
-        supabase.table("repository_health_recommendations").insert(rows).execute()
+        try:
+            supabase.table("repository_health_recommendations").insert(rows).execute()
+        except Exception as e:
+            if not _is_missing_column_error(
+                e,
+                [
+                    "fingerprint",
+                    "severity",
+                    "impact",
+                    "confidence",
+                    "confidence_basis",
+                    "explanation",
+                    "evidence",
+                    "affected_symbols",
+                    "suggested_solution",
+                    "dependencies",
+                    "risk",
+                ],
+            ):
+                raise
+            legacy_rows = [
+                _strip_record_keys(
+                    row,
+                    [
+                        "fingerprint",
+                        "severity",
+                        "impact",
+                        "confidence",
+                        "confidence_basis",
+                        "explanation",
+                        "evidence",
+                        "affected_symbols",
+                        "suggested_solution",
+                        "dependencies",
+                        "risk",
+                    ],
+                )
+                for row in rows
+            ]
+            supabase.table("repository_health_recommendations").insert(legacy_rows).execute()
+
+        for row in rows:
+            upsert_health_recommendation_state(
+                supabase,
+                repo_id=repo_id,
+                user_id=user_id,
+                fingerprint=str(row.get("fingerprint") or ""),
+                category=str(row.get("category") or ""),
+                title=str(row.get("title") or ""),
+                status="OPEN",
+            )
 
 
 def get_latest_health_run(supabase: Client, *, repo_id: str, user_id: str) -> Optional[Dict[str, Any]]:
@@ -1409,18 +1506,44 @@ def get_health_recommendations(supabase: Client, *, run_id: str, user_id: str) -
             .execute()
         )
         rows = result.data or []
+        lifecycle_states = get_health_recommendation_states(
+            supabase,
+            repo_id=str(rows[0].get("repo_id") or "") if rows else "",
+            user_id=user_id,
+        ) if rows else {}
+
         normalized = []
         for row in rows:
+            fingerprint = str(row.get("fingerprint") or _recommendation_fingerprint(
+                category=str(row.get("category") or ""),
+                title=str(row.get("title") or ""),
+            ))
+            state = lifecycle_states.get(fingerprint, {})
             normalized.append({
+                "recommendation_id": row.get("id"),
+                "fingerprint": fingerprint,
                 "rank": row.get("priority_rank", 0),
                 "title": row.get("title", ""),
                 "description": row.get("description", ""),
                 "category": row.get("category"),
+                "severity": row.get("severity", "medium"),
+                "impact": row.get("impact", "medium"),
                 "estimated_effort": row.get("estimated_effort", ""),
+                "confidence": float(row.get("confidence", 0.0) or 0.0),
+                "confidence_basis": row.get("confidence_basis") or "evidence",
+                "explanation": row.get("explanation") or row.get("description", ""),
+                "evidence": row.get("evidence") or {},
                 "expected_score_gain": row.get("expected_score_gain", 0),
                 "impact_score": row.get("impact_score", 0.0),
                 "action_items": row.get("action_items", []),
                 "affected_files": row.get("affected_files", []),
+                "affected_symbols": row.get("affected_symbols", []),
+                "suggested_solution": row.get("suggested_solution"),
+                "dependencies": row.get("dependencies", []),
+                "risk": row.get("risk", "medium"),
+                "current_status": state.get("status", "OPEN"),
+                "dismissed_reason": state.get("dismissed_reason"),
+                "lifecycle_updated_at": state.get("updated_at"),
             })
         return normalized
     except Exception as e:
@@ -1479,6 +1602,100 @@ def get_health_history(
             return []
         logger.warning(f"get_health_history failed for repo_id='{repo_id}': {e}")
         return []
+
+
+def get_health_recommendation_states(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+) -> Dict[str, Dict[str, Any]]:
+    if not repo_id:
+        return {}
+    try:
+        result = (
+            supabase.table("repository_health_recommendation_states")
+            .select("*")
+            .eq("repo_id", repo_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = result.data or []
+        return {
+            str(row.get("fingerprint")): {
+                "status": row.get("status") or "OPEN",
+                "dismissed_reason": row.get("dismissed_reason"),
+                "updated_at": row.get("updated_at") or row.get("created_at"),
+            }
+            for row in rows
+            if row.get("fingerprint")
+        }
+    except Exception as e:
+        if _is_missing_health_table_error(e) or _is_missing_column_error(e, ["fingerprint", "status"]):
+            return {}
+        logger.warning(f"get_health_recommendation_states failed for repo_id='{repo_id}': {e}")
+        return {}
+
+
+def upsert_health_recommendation_state(
+    supabase: Client,
+    *,
+    repo_id: str,
+    user_id: str,
+    fingerprint: str,
+    category: str,
+    title: str,
+    status: str,
+    dismissed_reason: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if not fingerprint or status not in _RECOMMENDATION_LIFECYCLE_STATUS:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "id": str(uuid.uuid4()),
+        "repo_id": repo_id,
+        "user_id": user_id,
+        "fingerprint": fingerprint,
+        "category": category,
+        "title": title,
+        "status": status,
+        "dismissed_reason": dismissed_reason,
+        "updated_at": now,
+    }
+
+    try:
+        existing = (
+            supabase.table("repository_health_recommendation_states")
+            .select("id")
+            .eq("repo_id", repo_id)
+            .eq("user_id", user_id)
+            .eq("fingerprint", fingerprint)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            result = (
+                supabase.table("repository_health_recommendation_states")
+                .update({
+                    "category": category,
+                    "title": title,
+                    "status": status,
+                    "dismissed_reason": dismissed_reason,
+                    "updated_at": now,
+                })
+                .eq("id", existing.data[0]["id"])
+                .execute()
+            )
+            rows = result.data or []
+            return rows[0] if rows else payload
+        result = supabase.table("repository_health_recommendation_states").insert(payload).execute()
+        rows = result.data or []
+        return rows[0] if rows else payload
+    except Exception as e:
+        if _is_missing_health_table_error(e) or _is_missing_column_error(e, ["fingerprint", "status"]):
+            return None
+        logger.warning(f"upsert_health_recommendation_state failed for repo_id='{repo_id}': {e}")
+        return None
 
 
 # -- AI Engineering Review -----------------------------------------------------

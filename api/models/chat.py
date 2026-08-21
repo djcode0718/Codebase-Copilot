@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 class CreateSessionRequest(BaseModel):
     repo_id: str
     session_type: str = "quick_ask"
+    context_scope: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateSessionResponse(BaseModel):
@@ -23,6 +24,7 @@ class SendMessageRequest(BaseModel):
     query: str
     display_text: Optional[str] = None
     is_cta_followup: Optional[bool] = False
+    context_scope: Dict[str, Any] = Field(default_factory=dict)
 
     @property
     def query_stripped(self) -> str:

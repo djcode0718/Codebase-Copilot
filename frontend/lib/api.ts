@@ -34,6 +34,7 @@ import type {
   ExplorerTestDiscoveryResult,
   ExplorerTestRunResult,
   ExplorerHistory,
+  RecommendationLifecycleStatus,
 } from './types';
 
 const DEFAULT_API_BASE = 'http://localhost:8000';
@@ -560,6 +561,26 @@ export async function getRepositoryHealthCategoryDetails(
     cache: 'no-store',
   });
   if (!res.ok) throw new Error('Failed to load category details');
+  return res.json();
+}
+
+/** PATCH /api/repo/{repo_id}/health/recommendations/{recommendation_id}/status */
+export async function updateRepositoryHealthRecommendationStatus(
+  token: string,
+  repoId: string,
+  recommendationId: string,
+  status: RecommendationLifecycleStatus,
+  reason?: string,
+): Promise<{ recommendation_id: string; fingerprint: string; status: string; reason?: string; updated_at: string }> {
+  const res = await fetch(apiUrl(`/api/repo/${repoId}/health/recommendations/${recommendationId}/status`), {
+    method: 'PATCH',
+    headers: authHeaders(token),
+    body: JSON.stringify({ status, reason }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? 'Failed to update recommendation status');
+  }
   return res.json();
 }
 

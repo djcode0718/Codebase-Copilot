@@ -263,17 +263,38 @@ function EvalTrendCharts({ points }: { points: EvalHistoryPoint[] }) {
 
 function EvalComparisonPanel({
   comparison,
+  previousRunComparison,
   baselineId,
   onSelectBaseline,
   history,
 }: {
   comparison: EvalComparisonResponse | null;
+  previousRunComparison: EvalComparisonResponse | null;
   baselineId: string;
   onSelectBaseline: (id: string) => void;
   history: EvalHistoryPoint[];
 }) {
   if (!comparison?.comparison) return null;
   const c = comparison.comparison;
+  const baselineLabel = baselineId ? 'selected baseline' : 'previous run';
+
+  const previous = previousRunComparison?.comparison;
+  const regressionCallouts = [
+    previous?.overall_score_delta !== undefined && previous.overall_score_delta < 0 ? `Overall score down ${Math.abs(previous.overall_score_delta).toFixed(2)}` : null,
+    previous?.hit_rate_delta !== undefined && previous.hit_rate_delta < 0 ? `Hit rate dropped ${pct(Math.abs(previous.hit_rate_delta))}` : null,
+    previous?.faithfulness_delta !== undefined && previous.faithfulness_delta < 0 ? `Faithfulness dropped ${pct(Math.abs(previous.faithfulness_delta))}` : null,
+    previous?.latency_delta_ms !== undefined && previous.latency_delta_ms > 0 ? `Latency increased ${ms(previous.latency_delta_ms)}` : null,
+    previous?.estimated_cost_delta_usd !== undefined && previous.estimated_cost_delta_usd > 0 ? `Cost increased ${usd(previous.estimated_cost_delta_usd)}` : null,
+  ].filter((item): item is string => Boolean(item));
+
+  const improvementCallouts = [
+    previous?.overall_score_delta !== undefined && previous.overall_score_delta > 0 ? `Overall score up ${previous.overall_score_delta.toFixed(2)}` : null,
+    previous?.hit_rate_delta !== undefined && previous.hit_rate_delta > 0 ? `Hit rate improved ${pct(previous.hit_rate_delta)}` : null,
+    previous?.faithfulness_delta !== undefined && previous.faithfulness_delta > 0 ? `Faithfulness improved ${pct(previous.faithfulness_delta)}` : null,
+    previous?.latency_delta_ms !== undefined && previous.latency_delta_ms < 0 ? `Latency reduced ${ms(Math.abs(previous.latency_delta_ms))}` : null,
+    previous?.estimated_cost_delta_usd !== undefined && previous.estimated_cost_delta_usd < 0 ? `Cost reduced ${usd(Math.abs(previous.estimated_cost_delta_usd))}` : null,
+  ].filter((item): item is string => Boolean(item));
+
   return (
     <div className="rounded-[1.5rem] border border-border bg-card/80 p-5 shadow-sm shadow-black/5">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
@@ -289,12 +310,39 @@ function EvalComparisonPanel({
           ))}
         </select>
       </div>
+      <div className="mb-3 rounded-xl border border-border bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+        Since {baselineLabel}: current {comparison.current?.id?.slice(0, 8) ?? 'n/a'} ({comparison.current?.created_at ? new Date(comparison.current.created_at).toLocaleString() : 'n/a'})
+        {' '}vs baseline {comparison.baseline?.id?.slice(0, 8) ?? 'n/a'} ({comparison.baseline?.created_at ? new Date(comparison.baseline.created_at).toLocaleString() : 'n/a'}).
+      </div>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <div className="rounded-xl border border-border bg-background/40 p-3"><p className="text-xs text-muted-foreground">Overall</p><p className="font-heading text-lg">{c.overall_score_delta.toFixed(2)}</p></div>
         <div className="rounded-xl border border-border bg-background/40 p-3"><p className="text-xs text-muted-foreground">Hit rate</p><p className="font-heading text-lg">{pct(c.hit_rate_delta)}</p></div>
         <div className="rounded-xl border border-border bg-background/40 p-3"><p className="text-xs text-muted-foreground">Faithfulness</p><p className="font-heading text-lg">{pct(c.faithfulness_delta)}</p></div>
         <div className="rounded-xl border border-border bg-background/40 p-3"><p className="text-xs text-muted-foreground">Latency</p><p className="font-heading text-lg">{ms(c.latency_delta_ms)}</p></div>
         <div className="rounded-xl border border-border bg-background/40 p-3"><p className="text-xs text-muted-foreground">Cost delta</p><p className="font-heading text-lg">{usd(c.estimated_cost_delta_usd)}</p></div>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-red-300">Regressions since previous run</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Current {previousRunComparison?.current?.created_at ? new Date(previousRunComparison.current.created_at).toLocaleString() : 'n/a'}
+            {' '}vs previous {previousRunComparison?.baseline?.created_at ? new Date(previousRunComparison.baseline.created_at).toLocaleString() : 'n/a'}
+          </p>
+          {regressionCallouts.length === 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground">No regressions detected since the previous run.</p>
+          ) : (
+            regressionCallouts.map((item) => <p key={item} className="mt-1 text-xs text-muted-foreground">- {item}</p>)
+          )}
+        </div>
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-300">Improvements since previous run</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Uses latest run pair from compare API.</p>
+          {improvementCallouts.length === 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground">No improvements detected since the previous run.</p>
+          ) : (
+            improvementCallouts.map((item) => <p key={item} className="mt-1 text-xs text-muted-foreground">- {item}</p>)
+          )}
+        </div>
       </div>
     </div>
   );
@@ -392,6 +440,7 @@ function useEvalData(repoId: string) {
   const [evalData, setEvalData] = useState<EvalSummary | null>(null);
   const [history, setHistory] = useState<EvalHistoryPoint[]>([]);
   const [comparison, setComparison] = useState<EvalComparisonResponse | null>(null);
+  const [previousRunComparison, setPreviousRunComparison] = useState<EvalComparisonResponse | null>(null);
   const [selectedMode, setSelectedMode] = useState<'quick' | 'standard' | 'deep' | 'benchmark'>('standard');
   const [selectedBaselineId, setSelectedBaselineId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -411,6 +460,7 @@ function useEvalData(repoId: string) {
         setHistory(h.points ?? []);
         const c = await compareEvals(t, repoId);
         setComparison(c);
+        setPreviousRunComparison(c);
       } catch { /* no eval yet */ }
       setLoading(false);
     }
@@ -421,8 +471,13 @@ function useEvalData(repoId: string) {
     try {
       const h = await getEvalHistory(activeToken, repoId, 30);
       setHistory(h.points ?? []);
-      const c = await compareEvals(activeToken, repoId, baselineId ? { baselineEvalId: baselineId } : undefined);
+      const [selectedComparison, latestPairComparison] = await Promise.all([
+        compareEvals(activeToken, repoId, baselineId ? { baselineEvalId: baselineId } : undefined),
+        compareEvals(activeToken, repoId),
+      ]);
+      const c = selectedComparison;
       setComparison(c);
+      setPreviousRunComparison(latestPairComparison);
     } catch {
       // Keep existing dashboard data visible even if history/compare fails.
     }
@@ -498,6 +553,7 @@ function useEvalData(repoId: string) {
     evalData,
     history,
     comparison,
+    previousRunComparison,
     selectedMode,
     selectedBaselineId,
     loading,
@@ -600,6 +656,7 @@ export default function EvalPage() {
           <EvalEfficiencyPanel evalData={evalData} />
           <EvalComparisonPanel
             comparison={comparison}
+            previousRunComparison={previousRunComparison}
             baselineId={selectedBaselineId}
             onSelectBaseline={refreshComparisonWithBaseline}
             history={history}

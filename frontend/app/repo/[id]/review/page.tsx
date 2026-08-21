@@ -33,6 +33,7 @@ import {
   getExplorerTree,
   getExplorerHistory,
   getLatestRepositoryHealth,
+  updateRepositoryHealthRecommendationStatus,
   getReview,
   listReviews,
   runExplorerFileReview,
@@ -42,7 +43,20 @@ import {
   reviewFiles,
   reviewPullRequest,
 } from '@/lib/api';
-import type { ExplorerFileDetails, ExplorerFixProposal, ExplorerReviewResult, ExplorerTestRunResult, ExplorerTreeNode, ReviewFixResponse, ReviewHistoryItem, ReviewRun } from '@/lib/types';
+import type {
+  ExplorerFileDetails,
+  ExplorerFixProposal,
+  ExplorerReviewResult,
+  ExplorerTestDiscoveryResult,
+  ExplorerTestRunResult,
+  ExplorerTreeNode,
+  HealthRecommendation,
+  RecommendationLifecycleStatus,
+  ReviewFixResponse,
+  ReviewHistoryItem,
+  ReviewRun,
+} from '@/lib/types';
+import EngineeringActionRunTimeline, { type EngineeringActionEvent } from '@/components/repo/EngineeringActionRunTimeline';
 import { toast } from 'sonner';
 
 function SeverityPill({ severity }: { severity: string }) {
@@ -135,6 +149,16 @@ function formatLastModified(value?: string | null): string {
     hour12: true,
     timeZone: 'UTC',
   }).format(date);
+}
+
+function buildActionEvent(action: string, status: EngineeringActionEvent['status'], detail?: string): EngineeringActionEvent {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at: new Date().toISOString(),
+    action,
+    status,
+    detail,
+  };
 }
 
 interface FileActionRibbonProps {
@@ -281,6 +305,8 @@ type ReviewRibbonActionsArgs = {
   setShowRibbonDiff: Dispatch<SetStateAction<boolean>>;
   setSelectedFile: Dispatch<SetStateAction<ExplorerFileDetails | null>>;
   onCoverageMeasured: (path: string, coverage: number | null) => void;
+  onTimelineEvent: (event: EngineeringActionEvent) => void;
+  onTestDiscovery: (discovery: ExplorerTestDiscoveryResult | null) => void;
 };
 
 function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
@@ -299,22 +325,27 @@ function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
     setShowRibbonDiff,
     setSelectedFile,
     onCoverageMeasured,
+    onTimelineEvent,
+    onTestDiscovery,
   } = args;
 
   const runRibbonAction = useCallback(async <T,>(actionName: string, fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> => {
     if (!token || !selectedFilePath) return undefined;
+    onTimelineEvent(buildActionEvent(actionName, 'started', selectedFilePath));
     try {
       setRibbonAction(actionName);
       const result = await fn();
       if (successMsg) toast.success(successMsg);
+      onTimelineEvent(buildActionEvent(actionName, 'succeeded'));
       return result;
     } catch (err) {
+      onTimelineEvent(buildActionEvent(actionName, 'failed', err instanceof Error ? err.message : 'Action failed'));
       toast.error(err instanceof Error ? err.message : `${actionName.replace('_', ' ')} failed`);
       return undefined;
     } finally {
       setRibbonAction(null);
     }
-  }, [selectedFilePath, setRibbonAction, token]);
+  }, [onTimelineEvent, selectedFilePath, setRibbonAction, token]);
 
   const runRibbonReview = useCallback(async (type: string) => {
     const result = await runRibbonAction(type, () =>
@@ -327,19 +358,34 @@ function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
   const runRibbonGenerateTests = useCallback(async () => {
     await runRibbonAction('generate_tests', async () => {
       const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
+      onTestDiscovery(discovered);
       setRibbonHistory(`Generated tests (${discovered.tests.length}): ${discovered.tests.slice(0, 6).join(', ') || 'none'}`);
     }, 'Generated test candidates');
-  }, [repoId, runRibbonAction, selectedFilePath, setRibbonHistory, token]);
+  }, [onTestDiscovery, repoId, runRibbonAction, selectedFilePath, setRibbonHistory, token]);
 
   const runRibbonTests = useCallback(async () => {
     await runRibbonAction('run_tests', async () => {
       const discovered = await discoverExplorerTests(token, repoId, [selectedFilePath]);
-      const run = await runExplorerTests(token, repoId, discovered.tests.slice(0, 12), 55);
+      onTestDiscovery(discovered);
+      const testsToRun = discovered.tests.slice(0, 12);
+      if (testsToRun.length === 0) {
+        setRibbonTests({
+          status: 'skipped',
+          tests: [],
+          passed: 0,
+          failed: 0,
+          duration_seconds: 0,
+          coverage: null,
+          output: 'No impacted tests discovered for this file.',
+        });
+        return;
+      }
+      const run = await runExplorerTests(token, repoId, testsToRun, 55);
       setRibbonTests(run);
       onCoverageMeasured(selectedFilePath, run.coverage);
       toast.success(`${run.status.toUpperCase()}: ${run.passed} passed, ${run.failed} failed`);
     });
-  }, [onCoverageMeasured, repoId, runRibbonAction, selectedFilePath, setRibbonTests, token]);
+  }, [onCoverageMeasured, onTestDiscovery, onTimelineEvent, repoId, runRibbonAction, selectedFilePath, setRibbonTests, token]);
 
   const runRibbonGenerateFix = useCallback(async () => {
     const finding = ribbonReview?.findings?.[0]?.finding || 'Improve maintainability and robustness in this file';
@@ -725,6 +771,11 @@ export default function RepositoryReviewPage() {
   const [ribbonAction, setRibbonAction] = useState<string | null>(null);
   const [showRibbonDiff, setShowRibbonDiff] = useState(false);
   const [repoHealthScore, setRepoHealthScore] = useState<number | null>(null);
+  const [healthRecommendations, setHealthRecommendations] = useState<HealthRecommendation[]>([]);
+  const [selectedRecommendationId, setSelectedRecommendationId] = useState('');
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [actionTimeline, setActionTimeline] = useState<EngineeringActionEvent[]>([]);
+  const [testDiscovery, setTestDiscovery] = useState<ExplorerTestDiscoveryResult | null>(null);
   const inferredRepoIdsRef = useRef<Set<string>>(new Set());
   const previousRepoIdRef = useRef<string | null>(null);
 
@@ -756,6 +807,11 @@ export default function RepositoryReviewPage() {
     setRibbonAction(null);
     setShowRibbonDiff(false);
     setRepoHealthScore(null);
+    setHealthRecommendations([]);
+    setSelectedRecommendationId('');
+    setStatusUpdating(false);
+    setActionTimeline([]);
+    setTestDiscovery(null);
   }, [repoId]);
 
   const setFilePathAndActivate: Dispatch<SetStateAction<string>> = useCallback((next) => {
@@ -884,6 +940,8 @@ export default function RepositoryReviewPage() {
     setRibbonTests(null);
     setRibbonHistory('');
     setShowRibbonDiff(false);
+    setActionTimeline([]);
+    setTestDiscovery(null);
   }, [selectedFilePath]);
 
   useEffect(() => {
@@ -916,10 +974,15 @@ export default function RepositoryReviewPage() {
         const latest = await getLatestRepositoryHealth(token, repoId);
         if (!cancelled) {
           setRepoHealthScore(latest.latest?.top_level?.repository_health ?? readCachedRepoHealthScore(repoId));
+          const recs = latest.latest?.recommendations ?? [];
+          setHealthRecommendations(recs);
+          setSelectedRecommendationId((prev) => prev || recs[0]?.recommendation_id || '');
         }
       } catch {
         if (!cancelled) {
           setRepoHealthScore(readCachedRepoHealthScore(repoId));
+          setHealthRecommendations([]);
+          setSelectedRecommendationId('');
         }
       }
     }
@@ -952,6 +1015,54 @@ export default function RepositoryReviewPage() {
   const ribbonHealthScore = useMemo(() => {
     return computeRibbonHealthScore(selectedFile, repoHealthScore);
   }, [selectedFile, repoHealthScore]);
+
+  const appendTimelineEvent = useCallback((event: EngineeringActionEvent) => {
+    setActionTimeline((prev) => [event, ...prev].slice(0, 40));
+  }, []);
+
+  const scopedRecommendations = useMemo(() => {
+    const normalizedPath = normalizePath(selectedFilePath).toLowerCase();
+    if (!normalizedPath) return healthRecommendations.slice(0, 10);
+    const matched = healthRecommendations.filter((rec) =>
+      (rec.affected_files ?? []).some((file) => normalizePath(file).toLowerCase() === normalizedPath)
+    );
+    return matched.length > 0 ? matched : healthRecommendations.slice(0, 10);
+  }, [healthRecommendations, selectedFilePath]);
+
+  useEffect(() => {
+    if (!scopedRecommendations.length) {
+      setSelectedRecommendationId('');
+      return;
+    }
+    const hasSelected = scopedRecommendations.some((rec) => rec.recommendation_id === selectedRecommendationId);
+    if (!hasSelected) {
+      setSelectedRecommendationId(scopedRecommendations[0]?.recommendation_id || '');
+    }
+  }, [scopedRecommendations, selectedRecommendationId]);
+
+  const handleSetLifecycleStatus = useCallback(async (status: RecommendationLifecycleStatus, reason?: string) => {
+    const recommendationId = selectedRecommendationId;
+    if (!token || !recommendationId) return;
+    setStatusUpdating(true);
+    try {
+      await updateRepositoryHealthRecommendationStatus(token, repoId, recommendationId, status, reason);
+      setHealthRecommendations((prev) =>
+        prev.map((rec) =>
+          rec.recommendation_id === recommendationId
+            ? { ...rec, current_status: status, dismissed_reason: reason ?? null, lifecycle_updated_at: new Date().toISOString() }
+            : rec
+        )
+      );
+      appendTimelineEvent(buildActionEvent('lifecycle_status', 'succeeded', `${status} for ${recommendationId.slice(0, 8)}`));
+      toast.success(`Recommendation marked ${status.replace(/_/g, ' ').toLowerCase()}`);
+    } catch (err) {
+      appendTimelineEvent(buildActionEvent('lifecycle_status', 'failed', err instanceof Error ? err.message : 'Status update failed'));
+      toast.error(err instanceof Error ? err.message : 'Failed to update recommendation status');
+    } finally {
+      setStatusUpdating(false);
+    }
+  }, [appendTimelineEvent, repoId, selectedRecommendationId, token]);
+
   const {
     runRibbonReview,
     runRibbonGenerateTests,
@@ -975,6 +1086,8 @@ export default function RepositoryReviewPage() {
     setShowRibbonDiff,
     setSelectedFile,
     onCoverageMeasured: handleCoverageMeasured,
+    onTimelineEvent: appendTimelineEvent,
+    onTestDiscovery: setTestDiscovery,
   });
 
   useEffect(() => {
@@ -1039,6 +1152,19 @@ export default function RepositoryReviewPage() {
           setShowRibbonDiff={setShowRibbonDiff}
           ribbonTests={ribbonTests}
           ribbonHistory={ribbonHistory}
+        />
+      )}
+
+      {selectedFilePath && (
+        <EngineeringActionRunTimeline
+          scopeLabel={selectedFilePath}
+          events={actionTimeline}
+          recommendations={scopedRecommendations}
+          selectedRecommendationId={selectedRecommendationId}
+          onSelectRecommendation={setSelectedRecommendationId}
+          onSetLifecycleStatus={handleSetLifecycleStatus}
+          statusUpdating={statusUpdating}
+          testSelection={testDiscovery}
         />
       )}
 

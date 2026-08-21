@@ -388,15 +388,55 @@ export interface HealthFinding {
 }
 
 export interface HealthRecommendation {
+  recommendation_id?: string;
+  fingerprint?: string;
   rank: number;
   title: string;
   description: string;
   category: HealthCategoryName;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  impact: 'low' | 'medium' | 'high';
   estimated_effort: string;
+  confidence: number;
+  confidence_basis: string;
+  explanation?: string;
+  evidence: Record<string, unknown>;
   expected_score_gain: number;
   impact_score: number;
   action_items: string[];
   affected_files: string[];
+  affected_symbols: string[];
+  suggested_solution?: string;
+  dependencies: string[];
+  risk: 'low' | 'medium' | 'high';
+  current_status: RecommendationLifecycleStatus;
+  dismissed_reason?: string | null;
+  lifecycle_updated_at?: string | null;
+}
+
+export type RecommendationLifecycleStatus =
+  | 'OPEN'
+  | 'ACCEPTED'
+  | 'FIX_GENERATED'
+  | 'DIFF_REVIEW'
+  | 'TESTING'
+  | 'VERIFIED'
+  | 'RESOLVED'
+  | 'DISMISSED';
+
+export interface HealthAnalysisContext {
+  repository?: string;
+  branch?: string;
+  commit_sha?: string;
+  index_version?: string;
+  indexed_at?: string | null;
+  analysis_version: string;
+}
+
+export interface HealthHistoryState {
+  has_sufficient_history: boolean;
+  baseline_message?: string | null;
+  data_points: number;
 }
 
 export interface HealthRun {
@@ -407,6 +447,8 @@ export interface HealthRun {
   categories: HealthCategoryScore[];
   findings: HealthFinding[];
   recommendations: HealthRecommendation[];
+  analysis_context?: HealthAnalysisContext | null;
+  history_state?: HealthHistoryState | null;
   executive_summary: string;
   strengths: string[];
   weaknesses: string[];
@@ -433,6 +475,9 @@ export interface HealthHistoryPoint {
 export interface HealthHistoryResponse {
   repo_id: string;
   points: HealthHistoryPoint[];
+  has_sufficient_history: boolean;
+  baseline_message?: string | null;
+  data_points: number;
   improved_categories: string[];
   declining_categories: string[];
   new_risks: string[];
@@ -491,6 +536,7 @@ export interface ReviewRun {
   findings: ReviewFinding[];
   changed_files: string[];
   commit_hash?: string | null;
+  analysis_context?: Record<string, unknown>;
   created_at?: string;
 }
 
@@ -502,6 +548,7 @@ export interface ReviewHistoryItem {
   summary: string;
   commit_hash?: string | null;
   changed_files: string[];
+  analysis_context?: Record<string, unknown>;
   created_at?: string;
 }
 
@@ -585,6 +632,17 @@ export interface ExplorerFixProposal {
 export interface ExplorerTestDiscoveryResult {
   tests: string[];
   count: number;
+  selection_strategy?: string;
+  candidate_tokens?: string[];
+  rationale?: ExplorerTestSelectionReason[];
+}
+
+export interface ExplorerTestSelectionReason {
+  test: string;
+  reason: string;
+  matched_tokens: string[];
+  matched_paths: string[];
+  score: number;
 }
 
 export interface ExplorerTestRunResult {

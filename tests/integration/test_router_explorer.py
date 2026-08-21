@@ -90,7 +90,21 @@ class TestRepositoryExplorerTests:
 
         monkeypatch.setattr(
             "api.routers.explorer.explorer_service.discover_impacted_tests",
-            lambda repo, **kwargs: {"tests": ["tests/unit/test_chat.py"], "count": 1},
+            lambda repo, **kwargs: {
+                "tests": ["tests/unit/test_chat.py"],
+                "count": 1,
+                "selection_strategy": "token_path_overlap",
+                "candidate_tokens": ["chat_service", "test_chat_service"],
+                "rationale": [
+                    {
+                        "test": "tests/unit/test_chat.py",
+                        "reason": "Matched 1 token(s): chat_service",
+                        "matched_tokens": ["chat_service"],
+                        "matched_paths": ["api/services/chat_service.py"],
+                        "score": 0.3,
+                    }
+                ],
+            },
         )
         monkeypatch.setattr(
             "api.routers.explorer.explorer_service.run_targeted_tests",
@@ -111,6 +125,8 @@ class TestRepositoryExplorerTests:
         )
         assert discover.status_code == 200
         assert discover.json()["count"] == 1
+        assert discover.json()["selection_strategy"] == "token_path_overlap"
+        assert discover.json()["rationale"][0]["test"] == "tests/unit/test_chat.py"
 
         run = client.post(
             f"/api/repo/{fake_repo_id}/explorer/tests/run",

@@ -1108,13 +1108,26 @@ class RecommendationEngine:
                     continue
                 affected_scale = max(1, len(finding.affected_files) + len(finding.affected_modules))
                 impact_score = round((SEVERITY_MULTIPLIER.get(finding.severity, 1.0) * (1 + math.log1p(affected_scale))) * max(1.0, finding.expected_score_gain / 2), 2)
+                confidence = round(min(0.99, max(0.25, result.confidence * (0.7 + min(0.3, len(finding.affected_files) / 20.0)))), 2)
                 items.append({
                     "category": result.category,
                     "title": finding.title,
                     "description": finding.recommendation,
+                    "severity": finding.severity,
+                    "impact": self._impact_label(impact_score),
                     "expected_score_gain": max(1, finding.expected_score_gain),
                     "impact_score": impact_score,
+                    "confidence": confidence,
+                    "confidence_basis": "repository_evidence",
+                    "explanation": finding.details,
+                    "evidence": finding.evidence or {},
                     "affected_files": finding.affected_files[:12],
+                    "affected_symbols": self._affected_symbols(finding.evidence),
+                    "suggested_solution": finding.recommendation,
+                    "dependencies": [],
+                    "risk": self._risk_from_severity(finding.severity),
+                    "current_status": "OPEN",
+                    "dismissed_reason": None,
                     "action_items": self._action_items_for_finding(finding),
                     "estimated_effort": self._estimate_effort(finding),
                 })
@@ -1124,6 +1137,26 @@ class RecommendationEngine:
         for i, item in enumerate(items[:10], start=1):
             ranked.append({"rank": i, **item})
         return ranked
+
+    def _impact_label(self, impact_score: float) -> str:
+        if impact_score >= 12:
+            return "high"
+        if impact_score >= 6:
+            return "medium"
+        return "low"
+
+    def _risk_from_severity(self, severity: str) -> str:
+        if severity in {"critical", "high"}:
+            return "high"
+        if severity == "medium":
+            return "medium"
+        return "low"
+
+    def _affected_symbols(self, evidence: Dict[str, Any]) -> List[str]:
+        symbols = evidence.get("symbols") if isinstance(evidence, dict) else None
+        if isinstance(symbols, list):
+            return [str(item) for item in symbols[:12] if str(item).strip()]
+        return []
 
     def _estimate_effort(self, finding: Finding) -> str:
         size = len(finding.affected_files)

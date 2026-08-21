@@ -731,15 +731,39 @@ def discover_impacted_tests(
     if not os.path.isdir(tests_root):
         return {"tests": [], "count": 0}
 
-    candidates = _collect_test_candidates(relative_paths)
+    token_sources = _collect_test_candidate_sources(relative_paths)
+    candidates = sorted(token_sources.keys())
+    rationale: List[Dict[str, Any]] = []
     for test_path in _iter_repo_files(tests_root):
         rel = os.path.relpath(test_path, repo_root).replace("\\", "/")
         low_rel = rel.lower()
-        if any(token in low_rel for token in candidates):
+        matched_tokens = [token for token in candidates if token in low_rel]
+        if matched_tokens:
             discovered.append(rel)
+            matched_paths: List[str] = []
+            for token in matched_tokens:
+                matched_paths.extend(token_sources.get(token, []))
+            unique_paths = sorted(set(matched_paths))
+            rationale.append(
+                {
+                    "test": rel,
+                    "reason": f"Matched {len(matched_tokens)} token(s): {', '.join(matched_tokens[:4])}",
+                    "matched_tokens": matched_tokens,
+                    "matched_paths": unique_paths,
+                    "score": round(len(matched_tokens) * 0.2 + len(unique_paths) * 0.1, 3),
+                }
+            )
 
     deduped = sorted(set(discovered))
-    result = {"tests": deduped[:80], "count": len(deduped)}
+    rationale_by_test = {item["test"]: item for item in rationale}
+    selected_tests = deduped[:80]
+    result = {
+        "tests": selected_tests,
+        "count": len(deduped),
+        "selection_strategy": "token_path_overlap",
+        "candidate_tokens": candidates,
+        "rationale": [rationale_by_test[test] for test in selected_tests if test in rationale_by_test],
+    }
     logger.info(
         "Explorer discover_impacted_tests completed: repo_id=%s discovered=%s",
         repo.get("id"),
@@ -748,18 +772,31 @@ def discover_impacted_tests(
     return result
 
 
-def _collect_test_candidates(relative_paths: List[str]) -> List[str]:
-    tokens: List[str] = []
+def _collect_test_candidate_sources(relative_paths: List[str]) -> Dict[str, List[str]]:
+    token_sources: Dict[str, List[str]] = {}
+
+    def _add_token(token: str, source_path: str) -> None:
+        cleaned = token.strip().lower()
+        if not cleaned:
+            return
+        if cleaned not in token_sources:
+            token_sources[cleaned] = []
+        token_sources[cleaned].append(source_path)
+
     for path in relative_paths:
         rel = _normalize_rel_path(path)
+        if not rel:
+            continue
         base = os.path.splitext(os.path.basename(rel))[0].lower()
         if base:
-            tokens.append(base)
-            tokens.append(f"test_{base}")
+            _add_token(base, rel)
+            _add_token(f"test_{base}", rel)
         parts = [p.lower() for p in rel.split("/") if p]
         if parts:
-            tokens.extend(parts[-2:])
-    return sorted(set(t for t in tokens if t))
+            for part in parts[-2:]:
+                _add_token(part, rel)
+
+    return {token: sorted(set(paths)) for token, paths in token_sources.items()}
 
 
 def _iter_repo_files(root: str):

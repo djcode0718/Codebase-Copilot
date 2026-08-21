@@ -22,6 +22,8 @@ from api.models.health import (
     HealthHistoryPoint,
     HealthHistoryResponse,
     HealthLatestResponse,
+    RecommendationStatusUpdateRequest,
+    RecommendationStatusUpdateResponse,
     HealthRunResponse,
 )
 from api.routers._repo_access import ensure_repo_access
@@ -148,7 +150,10 @@ def _load_previous_health_context(
         previous_overall = int(latest_run["repository_health"])
         return previous_scores, previous_findings, previous_overall
 
-    transient_latest = _latest_transient_run(repo_id, user_id)
+    # Use in-memory transient history for trend carryover. Avoid loading
+    # persisted fallback snapshots here, which can pollute a fresh baseline.
+    transient_runs = _TRANSIENT_HEALTH_RUNS.get(_transient_key(repo_id, user_id), [])
+    transient_latest = transient_runs[-1] if transient_runs else None
     if not transient_latest:
         return None, None, None
 
@@ -156,6 +161,28 @@ def _load_previous_health_context(
     transient_findings = _transient_problem_titles(transient_latest)
     transient_overall = int(transient_latest.get("top_level", {}).get("repository_health", 0))
     return transient_scores or None, transient_findings or None, transient_overall
+
+
+def _build_analysis_context(repo: Dict[str, Any], run_payload: Dict[str, Any]) -> Dict[str, Any]:
+    top = run_payload.get("top_level", {})
+    return {
+        "repository": repo.get("name") or repo.get("index_name") or repo.get("id"),
+        "branch": repo.get("active_branch") or repo.get("default_branch") or "unknown",
+        "commit_sha": repo.get("active_commit_sha") or "unknown",
+        "index_version": repo.get("index_name") or "unknown",
+        "indexed_at": repo.get("indexed_at"),
+        "analysis_version": "health-v2",
+        "analysis_generated_at": top.get("last_analysis"),
+    }
+
+
+def _build_history_state(points_count: int) -> Dict[str, Any]:
+    enough = points_count > 1
+    return {
+        "has_sufficient_history": enough,
+        "baseline_message": None if enough else "Health baseline established. Future analyses will appear here.",
+        "data_points": points_count,
+    }
 
 
 def _build_history_points(supabase: Client, runs: list[dict], user_id: str) -> list[HealthHistoryPoint]:
@@ -210,28 +237,52 @@ async def run_repository_health_analysis(
         previous_findings=previous_findings,
         previous_overall_score=previous_overall,
     )
+    analysis_context = _build_analysis_context(repo, run_payload)
+    run_payload["analysis_context"] = analysis_context
 
 
     try:
-        run_record = supabase_service.insert_health_run(
-            supabase,
-            repo_id=repo_id,
-            user_id=user_id,
-            top_level=run_payload["top_level"],
-            executive_summary=run_payload["executive_summary"],
-            strengths=run_payload["strengths"],
-            weaknesses=run_payload["weaknesses"],
-            critical_risks=run_payload["critical_risks"],
-            architecture_risks=run_payload["architecture_risks"],
-            security_risks=run_payload["security_risks"],
-            performance_risks=run_payload["performance_risks"],
-            recommended_sprint=run_payload["recommended_sprint"],
-            improved_categories=run_payload["improved_categories"],
-            declining_categories=run_payload["declining_categories"],
-            new_risks=run_payload["new_risks"],
-            resolved_risks=run_payload["resolved_risks"],
-            benchmark=run_payload["benchmark"],
-        )
+        try:
+            run_record = supabase_service.insert_health_run(
+                supabase,
+                repo_id=repo_id,
+                user_id=user_id,
+                top_level=run_payload["top_level"],
+                executive_summary=run_payload["executive_summary"],
+                strengths=run_payload["strengths"],
+                weaknesses=run_payload["weaknesses"],
+                critical_risks=run_payload["critical_risks"],
+                architecture_risks=run_payload["architecture_risks"],
+                security_risks=run_payload["security_risks"],
+                performance_risks=run_payload["performance_risks"],
+                recommended_sprint=run_payload["recommended_sprint"],
+                improved_categories=run_payload["improved_categories"],
+                declining_categories=run_payload["declining_categories"],
+                new_risks=run_payload["new_risks"],
+                resolved_risks=run_payload["resolved_risks"],
+                benchmark=run_payload["benchmark"],
+                analysis_context=analysis_context,
+            )
+        except TypeError:
+            run_record = supabase_service.insert_health_run(
+                supabase,
+                repo_id=repo_id,
+                user_id=user_id,
+                top_level=run_payload["top_level"],
+                executive_summary=run_payload["executive_summary"],
+                strengths=run_payload["strengths"],
+                weaknesses=run_payload["weaknesses"],
+                critical_risks=run_payload["critical_risks"],
+                architecture_risks=run_payload["architecture_risks"],
+                security_risks=run_payload["security_risks"],
+                performance_risks=run_payload["performance_risks"],
+                recommended_sprint=run_payload["recommended_sprint"],
+                improved_categories=run_payload["improved_categories"],
+                declining_categories=run_payload["declining_categories"],
+                new_risks=run_payload["new_risks"],
+                resolved_risks=run_payload["resolved_risks"],
+                benchmark=run_payload["benchmark"],
+            )
 
         supabase_service.insert_health_category_scores(
             supabase,
@@ -255,7 +306,30 @@ async def run_repository_health_analysis(
             recommendations=run_payload["recommendations"],
         )
 
-        response = _hydrate_health_run_response(supabase, run_record["id"], repo_id, user_id)
+        persisted_recommendations = supabase_service.get_health_recommendations(
+            supabase,
+            run_id=run_record["id"],
+            user_id=user_id,
+        )
+        response = HealthRunResponse(
+            run_id=run_record["id"],
+            repo_id=repo_id,
+            generated_at=run_record.get("created_at") or datetime.now(timezone.utc),
+            top_level=run_payload["top_level"],
+            categories=run_payload["categories"],
+            findings=run_payload["findings"],
+            recommendations=persisted_recommendations or run_payload["recommendations"],
+            analysis_context=analysis_context,
+            history_state=_build_history_state(2 if previous_overall is not None else 1),
+            executive_summary=run_payload.get("executive_summary") or "",
+            strengths=run_payload.get("strengths") or [],
+            weaknesses=run_payload.get("weaknesses") or [],
+            critical_risks=run_payload.get("critical_risks") or [],
+            architecture_risks=run_payload.get("architecture_risks") or [],
+            security_risks=run_payload.get("security_risks") or [],
+            performance_risks=run_payload.get("performance_risks") or [],
+            recommended_sprint=run_payload.get("recommended_sprint") or [],
+        )
         payload = response.model_dump(mode="json")
         _append_transient_run(repo_id, user_id, payload)
         return response
@@ -298,13 +372,60 @@ async def get_repository_health_history(
     points = _build_history_points(supabase, runs, user_id) if runs else _build_transient_history_points(repo_id, user_id, limit)
 
     latest = runs[0] if runs else None
+    history_state = _build_history_state(len(points))
     return HealthHistoryResponse(
         repo_id=repo_id,
         points=points,
+        has_sufficient_history=history_state["has_sufficient_history"],
+        baseline_message=history_state["baseline_message"],
+        data_points=history_state["data_points"],
         improved_categories=(latest or {}).get("improved_categories") or [],
         declining_categories=(latest or {}).get("declining_categories") or [],
         new_risks=(latest or {}).get("new_risks") or [],
         resolved_risks=(latest or {}).get("resolved_risks") or [],
+    )
+
+
+@router.patch("/{repo_id}/health/recommendations/{recommendation_id}/status", response_model=RecommendationStatusUpdateResponse)
+async def update_recommendation_status(
+    repo_id: str,
+    recommendation_id: str,
+    body: RecommendationStatusUpdateRequest,
+    user_id: str = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    ensure_repo_access(supabase, repo_id, user_id)
+
+    latest = supabase_service.get_latest_health_run(supabase, repo_id=repo_id, user_id=user_id)
+    if not latest:
+        raise HTTPException(status_code=404, detail="No health run found")
+
+    recs = supabase_service.get_health_recommendations(supabase, run_id=latest["id"], user_id=user_id)
+    target = next((rec for rec in recs if str(rec.get("recommendation_id")) == recommendation_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+
+    fingerprint = str(target.get("fingerprint") or "")
+    if not fingerprint:
+        raise HTTPException(status_code=400, detail="Recommendation fingerprint unavailable")
+
+    saved = supabase_service.upsert_health_recommendation_state(
+        supabase,
+        repo_id=repo_id,
+        user_id=user_id,
+        fingerprint=fingerprint,
+        category=str(target.get("category") or ""),
+        title=str(target.get("title") or ""),
+        status=body.status,
+        dismissed_reason=body.reason if body.status == "DISMISSED" else None,
+    )
+    updated_at = (saved or {}).get("updated_at") or datetime.now(timezone.utc)
+    return RecommendationStatusUpdateResponse(
+        recommendation_id=recommendation_id,
+        fingerprint=fingerprint,
+        status=body.status,
+        reason=body.reason,
+        updated_at=updated_at,
     )
 
 
@@ -353,6 +474,7 @@ def _hydrate_health_run_response(supabase: Client, run_id: str, repo_id: str, us
     categories = supabase_service.get_health_category_scores(supabase, run_id=run_id, user_id=user_id)
     findings = supabase_service.get_health_findings(supabase, run_id=run_id, user_id=user_id)
     recommendations = supabase_service.get_health_recommendations(supabase, run_id=run_id, user_id=user_id)
+    recent_runs = supabase_service.get_recent_health_runs(supabase, repo_id=repo_id, user_id=user_id, limit=2)
 
     return HealthRunResponse(
         run_id=run_id,
@@ -371,6 +493,15 @@ def _hydrate_health_run_response(supabase: Client, run_id: str, repo_id: str, us
         categories=categories,
         findings=findings,
         recommendations=recommendations,
+        analysis_context=run.get("analysis_context") or {
+            "repository": repo_id,
+            "branch": "unknown",
+            "commit_sha": "unknown",
+            "index_version": run.get("repo_id") or "unknown",
+            "indexed_at": None,
+            "analysis_version": "health-v2",
+        },
+        history_state=_build_history_state(len(recent_runs)),
         executive_summary=run.get("executive_summary") or "",
         strengths=run.get("strengths") or [],
         weaknesses=run.get("weaknesses") or [],
@@ -383,6 +514,14 @@ def _hydrate_health_run_response(supabase: Client, run_id: str, repo_id: str, us
 
 
 def _build_transient_health_run_response(repo_id: str, run_payload: dict) -> HealthRunResponse:
+    analysis_context = run_payload.get("analysis_context") or {
+        "repository": repo_id,
+        "branch": "unknown",
+        "commit_sha": "unknown",
+        "index_version": "transient",
+        "indexed_at": None,
+        "analysis_version": "health-v2",
+    }
     return HealthRunResponse(
         run_id=f"transient-{uuid.uuid4()}",
         repo_id=repo_id,
@@ -391,6 +530,8 @@ def _build_transient_health_run_response(repo_id: str, run_payload: dict) -> Hea
         categories=run_payload["categories"],
         findings=run_payload["findings"],
         recommendations=run_payload["recommendations"],
+        analysis_context=analysis_context,
+        history_state=_build_history_state(1),
         executive_summary=run_payload.get("executive_summary") or "",
         strengths=run_payload.get("strengths") or [],
         weaknesses=run_payload.get("weaknesses") or [],

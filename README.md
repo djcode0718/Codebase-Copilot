@@ -31,6 +31,10 @@
 | **Branch Workspace** | Added branch-aware repository workspace with searchable branch selector, branch status, checkout/pull/default-branch actions, and branch comparison/merge-readiness APIs (`/api/repo/{repo_id}/branches/*`) while preserving existing workflows |
 | **Authentication UX** | Enterprise-grade Sign In / Sign Up refresh with GitHub-first OAuth, Google/Microsoft OAuth options, premium guest-mode entry, caps-lock + inline validation feedback, feature/trust previews, and first-run Instant Workspace onboarding while preserving existing auth/session flows |
 | **Chat thread actions** | Message-level controls now mirror ChatGPT-style workflows: user messages support Copy + Edit, assistant messages support Copy + Like/Dislike + Try Again; share action removed from thread bubbles |
+| **Health intelligence trust layer** | Health runs now carry explicit analysis context (repository/branch/commit/index version), recommendations include evidence-backed confidence metadata, and history APIs expose baseline-vs-trend state so charts only show trends when sufficient history exists |
+| **Recommendation lifecycle workflow** | Repository health recommendations now support lifecycle state transitions (`OPEN -> ACCEPTED -> FIX_GENERATED -> DIFF_REVIEW -> TESTING -> VERIFIED -> RESOLVED` and `DISMISSED`) with persistent fingerprint-based tracking |
+| **Unified contextual chat metadata** | Chat message persistence now includes workspace context (`repo_id`, active branch, commit SHA, index version) plus optional contextual scope payload to reduce repeated user prompting |
+| **Review trace context** | AI engineering review runs now persist analysis context in payload metadata so findings stay tied to branch/commit/index state |
 
 The system combines:
 
@@ -107,6 +111,11 @@ Every repository now gets an automatic **Health Score (0–100, graded A–F)** 
 - LLM provider configuration
 - Codebase richness
 
+Health intelligence now also distinguishes **baseline vs trend** explicitly:
+- If only one historical point exists, the UI shows: **"Health baseline established. Future analyses will appear here."**
+- Trend charts and deltas are only shown when enough historical data exists.
+- Recommendations are now lifecycle-aware and can be tracked from open finding to verified resolution.
+
 ### 🏗️ Mermaid Diagram Rendering
 
 AI responses containing `mermaid` code blocks are **automatically rendered as interactive diagrams** directly in the chat interface — supporting architecture diagrams, sequence diagrams, dependency graphs, and more.
@@ -122,6 +131,13 @@ Intelligence queries return **structured, collapsible response sections**:
 - **Risks** — identified risks and severity
 - **Recommendations** — actionable next steps
 - **Confidence** — evidence-based confidence level
+
+Repository health recommendation cards now include additional structured fields where available:
+- severity, impact, confidence, confidence basis
+- explanation + evidence
+- affected files/symbols
+- suggested solution
+- risk + lifecycle status
 
 ### 📤 Export Capabilities
 

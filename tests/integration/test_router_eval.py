@@ -201,6 +201,8 @@ class TestEvaluationHistoryAndCompare:
         body = resp.json()
         assert body["current"]["id"] == "eval-new"
         assert body["baseline"]["id"] == "eval-old"
+        assert body["current"]["created_at"].startswith("2025-01-02T00:00:00")
+        assert body["baseline"]["created_at"].startswith("2025-01-01T00:00:00")
         assert body["comparison"]["overall_score_delta"] > 0
 
 
