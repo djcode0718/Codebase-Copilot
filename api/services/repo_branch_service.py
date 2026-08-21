@@ -58,6 +58,29 @@ def _safe_run_git(repo_root: str, args: List[str], fallback: str = "") -> str:
         return fallback
 
 
+def _branch_ref_exists(repo_root: str, ref_name: str) -> bool:
+    return bool(_safe_run_git(repo_root, ["show-ref", "--verify", ref_name], ""))
+
+
+def _resolve_compare_ref(repo_root: str, branch: str) -> str:
+    """Resolve a branch to the best available ref for compare operations."""
+    normalized = _normalize_branch_name(branch)
+    if not normalized:
+        raise RuntimeError("Branch name is required.")
+
+    if _branch_ref_exists(repo_root, f"refs/heads/{normalized}"):
+        return normalized
+    if _branch_ref_exists(repo_root, f"refs/remotes/origin/{normalized}"):
+        return f"origin/{normalized}"
+
+    # Last resort: allow explicit revs that git can parse.
+    parsed = _safe_run_git(repo_root, ["rev-parse", "--verify", normalized], "")
+    if parsed:
+        return normalized
+
+    raise RuntimeError(f"Branch '{normalized}' was not found locally or on origin.")
+
+
 def _detect_default_branch(repo_root: str) -> str:
     head_ref = _safe_run_git(repo_root, ["symbolic-ref", "refs/remotes/origin/HEAD"], "")
     if head_ref.startswith("refs/remotes/origin/"):
@@ -233,7 +256,11 @@ def compare_branches(repo: Dict[str, Any], base_branch: str, target_branch: str)
 
     _run_git(repo_root, ["fetch", "--all", "--prune"])
 
-    name_only = _safe_run_git(repo_root, ["diff", "--name-only", f"{base}...{target}"], "")
+    base_ref = _resolve_compare_ref(repo_root, base)
+    target_ref = _resolve_compare_ref(repo_root, target)
+
+    # Compare branch snapshots directly so file-count stays accurate regardless selector order.
+    name_only = _run_git(repo_root, ["diff", "--name-only", "--no-renames", base_ref, target_ref])
     files = [line.strip() for line in name_only.splitlines() if line.strip()]
 
     categories = {
