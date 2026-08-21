@@ -35,6 +35,7 @@
 | **Recommendation lifecycle workflow** | Repository health recommendations now support lifecycle state transitions (`OPEN -> ACCEPTED -> FIX_GENERATED -> DIFF_REVIEW -> TESTING -> VERIFIED -> RESOLVED` and `DISMISSED`) with persistent fingerprint-based tracking |
 | **Unified contextual chat metadata** | Chat message persistence now includes workspace context (`repo_id`, active branch, commit SHA, index version) plus optional contextual scope payload to reduce repeated user prompting |
 | **Review trace context** | AI engineering review runs now persist analysis context in payload metadata so findings stay tied to branch/commit/index state |
+| **Workspace stability hotfixes** | Fixed chat context-action runtime regressions and explorer action-toolbar crash paths (`contextActions`/`useMemo` wiring), added guarded auto-prompt dispatch to prevent re-entrant sends, and improved recommendation/finding explain handoff with file-scoped retry context |
 
 The system combines:
 
@@ -260,6 +261,10 @@ Recursive repository traversal, metadata-rich chunking, function-aware splitting
 ### 🧪 Comprehensive Automated Testing
 
 A dedicated `tests/` suite (pytest) covering config, ingestion, utilities, query routing, chunking, Supabase persistence, auth dependencies, Pydantic models, and every FastAPI router — **238 test functions across 13 test files**, run via a single `pytest` command.
+
+Frontend-focused regression checks now also include a lightweight Vitest harness for deterministic context/action behavior:
+- `frontend/lib/engineering-actions.test.ts`
+- `frontend/lib/chat-context.test.ts`
 
 ---
 
