@@ -1129,6 +1129,7 @@ class RecommendationEngine:
                     "current_status": "OPEN",
                     "dismissed_reason": None,
                     "action_items": self._action_items_for_finding(finding),
+                    "actions": self._actions_for_finding(result.category, finding),
                     "estimated_effort": self._estimate_effort(finding),
                 })
 
@@ -1175,6 +1176,42 @@ class RecommendationEngine:
         if finding.affected_modules:
             base.append(f"Coordinate changes across modules: {', '.join(sorted(set(finding.affected_modules))[:3])}")
         return base[:3]
+
+    def _actions_for_finding(self, category: str, finding: Finding) -> List[str]:
+        actions = [
+            "explain",
+            "open_evidence",
+            "review",
+            "generate_fix",
+            "generate_tests",
+            "show_diff",
+            "run_tests",
+            "reanalyze",
+            "ignore",
+        ]
+        if (category or "").lower() == "dependencies":
+            return [
+                "explain",
+                "open_evidence",
+                "dependency_risk",
+                "security",
+                "upgrade_impact",
+                "license",
+                "generate_upgrade_plan",
+                "review",
+                "ignore",
+            ]
+        if any(path.lower().endswith(("test.py", "_test.py", ".spec.ts", ".test.ts", ".test.tsx")) for path in finding.affected_files):
+            return [
+                "explain",
+                "coverage",
+                "missing_cases",
+                "generate_tests",
+                "run_tests",
+                "review",
+                "open_ai_chat",
+            ]
+        return actions
 
 
 class TrendAnalyzer:
@@ -1264,9 +1301,21 @@ class RepositoryHealthEngine:
 
         report = self._build_report(overall_score, category_results, findings, recommendations)
 
+        analyzed_at = datetime.now(timezone.utc)
+        branch = str(repo.get("active_branch") or repo.get("default_branch") or "unknown")
+        commit_sha = str(repo.get("active_commit_sha") or "unknown")
+
         return {
             "top_level": top_level,
-            "categories": [self._serialize_category(c) for c in category_results],
+            "categories": [
+                self._serialize_category(
+                    c,
+                    analysis_timestamp=analyzed_at,
+                    branch=branch,
+                    commit_sha=commit_sha,
+                )
+                for c in category_results
+            ],
             "findings": [self._serialize_finding(f) for f in findings],
             "recommendations": recommendations,
             "executive_summary": report["executive_summary"],
@@ -1423,10 +1472,25 @@ class RepositoryHealthEngine:
             "recommended_sprint": sprint_items,
         }
 
-    def _serialize_category(self, category: CategoryResult) -> Dict[str, Any]:
+    def _serialize_category(
+        self,
+        category: CategoryResult,
+        *,
+        analysis_timestamp: datetime,
+        branch: str,
+        commit_sha: str,
+    ) -> Dict[str, Any]:
         problems = [f.title for f in category.findings if f.finding_type == "problem"]
         positives = [f.title for f in category.findings if f.finding_type == "positive"]
         recs = [f.recommendation for f in category.findings if f.recommendation][:5]
+        severity_breakdown = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for finding in category.findings:
+            if finding.finding_type != "problem":
+                continue
+            sev = str(finding.severity or "low").lower()
+            if sev in severity_breakdown:
+                severity_breakdown[sev] += 1
+        files_analyzed = max(len(category.affected_files), len(category.findings))
         return {
             "category": category.category,
             "score": category.score,
@@ -1438,7 +1502,32 @@ class RepositoryHealthEngine:
             "recommendations": recs,
             "affected_files": category.affected_files,
             "affected_modules": category.affected_modules,
+            "confidence": round(float(category.confidence), 2),
+            "files_analyzed": files_analyzed,
+            "checks_performed": self._checks_for_category(category.category),
+            "findings_count": len(category.findings),
+            "severity_breakdown": severity_breakdown,
+            "analysis_timestamp": analysis_timestamp,
+            "branch": branch,
+            "commit_sha": commit_sha,
         }
+
+    def _checks_for_category(self, category: str) -> List[str]:
+        checks = {
+            "Architecture": ["dependency_graph_scan", "cycle_detection", "module_boundary_analysis"],
+            "Security": ["auth_guard_scan", "secret_pattern_scan", "sensitive_log_scan"],
+            "Testing": ["test_coverage_proxy", "test_mapping_scan", "negative_test_signal_scan"],
+            "Documentation": ["readme_presence", "doc_coverage_scan"],
+            "Performance": ["async_blocking_scan", "caching_signal_scan"],
+            "Maintainability": ["function_complexity_scan", "duplication_signal_scan"],
+            "Technical Debt": ["todo_fixme_scan", "legacy_marker_scan"],
+            "Dependencies": ["manifest_scan", "version_pin_scan"],
+            "Code Quality": ["lint_signal_scan", "style_signal_scan"],
+            "Scalability": ["concurrency_signal_scan", "queue_usage_scan"],
+            "Observability": ["logging_signal_scan", "tracing_signal_scan"],
+            "Developer Experience": ["onboarding_signal_scan", "tooling_script_scan"],
+        }
+        return checks.get(category, ["heuristic_repository_scan"])
 
     def _serialize_finding(self, finding: Finding) -> Dict[str, Any]:
         return {

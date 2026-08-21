@@ -52,12 +52,16 @@ def _build_branch_status_response(repo: dict, status: dict) -> BranchStatusRespo
         ahead=int(status.get("ahead", 0) or 0),
         behind=int(status.get("behind", 0) or 0),
         changed_files=int(status.get("changed_files", 0) or 0),
+        files_added=int(status.get("files_added", 0) or 0),
+        files_modified=int(status.get("files_modified", 0) or 0),
+        files_deleted=int(status.get("files_deleted", 0) or 0),
         changed_paths=list(status.get("changed_paths") or []),
         captured_at=status.get("captured_at", ""),
         indexed_at=status.get("indexed_at"),
         index_status=status.get("index_status", "unknown"),
         evaluation_status=status.get("evaluation_status", "unknown"),
         health_score=status.get("health_score"),
+        sync_status=status.get("sync_status", "unknown"),
     )
 
 

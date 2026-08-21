@@ -173,11 +173,48 @@ async def _rerank_nodes(resolved_query: str, raw_nodes):
     return sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
 
 
+def _to_int_or_none(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_line_range(metadata: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+    start = _to_int_or_none(
+        metadata.get("line_start")
+        or metadata.get("start_line")
+        or metadata.get("start")
+        or metadata.get("line")
+    )
+    end = _to_int_or_none(
+        metadata.get("line_end")
+        or metadata.get("end_line")
+        or metadata.get("end")
+    )
+    if start is not None and end is None:
+        end = start
+    if start is None and end is not None:
+        start = end
+    if start is not None and end is not None and end < start:
+        start, end = end, start
+    return start, end
+
+
 def _build_retrieved_files(reranked_nodes) -> List[dict]:
-    return [
-        {"path": n.node.metadata.get("path", "unknown"), "score": round(float(n.score or 0.0), 4)}
-        for n in reranked_nodes
-    ]
+    payload: List[dict] = []
+    for node_with_score in reranked_nodes:
+        metadata = getattr(node_with_score.node, "metadata", {}) or {}
+        line_start, line_end = _extract_line_range(metadata)
+        payload.append({
+            "path": metadata.get("path", "unknown"),
+            "score": round(float(node_with_score.score or 0.0), 4),
+            "line_start": line_start,
+            "line_end": line_end,
+        })
+    return payload
 
 
 def _build_context_str(reranked_nodes) -> str:

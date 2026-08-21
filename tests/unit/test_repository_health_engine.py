@@ -74,6 +74,10 @@ def test_ok():
 
         security = next(c for c in result["categories"] if c["category"] == "Security")
         assert security["detected_problems"]
+        assert isinstance(security["confidence"], float)
+        assert isinstance(security["files_analyzed"], int)
+        assert security["checks_performed"]
+        assert "severity_breakdown" in security
         assert any("hardcoded" in f["title"].lower() or "secret" in f["title"].lower() for f in result["findings"])
     finally:
         shutil.rmtree(repo_path, ignore_errors=True)

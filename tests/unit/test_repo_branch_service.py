@@ -58,12 +58,50 @@ def test_compare_branches_uses_resolved_refs_and_counts_files(monkeypatch) -> No
         if cmd == "fetch --all --prune":
             return ""
         if cmd == "diff --name-only --no-renames origin/main origin/feature/x":
-            return "api/services/repo_branch_service.py\nfrontend/components/repo/BranchWorkspacePanel.tsx"
+            return "api/services/repo_branch_service.py\nfrontend/components/repo/BranchWorkspacePanel.tsx\ntests/unit/test_repo_branch_service.py"
         raise AssertionError(f"Unexpected git command: {cmd}")
 
     monkeypatch.setattr(repo_branch_service, "_run_git", _fake_run_git)
 
     result = repo_branch_service.compare_branches({"id": "repo-1"}, base_branch="main", target_branch="feature/x")
 
-    assert result["changed_files"] == 2
+    assert result["changed_files"] == 3
     assert "api/services/repo_branch_service.py" in result["sample_changed_files"]
+    assert result["testing_changes"] >= 1
+    assert "health_impact_delta" in result
+    assert "security_impact_delta" in result
+    assert "test_impact_delta" in result
+
+
+def test_get_branch_status_includes_sync_breakdown(monkeypatch) -> None:
+    monkeypatch.setattr(repo_branch_service, "_repo_root", lambda _repo: "C:/tmp/repo")
+    monkeypatch.setattr(repo_branch_service, "_ahead_behind", lambda _root, _branch: (0, 0))
+
+    def _fake_safe_run_git(_repo_root: str, args: list[str], fallback: str = "") -> str:
+        cmd = " ".join(args)
+        if cmd == "rev-parse --abbrev-ref HEAD":
+            return "main"
+        if cmd == "rev-parse HEAD":
+            return "1234567890abcdef"
+        if cmd == "log -1 --pretty=%s":
+            return "feat: update branch summary"
+        if cmd == "log -1 --pretty=%an":
+            return "Copilot"
+        if cmd == "log -1 --pretty=%cI":
+            return "2026-08-21T00:00:00+00:00"
+        if cmd == "status --porcelain":
+            return "A  src/new.py\n M src/existing.py\nD  src/old.py\n?? src/untracked.py"
+        if cmd == "symbolic-ref refs/remotes/origin/HEAD":
+            return "refs/remotes/origin/main"
+        return fallback
+
+    monkeypatch.setattr(repo_branch_service, "_safe_run_git", _fake_safe_run_git)
+
+    status = repo_branch_service.get_branch_status({"status": "ready"})
+
+    assert status["changed_files"] == 4
+    assert status["files_added"] == 2
+    assert status["files_modified"] == 1
+    assert status["files_deleted"] == 1
+    assert status["sync_status"] == "local_changes"
+

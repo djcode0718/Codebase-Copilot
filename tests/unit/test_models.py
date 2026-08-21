@@ -200,12 +200,13 @@ class TestMessageResponse:
             role="assistant",
             content="Here is the answer...",
             query_mode="code_lookup",
-            retrieved_files=[{"path": "main.py", "score": 0.95}],
+            retrieved_files=[{"path": "main.py", "score": 0.95, "line_start": 21, "line_end": 34}],
             latency_ms=500,
         )
         assert r.query_mode == "code_lookup"
         assert len(r.retrieved_files) == 1
         assert r.retrieved_files[0].path == "main.py"
+        assert r.retrieved_files[0].line_start == 21
 
 
 class TestChatListItem:

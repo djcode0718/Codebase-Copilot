@@ -22,6 +22,7 @@ interface InspectorData {
 interface AIInspectorProps {
   data: InspectorData | null;
   streaming?: boolean;
+  onOpenEvidence?: (file: RetrievedFile) => void;
 }
 
 const MODE_CONFIG = {
@@ -48,9 +49,14 @@ function ScoreBar({ score }: { score: number }) {
   );
 }
 
-function FileChunk({ file, index }: { file: RetrievedFile; index: number }) {
+function FileChunk({ file, index, onOpenEvidence }: { file: RetrievedFile; index: number; onOpenEvidence?: (file: RetrievedFile) => void }) {
   const fileName = file.path.split('/').pop() ?? file.path;
   const dirPath = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
+  const lineLabel = file.line_start && file.line_end && file.line_end !== file.line_start
+    ? `L${file.line_start}-L${file.line_end}`
+    : file.line_start
+    ? `L${file.line_start}`
+    : null;
 
   return (
     <motion.div
@@ -63,12 +69,18 @@ function FileChunk({ file, index }: { file: RetrievedFile; index: number }) {
         {index + 1}
       </span>
       <FileCode2 size={11} className="text-muted-foreground flex-shrink-0" />
-      <div className="flex-1 min-w-0">
+      <button
+        type="button"
+        className="flex-1 min-w-0 text-left"
+        onClick={() => onOpenEvidence?.(file)}
+        disabled={!onOpenEvidence}
+        title={file.path}
+      >
         <p className="truncate text-[11px] font-medium text-foreground">{fileName}</p>
-        {dirPath && (
-          <p className="truncate text-[11px] text-muted-foreground">{dirPath}</p>
-        )}
-      </div>
+        <p className="truncate text-[11px] text-muted-foreground">
+          {dirPath}{lineLabel ? `${dirPath ? ' • ' : ''}${lineLabel}` : ''}
+        </p>
+      </button>
       <div className="flex items-center gap-1.5 flex-shrink-0">
         <ScoreBar score={file.score} />
         <span className="w-10 text-right font-mono text-[11px] text-muted-foreground">
@@ -153,7 +165,7 @@ function LatencyBar({
   );
 }
 
-export default function AIInspector({ data, streaming }: AIInspectorProps) {
+export default function AIInspector({ data, streaming, onOpenEvidence }: AIInspectorProps) {
   const [chunksOpen, setChunksOpen] = useState(true);
   const modeConfig = data?.queryMode ? MODE_CONFIG[data.queryMode] : null;
 
@@ -236,7 +248,7 @@ export default function AIInspector({ data, streaming }: AIInspectorProps) {
                     >
                       <div className="space-y-0.5 rounded-xl border border-border bg-card/80 p-2.5">
                         {data.retrievedFiles.map((f, i) => (
-                          <FileChunk key={`${f.path}-${i}`} file={f} index={i} />
+                          <FileChunk key={`${f.path}-${i}`} file={f} index={i} onOpenEvidence={onOpenEvidence} />
                         ))}
                       </div>
                     </motion.div>

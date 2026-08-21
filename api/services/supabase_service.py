@@ -21,16 +21,79 @@ _HEALTH_SCHEMA_CHECK_TTL_SECONDS = 60
 _REVIEW_SCHEMA_CHECK_TTL_SECONDS = 60
 _MISSING_REPO_MEMORY_TABLE_WARNED: Set[str] = set()
 _REPO_WORKSPACE_CONTEXT_CACHE: Dict[str, Dict[str, Any]] = {}
-_RECOMMENDATION_LIFECYCLE_STATUS = {
+_CANONICAL_RECOMMENDATION_LIFECYCLE_STATUS = {
+    "NEW",
+    "ACKNOWLEDGED",
+    "IN_PROGRESS",
+    "REGRESSED",
+    "IGNORED",
+    "RESOLVED",
+}
+_RECOMMENDATION_LIFECYCLE_STATUS = _CANONICAL_RECOMMENDATION_LIFECYCLE_STATUS | {
     "OPEN",
     "ACCEPTED",
     "FIX_GENERATED",
     "DIFF_REVIEW",
     "TESTING",
     "VERIFIED",
-    "RESOLVED",
     "DISMISSED",
 }
+_RECOMMENDATION_LEGACY_STATUS_MAP = {
+    "OPEN": "NEW",
+    "ACCEPTED": "ACKNOWLEDGED",
+    "FIX_GENERATED": "IN_PROGRESS",
+    "DIFF_REVIEW": "IN_PROGRESS",
+    "TESTING": "IN_PROGRESS",
+    "VERIFIED": "RESOLVED",
+    "DISMISSED": "IGNORED",
+}
+
+
+def _canonical_recommendation_status(status: Optional[str]) -> str:
+    normalized = str(status or "").strip().upper()
+    if normalized in _CANONICAL_RECOMMENDATION_LIFECYCLE_STATUS:
+        return normalized
+    if normalized in _RECOMMENDATION_LEGACY_STATUS_MAP:
+        return _RECOMMENDATION_LEGACY_STATUS_MAP[normalized]
+    return "NEW"
+
+
+def _recommendation_actions(category: str, affected_files: List[str]) -> List[str]:
+    base = [
+        "explain",
+        "open_evidence",
+        "review",
+        "generate_fix",
+        "generate_tests",
+        "show_diff",
+        "run_tests",
+        "reanalyze",
+        "ignore",
+    ]
+    lowered_category = (category or "").lower()
+    if lowered_category == "dependencies":
+        return [
+            "explain",
+            "open_evidence",
+            "dependency_risk",
+            "security",
+            "upgrade_impact",
+            "license",
+            "generate_upgrade_plan",
+            "review",
+            "ignore",
+        ]
+    if any(str(path).lower().endswith(("test.py", "_test.py", ".spec.ts", ".test.ts", ".test.tsx")) for path in affected_files):
+        return [
+            "explain",
+            "coverage",
+            "missing_cases",
+            "generate_tests",
+            "run_tests",
+            "review",
+            "open_ai_chat",
+        ]
+    return base
 
 
 def _strip_record_keys(record: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
@@ -1315,7 +1378,7 @@ def insert_health_recommendations(
                 fingerprint=str(row.get("fingerprint") or ""),
                 category=str(row.get("category") or ""),
                 title=str(row.get("title") or ""),
-                status="OPEN",
+                status="NEW",
             )
 
 
@@ -1536,12 +1599,16 @@ def get_health_recommendations(supabase: Client, *, run_id: str, user_id: str) -
                 "expected_score_gain": row.get("expected_score_gain", 0),
                 "impact_score": row.get("impact_score", 0.0),
                 "action_items": row.get("action_items", []),
+                "actions": _recommendation_actions(
+                    category=str(row.get("category") or ""),
+                    affected_files=list(row.get("affected_files") or []),
+                ),
                 "affected_files": row.get("affected_files", []),
                 "affected_symbols": row.get("affected_symbols", []),
                 "suggested_solution": row.get("suggested_solution"),
                 "dependencies": row.get("dependencies", []),
                 "risk": row.get("risk", "medium"),
-                "current_status": state.get("status", "OPEN"),
+                "current_status": _canonical_recommendation_status(state.get("status")),
                 "dismissed_reason": state.get("dismissed_reason"),
                 "lifecycle_updated_at": state.get("updated_at"),
             })
@@ -1623,7 +1690,7 @@ def get_health_recommendation_states(
         rows = result.data or []
         return {
             str(row.get("fingerprint")): {
-                "status": row.get("status") or "OPEN",
+                "status": _canonical_recommendation_status(row.get("status")),
                 "dismissed_reason": row.get("dismissed_reason"),
                 "updated_at": row.get("updated_at") or row.get("created_at"),
             }
@@ -1648,6 +1715,7 @@ def upsert_health_recommendation_state(
     status: str,
     dismissed_reason: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    normalized_status = _canonical_recommendation_status(status)
     if not fingerprint or status not in _RECOMMENDATION_LIFECYCLE_STATUS:
         return None
     now = datetime.now(timezone.utc).isoformat()
@@ -1658,8 +1726,8 @@ def upsert_health_recommendation_state(
         "fingerprint": fingerprint,
         "category": category,
         "title": title,
-        "status": status,
-        "dismissed_reason": dismissed_reason,
+        "status": normalized_status,
+        "dismissed_reason": dismissed_reason if normalized_status == "IGNORED" else None,
         "updated_at": now,
     }
 
@@ -1679,8 +1747,8 @@ def upsert_health_recommendation_state(
                 .update({
                     "category": category,
                     "title": title,
-                    "status": status,
-                    "dismissed_reason": dismissed_reason,
+                    "status": normalized_status,
+                    "dismissed_reason": dismissed_reason if normalized_status == "IGNORED" else None,
                     "updated_at": now,
                 })
                 .eq("id", existing.data[0]["id"])

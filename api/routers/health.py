@@ -201,6 +201,49 @@ def _build_history_points(supabase: Client, runs: list[dict], user_id: str) -> l
     return points
 
 
+def _severity_breakdown(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+    out = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for finding in findings:
+        if finding.get("finding_type") != "problem":
+            continue
+        sev = str(finding.get("severity") or "low").lower()
+        if sev in out:
+            out[sev] += 1
+    return out
+
+
+def _checks_for_category(category: str) -> List[str]:
+    checks = {
+        "Architecture": ["dependency_graph_scan", "cycle_detection", "module_boundary_analysis"],
+        "Security": ["auth_guard_scan", "secret_pattern_scan", "sensitive_log_scan"],
+        "Testing": ["test_coverage_proxy", "test_mapping_scan", "negative_test_signal_scan"],
+        "Documentation": ["readme_presence", "doc_coverage_scan"],
+        "Performance": ["async_blocking_scan", "caching_signal_scan"],
+        "Maintainability": ["function_complexity_scan", "duplication_signal_scan"],
+        "Technical Debt": ["todo_fixme_scan", "legacy_marker_scan"],
+        "Dependencies": ["manifest_scan", "version_pin_scan"],
+        "Code Quality": ["lint_signal_scan", "style_signal_scan"],
+        "Scalability": ["concurrency_signal_scan", "queue_usage_scan"],
+        "Observability": ["logging_signal_scan", "tracing_signal_scan"],
+        "Developer Experience": ["onboarding_signal_scan", "tooling_script_scan"],
+    }
+    return checks.get(category, ["heuristic_repository_scan"])
+
+
+def _enrich_category_score(score: Dict[str, Any], *, findings: List[Dict[str, Any]], run: Dict[str, Any]) -> Dict[str, Any]:
+    analysis_context = run.get("analysis_context") or {}
+    row = dict(score)
+    row.setdefault("confidence", 0.0)
+    row.setdefault("files_analyzed", len(row.get("affected_files") or []) or len(findings))
+    row.setdefault("checks_performed", _checks_for_category(str(row.get("category") or "")))
+    row.setdefault("findings_count", len(findings))
+    row.setdefault("severity_breakdown", _severity_breakdown(findings))
+    row.setdefault("analysis_timestamp", run.get("created_at"))
+    row.setdefault("branch", analysis_context.get("branch") or "unknown")
+    row.setdefault("commit_sha", analysis_context.get("commit_sha") or "unknown")
+    return row
+
+
 def _build_transient_history_points(repo_id: str, user_id: str, limit: int) -> list[HealthHistoryPoint]:
     _load_transient_store_if_needed()
     runs = _TRANSIENT_HEALTH_RUNS.get(_transient_key(repo_id, user_id), [])
@@ -417,14 +460,15 @@ async def update_recommendation_status(
         category=str(target.get("category") or ""),
         title=str(target.get("title") or ""),
         status=body.status,
-        dismissed_reason=body.reason if body.status == "DISMISSED" else None,
+        dismissed_reason=body.reason if body.status == "IGNORED" else None,
     )
+    persisted_status = str((saved or {}).get("status") or body.status)
     updated_at = (saved or {}).get("updated_at") or datetime.now(timezone.utc)
     return RecommendationStatusUpdateResponse(
         recommendation_id=recommendation_id,
         fingerprint=fingerprint,
-        status=body.status,
-        reason=body.reason,
+        status=persisted_status,
+        reason=body.reason if persisted_status == "IGNORED" else None,
         updated_at=updated_at,
     )
 
@@ -456,12 +500,14 @@ async def get_repository_health_category_details(
         user_id=user_id,
         category=category,
     )
+    run = supabase_service.get_health_run_by_id(supabase, run_id=selected_run_id, user_id=user_id) or {}
+    enriched_score = _enrich_category_score(score, findings=findings, run=run)
 
     return HealthCategoryDetailResponse(
         repo_id=repo_id,
         run_id=selected_run_id,
         category=category,
-        score=score,
+        score=enriched_score,
         findings=findings,
     )
 
@@ -475,6 +521,22 @@ def _hydrate_health_run_response(supabase: Client, run_id: str, repo_id: str, us
     findings = supabase_service.get_health_findings(supabase, run_id=run_id, user_id=user_id)
     recommendations = supabase_service.get_health_recommendations(supabase, run_id=run_id, user_id=user_id)
     recent_runs = supabase_service.get_recent_health_runs(supabase, repo_id=repo_id, user_id=user_id, limit=2)
+
+    findings_by_category: Dict[str, List[Dict[str, Any]]] = {}
+    for finding in findings:
+        category = str(finding.get("category") or "")
+        if not category:
+            continue
+        findings_by_category.setdefault(category, []).append(finding)
+
+    enriched_categories = [
+        _enrich_category_score(
+            score,
+            findings=findings_by_category.get(str(score.get("category") or ""), []),
+            run=run,
+        )
+        for score in categories
+    ]
 
     return HealthRunResponse(
         run_id=run_id,
@@ -490,7 +552,7 @@ def _hydrate_health_run_response(supabase: Client, run_id: str, repo_id: str, us
             "language_detection": run.get("language_detection") or [],
             "framework_detection": run.get("framework_detection") or [],
         },
-        categories=categories,
+        categories=enriched_categories,
         findings=findings,
         recommendations=recommendations,
         analysis_context=run.get("analysis_context") or {

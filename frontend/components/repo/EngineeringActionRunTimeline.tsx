@@ -8,6 +8,11 @@ import type {
   HealthRecommendation,
   RecommendationLifecycleStatus,
 } from '@/lib/types';
+import {
+  canonicalLifecycleStatus,
+  lifecycleLabel,
+  LIFECYCLE_FLOW,
+} from '@/lib/recommendation-lifecycle';
 
 export type EngineeringActionEvent = {
   id: string;
@@ -28,24 +33,11 @@ type EngineeringActionRunTimelineProps = {
   testSelection: ExplorerTestDiscoveryResult | null;
 };
 
-const STATUS_FLOW: RecommendationLifecycleStatus[] = [
-  'ACCEPTED',
-  'FIX_GENERATED',
-  'DIFF_REVIEW',
-  'TESTING',
-  'VERIFIED',
-  'RESOLVED',
-];
-
 function eventTone(status: EngineeringActionEvent['status']): string {
   if (status === 'succeeded') return 'text-emerald-400';
   if (status === 'failed') return 'text-red-400';
   if (status === 'skipped') return 'text-amber-400';
   return 'text-blue-400';
-}
-
-function formatLifecycle(status: RecommendationLifecycleStatus): string {
-  return status.replace(/_/g, ' ').toLowerCase();
 }
 
 function recommendationOptionKey(rec: HealthRecommendation, index: number): string {
@@ -98,13 +90,13 @@ export default function EngineeringActionRunTimeline({
             </select>
             {selectedRecommendation && (
               <span className="text-xs text-muted-foreground">
-                Current: <span className="font-medium uppercase">{selectedRecommendation.current_status}</span>
+                Current: <span className="font-medium uppercase">{canonicalLifecycleStatus(selectedRecommendation.current_status)}</span>
               </span>
             )}
           </div>
 
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {STATUS_FLOW.map((status) => (
+            {LIFECYCLE_FLOW.map((status) => (
               <Button
                 key={status}
                 size="sm"
@@ -113,30 +105,9 @@ export default function EngineeringActionRunTimeline({
                 className="h-7 text-[11px]"
                 onClick={() => void onSetLifecycleStatus(status)}
               >
-                {formatLifecycle(status)}
+                {lifecycleLabel(status)}
               </Button>
             ))}
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!selectedRecommendation || statusUpdating}
-              className="h-7 text-[11px]"
-              onClick={() => {
-                const reason = window.prompt('Dismiss reason (optional)')?.trim();
-                void onSetLifecycleStatus('DISMISSED', reason || undefined);
-              }}
-            >
-              dismiss
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!selectedRecommendation || statusUpdating}
-              className="h-7 text-[11px]"
-              onClick={() => void onSetLifecycleStatus('OPEN')}
-            >
-              reopen
-            </Button>
             {statusUpdating && <Loader2 size={13} className="animate-spin text-muted-foreground ml-1" />}
           </div>
         </div>

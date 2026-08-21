@@ -339,6 +339,11 @@ class TestBranchWorkspace:
             "database_changes": 0,
             "business_logic_changes": 1,
             "dependency_changes": 0,
+            "testing_changes": 1,
+            "health_impact_delta": -2,
+            "security_impact_delta": 0,
+            "test_impact_delta": 1,
+            "impact_summary": "Estimated health delta -2; security delta 0; test coverage delta +1.",
             "risk_assessment": "Low",
             "merge_readiness": {
                 "overall_score": 92,

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -24,8 +25,12 @@ import type {
   HealthCategoryScore,
   HealthHistoryResponse,
   HealthRun,
+  RecommendationLifecycleStatus,
 } from '@/lib/types';
 import { toast } from 'sonner';
+import { getContextualEngineeringActions, type EngineeringActionId } from '@/lib/engineering-actions';
+import { queueChatContext } from '@/lib/chat-context';
+import { canonicalLifecycleStatus, lifecycleLabel } from '@/lib/recommendation-lifecycle';
 import {
   Line,
   LineChart,
@@ -154,6 +159,7 @@ function isSameLocalDay(a: Date, b: Date): boolean {
 }
 
 export default function RepositoryHealthDashboard({ repoId, token, disabled, onRunChange }: RepositoryHealthDashboardProps) {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [run, setRun] = useState<HealthRun | null>(null);
@@ -239,6 +245,24 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
     if (!run || !selected) return [];
     return run.findings.filter((f) => f.category === selected.category);
   }, [run, selected]);
+
+  const findingLifecycle = useMemo(() => {
+    const map = new Map<string, RecommendationLifecycleStatus>();
+    if (!run) return map;
+    for (const finding of run.findings) {
+      const findingFiles = new Set((finding.affected_files || []).map((file) => file.toLowerCase()));
+      const linked = run.recommendations.find((rec) => {
+        if (rec.category !== finding.category) return false;
+        const overlap = (rec.affected_files || []).some((file) => findingFiles.has(file.toLowerCase()));
+        if (overlap) return true;
+        return rec.title.toLowerCase().includes(finding.title.toLowerCase().slice(0, 18));
+      });
+      if (linked) {
+        map.set(finding.id, canonicalLifecycleStatus(linked.current_status));
+      }
+    }
+    return map;
+  }, [run]);
 
   const priorityImprovements = useMemo(() => {
     return categories
@@ -382,7 +406,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
 
   async function handleRecommendationStatus(
     recommendationId: string | undefined,
-    status: 'OPEN' | 'ACCEPTED' | 'FIX_GENERATED' | 'DIFF_REVIEW' | 'TESTING' | 'VERIFIED' | 'RESOLVED' | 'DISMISSED',
+    status: RecommendationLifecycleStatus,
     reason?: string,
   ) {
     if (!token || !recommendationId) return;
@@ -391,21 +415,69 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
       await updateRepositoryHealthRecommendationStatus(token, repoId, recommendationId, status, reason);
       setRun((prev) => {
         if (!prev) return prev;
+        const nextStatus = canonicalLifecycleStatus(status);
         return {
           ...prev,
           recommendations: prev.recommendations.map((rec) =>
             rec.recommendation_id === recommendationId
-              ? { ...rec, current_status: status, dismissed_reason: reason ?? null, lifecycle_updated_at: new Date().toISOString() }
+              ? {
+                ...rec,
+                current_status: nextStatus,
+                dismissed_reason: nextStatus === 'IGNORED' ? (reason ?? null) : null,
+                lifecycle_updated_at: new Date().toISOString(),
+              }
               : rec
           ),
         };
       });
-      toast.success(`Recommendation marked ${status.replace('_', ' ').toLowerCase()}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update recommendation status');
     } finally {
       setStatusUpdatingByRec((prev) => ({ ...prev, [recommendationId]: false }));
     }
+  }
+
+  async function handleRecommendationAction(rec: HealthRun['recommendations'][number], actionId: EngineeringActionId) {
+    if (actionId === 'ignore') {
+      if (rec.recommendation_id) {
+        await handleRecommendationStatus(rec.recommendation_id, 'DISMISSED', 'Ignored from recommendation actions');
+      }
+      return;
+    }
+    if (actionId === 'reanalyze') {
+      await handleRunAnalysis();
+      return;
+    }
+    if (actionId === 'open_evidence') {
+      setSelectedCategory(rec.category);
+      toast.message('Evidence highlighted in Category Details section');
+      return;
+    }
+    if (actionId === 'explain' || actionId === 'open_ai_chat') {
+      queueChatContext(
+        repoId,
+        `Explain recommendation: ${rec.title}. Include evidence, affected files, risk, and a safe implementation plan.`,
+        {
+          repo_id: repoId,
+          recommendation_id: rec.recommendation_id,
+          selected_file: rec.affected_files?.[0],
+          evidence_hint: JSON.stringify(rec.evidence || {}),
+        },
+      );
+      router.push(`/repo/${repoId}/chat`);
+      return;
+    }
+
+    const reviewPrompt = `${rec.title}\n\nCategory: ${rec.category}\nSeverity: ${rec.severity}\nAction: ${actionId.replace(/_/g, ' ')}\n\nEvidence: ${JSON.stringify(rec.evidence || {})}`;
+    try {
+      sessionStorage.setItem(
+        `codebase:review-prefill:${repoId}`,
+        JSON.stringify({ files: rec.affected_files || [], prompt: reviewPrompt }),
+      );
+    } catch {
+      // Ignore storage write failures and continue navigation.
+    }
+    router.push(`/repo/${repoId}/review`);
   }
 
   if (loading) {
@@ -632,6 +704,22 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                   {rec.affected_files.length > 0 && (
                     <p className="text-[11px] mt-2 text-muted-foreground">Affected: {rec.affected_files.slice(0, 4).join(', ')}</p>
                   )}
+                  {Object.keys(rec.evidence || {}).length > 0 && (
+                    <p className="text-[11px] mt-1 text-muted-foreground">Evidence keys: {Object.keys(rec.evidence || {}).slice(0, 5).join(', ')}</p>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {getContextualEngineeringActions({ kind: 'recommendation' }).slice(0, 6).map((action) => (
+                      <Button
+                        key={`${rec.rank}-${action.id}`}
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px]"
+                        onClick={() => void handleRecommendationAction(rec, action.id)}
+                      >
+                        {action.label}
+                      </Button>
+                    ))}
+                  </div>
                   {rec.recommendation_id && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <Button

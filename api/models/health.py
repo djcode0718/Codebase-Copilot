@@ -53,6 +53,14 @@ class HealthCategoryScore(BaseModel):
     recommendations: List[str] = Field(default_factory=list)
     affected_files: List[str] = Field(default_factory=list)
     affected_modules: List[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    files_analyzed: int = 0
+    checks_performed: List[str] = Field(default_factory=list)
+    findings_count: int = 0
+    severity_breakdown: Dict[str, int] = Field(default_factory=dict)
+    analysis_timestamp: Optional[datetime] = None
+    branch: Optional[str] = None
+    commit_sha: Optional[str] = None
 
 
 class HealthRecommendation(BaseModel):
@@ -72,12 +80,18 @@ class HealthRecommendation(BaseModel):
     expected_score_gain: int
     impact_score: float
     action_items: List[str] = Field(default_factory=list)
+    actions: List[str] = Field(default_factory=list)
     affected_files: List[str] = Field(default_factory=list)
     affected_symbols: List[str] = Field(default_factory=list)
     suggested_solution: Optional[str] = None
     dependencies: List[str] = Field(default_factory=list)
     risk: str = "medium"
     current_status: Literal[
+        "NEW",
+        "ACKNOWLEDGED",
+        "IN_PROGRESS",
+        "REGRESSED",
+        "IGNORED",
         "OPEN",
         "ACCEPTED",
         "FIX_GENERATED",
@@ -86,7 +100,7 @@ class HealthRecommendation(BaseModel):
         "VERIFIED",
         "RESOLVED",
         "DISMISSED",
-    ] = "OPEN"
+    ] = "NEW"
     dismissed_reason: Optional[str] = None
     lifecycle_updated_at: Optional[datetime] = None
 
@@ -159,6 +173,11 @@ class HealthHistoryResponse(BaseModel):
 
 class RecommendationStatusUpdateRequest(BaseModel):
     status: Literal[
+        "NEW",
+        "ACKNOWLEDGED",
+        "IN_PROGRESS",
+        "REGRESSED",
+        "IGNORED",
         "OPEN",
         "ACCEPTED",
         "FIX_GENERATED",

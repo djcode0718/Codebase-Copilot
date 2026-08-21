@@ -40,12 +40,16 @@ export interface BranchStatus {
   ahead: number;
   behind: number;
   changed_files: number;
+  files_added: number;
+  files_modified: number;
+  files_deleted: number;
   changed_paths: string[];
   captured_at: string;
   indexed_at?: string | null;
   index_status: string;
   evaluation_status: string;
   health_score?: number | null;
+  sync_status: string;
 }
 
 export interface BranchActionResponse {
@@ -78,6 +82,11 @@ export interface BranchComparison {
   database_changes: number;
   business_logic_changes: number;
   dependency_changes: number;
+  testing_changes: number;
+  health_impact_delta: number;
+  security_impact_delta: number;
+  test_impact_delta: number;
+  impact_summary: string;
   risk_assessment: string;
   merge_readiness: MergeReadiness;
   ai_executive_summary: string;
@@ -114,6 +123,8 @@ export interface IndexingEvent {
 export interface RetrievedFile {
   path: string;   // n.node.metadata.get("path", "unknown")
   score: number;  // round(float(n.score or 0.0), 4) — 4 decimal places
+  line_start?: number | null;
+  line_end?: number | null;
 }
 
 export type QueryMode = 'code_lookup' | 'architectural';
@@ -371,6 +382,14 @@ export interface HealthCategoryScore {
   recommendations: string[];
   affected_files: string[];
   affected_modules: string[];
+  confidence: number;
+  files_analyzed: number;
+  checks_performed: string[];
+  findings_count: number;
+  severity_breakdown: Record<string, number>;
+  analysis_timestamp?: string | null;
+  branch?: string | null;
+  commit_sha?: string | null;
 }
 
 export interface HealthFinding {
@@ -404,6 +423,7 @@ export interface HealthRecommendation {
   expected_score_gain: number;
   impact_score: number;
   action_items: string[];
+  actions: string[];
   affected_files: string[];
   affected_symbols: string[];
   suggested_solution?: string;
@@ -415,14 +435,12 @@ export interface HealthRecommendation {
 }
 
 export type RecommendationLifecycleStatus =
-  | 'OPEN'
-  | 'ACCEPTED'
-  | 'FIX_GENERATED'
-  | 'DIFF_REVIEW'
-  | 'TESTING'
-  | 'VERIFIED'
-  | 'RESOLVED'
-  | 'DISMISSED';
+  | 'NEW'
+  | 'ACKNOWLEDGED'
+  | 'IN_PROGRESS'
+  | 'REGRESSED'
+  | 'IGNORED'
+  | 'RESOLVED';
 
 export interface HealthAnalysisContext {
   repository?: string;

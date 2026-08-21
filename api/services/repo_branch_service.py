@@ -228,7 +228,27 @@ def get_branch_status(repo: Dict[str, Any]) -> Dict[str, Any]:
     commit_date = _safe_run_git(repo_root, ["log", "-1", "--pretty=%cI"], "")
     changed = _safe_run_git(repo_root, ["status", "--porcelain"], "")
     changed_files = [line for line in changed.splitlines() if line.strip()]
+    files_added = 0
+    files_modified = 0
+    files_deleted = 0
+    for line in changed_files:
+        status_code = (line[:2] if len(line) >= 2 else "").strip() or "??"
+        if "D" in status_code:
+            files_deleted += 1
+        elif "A" in status_code or status_code == "??":
+            files_added += 1
+        else:
+            files_modified += 1
     ahead, behind = _ahead_behind(repo_root, branch)
+
+    if changed_files:
+        sync_status = "local_changes"
+    elif behind > 0:
+        sync_status = "behind_remote"
+    elif ahead > 0:
+        sync_status = "ahead_remote"
+    else:
+        sync_status = "up_to_date"
 
     return {
         "current_branch": branch,
@@ -239,11 +259,15 @@ def get_branch_status(repo: Dict[str, Any]) -> Dict[str, Any]:
         "ahead": ahead,
         "behind": behind,
         "changed_files": len(changed_files),
+        "files_added": files_added,
+        "files_modified": files_modified,
+        "files_deleted": files_deleted,
         "changed_paths": [line[3:] for line in changed_files[:50] if len(line) > 3],
         "default_branch": _detect_default_branch(repo_root),
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "indexed_at": repo.get("indexed_at"),
         "index_status": "ready" if repo.get("status") == "ready" else repo.get("status") or "unknown",
+        "sync_status": sync_status,
     }
 
 
@@ -272,6 +296,7 @@ def compare_branches(repo: Dict[str, Any], base_branch: str, target_branch: str)
         "database": 0,
         "business_logic": 0,
         "dependencies": 0,
+        "testing": 0,
     }
 
     for path in files:
@@ -292,8 +317,18 @@ def compare_branches(repo: Dict[str, Any], base_branch: str, target_branch: str)
             categories["business_logic"] += 1
         if any(token in lower for token in ("requirements", "package", "poetry", "npm", "pip", "cargo", "go.mod")):
             categories["dependencies"] += 1
+        if any(token in lower for token in ("test", "spec", "pytest", "jest", "coverage")):
+            categories["testing"] += 1
 
     risk_points = categories["security"] * 3 + categories["database"] * 3 + categories["architecture"] * 2 + categories["technical_debt"]
+    health_impact_delta = -(
+        categories["security"] * 3
+        + categories["database"] * 2
+        + categories["technical_debt"]
+        + categories["dependencies"]
+    )
+    security_impact_delta = -(categories["security"] * 2 + categories["database"])
+    test_impact_delta = categories["testing"] - max(0, categories["business_logic"] + categories["api"] - categories["testing"])
     overall_score = max(0, 100 - risk_points)
     blocking_issues: List[str] = []
     warnings: List[str] = []
@@ -322,6 +357,15 @@ def compare_branches(repo: Dict[str, Any], base_branch: str, target_branch: str)
         "database_changes": categories["database"],
         "business_logic_changes": categories["business_logic"],
         "dependency_changes": categories["dependencies"],
+        "testing_changes": categories["testing"],
+        "health_impact_delta": int(health_impact_delta),
+        "security_impact_delta": int(security_impact_delta),
+        "test_impact_delta": int(test_impact_delta),
+        "impact_summary": (
+            f"Estimated health delta {int(health_impact_delta):+d}; "
+            f"security delta {int(security_impact_delta):+d}; "
+            f"test coverage delta {int(test_impact_delta):+d}."
+        ),
         "risk_assessment": "High" if risk_points >= 15 else "Medium" if risk_points >= 7 else "Low",
         "merge_readiness": {
             "overall_score": overall_score,

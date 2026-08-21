@@ -8,6 +8,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 import type { ChatEvent, RetrievedFile, QueryMode } from '@/lib/types';
+import type { ChatContextScope } from '@/lib/chat-context';
 
 function parseSseEvents(chunk: string, flush = false): { events: ChatEvent[]; rest: string } {
   const normalized = chunk.replace(/\r\n/g, '\n');
@@ -56,7 +57,14 @@ interface UseChatStreamResult {
   streamedTextRef: React.MutableRefObject<string>;
   pendingMetadata: Omit<StreamedResponse, 'content'> | null;
   error: string | null;
-  sendMessage: (chatId: string, query: string, token: string, displayText?: string, isCtaFollowup?: boolean) => Promise<StreamedResponse | null>;
+  sendMessage: (
+    chatId: string,
+    query: string,
+    token: string,
+    displayText?: string,
+    isCtaFollowup?: boolean,
+    contextScope?: ChatContextScope | null,
+  ) => Promise<StreamedResponse | null>;
   cancelStream: () => void;
 }
 
@@ -151,7 +159,14 @@ export function useChatStream(): UseChatStreamResult {
   }, []);
 
   const sendMessage = useCallback(
-    async (chatId: string, query: string, token: string, displayText?: string, isCtaFollowup?: boolean): Promise<StreamedResponse | null> => {
+    async (
+      chatId: string,
+      query: string,
+      token: string,
+      displayText?: string,
+      isCtaFollowup?: boolean,
+      contextScope?: ChatContextScope | null,
+    ): Promise<StreamedResponse | null> => {
       // Cancel any in-progress stream
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -183,7 +198,12 @@ export function useChatStream(): UseChatStreamResult {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ query, display_text: displayText, is_cta_followup: isCtaFollowup }),
+          body: JSON.stringify({
+            query,
+            display_text: displayText,
+            is_cta_followup: isCtaFollowup,
+            context_scope: contextScope || {},
+          }),
           signal: controller.signal,
         });
 

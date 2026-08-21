@@ -210,6 +210,8 @@ export default function BranchWorkspacePanel({ token, repoId, repo, onRepoUpdate
           <StatusRow icon={<User size={12} />} label="Author" value={status?.author || 'n/a'} />
           <StatusRow icon={<Gauge size={12} />} label="Ahead / Behind" value={`${status?.ahead ?? 0} / ${status?.behind ?? 0}`} />
           <StatusRow icon={<ShieldAlert size={12} />} label="Changed files" value={String(status?.changed_files ?? 0)} />
+          <StatusRow icon={<GitBranch size={12} />} label="Added / Modified / Deleted" value={`${status?.files_added ?? 0} / ${status?.files_modified ?? 0} / ${status?.files_deleted ?? 0}`} />
+          <StatusRow icon={<GitBranch size={12} />} label="Sync status" value={status?.sync_status || 'unknown'} />
           <StatusRow icon={<GitBranch size={12} />} label="Index status" value={status?.index_status || repo.status} />
           <StatusRow icon={<GitBranch size={12} />} label="Evaluation status" value={status?.evaluation_status || 'unknown'} />
           <StatusRow icon={<GitBranch size={12} />} label="Health score" value={status?.health_score != null ? String(status.health_score) : 'n/a'} />
@@ -248,6 +250,18 @@ export default function BranchWorkspacePanel({ token, repoId, repo, onRepoUpdate
                   {comparison.merge_readiness.blocking_issues.slice(0, 3).map((issue) => <li key={issue}>{issue}</li>)}
                 </ul>
               )}
+            </div>
+            <div className="rounded-xl border border-border bg-card p-3 text-sm lg:col-span-2">
+              <p className="font-medium">Branch vs Base Delta Overlay</p>
+              <p className="mt-1 text-muted-foreground">{comparison.impact_summary}</p>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <StatusRow icon={<Gauge size={12} />} label="Health delta" value={`${comparison.health_impact_delta >= 0 ? '+' : ''}${comparison.health_impact_delta}`} />
+                <StatusRow icon={<ShieldAlert size={12} />} label="Security delta" value={`${comparison.security_impact_delta >= 0 ? '+' : ''}${comparison.security_impact_delta}`} />
+                <StatusRow icon={<GitCommit size={12} />} label="Test impact delta" value={`${comparison.test_impact_delta >= 0 ? '+' : ''}${comparison.test_impact_delta}`} />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Testing-related changes: {comparison.testing_changes} • Security-related changes: {comparison.security_changes}
+              </p>
             </div>
           </div>
         )}

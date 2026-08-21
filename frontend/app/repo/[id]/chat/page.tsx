@@ -12,6 +12,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { consumeQueuedChatContext, type ChatContextScope } from '@/lib/chat-context';
 import MessageBubble from '@/components/chat/MessageBubble';
 import AIInspector from '@/components/chat/AIInspector';
 import ExportMenu from '@/components/repo/ExportMenu';
@@ -35,7 +36,7 @@ import {
   getRelationshipGraphKeys,
 } from '@/lib/api';
 import { toast } from 'sonner';
-import type { Chat, Message, Repo, QueryMode, GraphAvailability } from '@/lib/types';
+import type { Chat, Message, Repo, QueryMode, GraphAvailability, RetrievedFile } from '@/lib/types';
 
 const ARCHITECTURE_QUERY_RE = /(architect|architecture|diagram|mermaid|service map|component relationships|data flow|executive summary)/i;
 
@@ -512,6 +513,7 @@ function ChatMessageList({
   messagesEndRef,
   graphKeys,
   onOpenGraph,
+  onOpenEvidence,
 }: {
   showEmptyState: boolean;
   messages: Message[];
@@ -530,6 +532,7 @@ function ChatMessageList({
   messagesEndRef: { current: HTMLDivElement | null };
   graphKeys?: Set<string>;
   onOpenGraph?: (symbol: string) => void;
+  onOpenEvidence?: (file: RetrievedFile) => void;
 }) {
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin px-5 py-5 space-y-5">
@@ -549,6 +552,7 @@ function ChatMessageList({
           onOpenGraph={onOpenGraph}
           onSuggestion={onSuggestion}
           previousUserQuery={i > 0 && messages[i - 1].role === 'user' ? messages[i - 1].content : undefined}
+          onOpenEvidence={onOpenEvidence}
         />
       ))}
 
@@ -719,6 +723,7 @@ function ChatWorkspace({
   graphAvailability,
   graphKeys,
   onOpenGraph,
+  onOpenEvidence,
 }: {
   repoId: string;
   repo: Repo | null;
@@ -754,6 +759,7 @@ function ChatWorkspace({
   graphAvailability: GraphAvailability;
   graphKeys?: Set<string>;
   onOpenGraph: (symbol?: string) => void;
+  onOpenEvidence: (file: RetrievedFile) => void;
 }) {
   return (
     <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:flex xl:h-[calc(100dvh-8rem)] xl:flex-col">
@@ -852,6 +858,7 @@ function ChatWorkspace({
               messagesEndRef={messagesEndRef}
               graphKeys={graphKeys}
               onOpenGraph={(sym) => onOpenGraph(sym)}
+              onOpenEvidence={onOpenEvidence}
             />
           )}
 
@@ -881,6 +888,7 @@ function useChatBootstrapEffect({
   setRepo,
   setSuggestions,
   setInput,
+  setPendingContextScope,
   pendingAutoPromptRef,
   setAutoPromptTick,
 }: {
@@ -891,6 +899,7 @@ function useChatBootstrapEffect({
   setRepo: (repo: Repo | null) => void;
   setSuggestions: (value: string[]) => void;
   setInput: (value: string) => void;
+  setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
   pendingAutoPromptRef: { current: string | null };
   setAutoPromptTick: React.Dispatch<React.SetStateAction<number>>;
 }) {
@@ -955,6 +964,10 @@ function useChatBootstrapEffect({
 
       const preloadKey = `codebase:preload-prompt:${repoId}`;
       const preloadPrompt = sessionStorage.getItem(preloadKey);
+      const preloadContext = consumeQueuedChatContext(repoId);
+      if (preloadContext) {
+        setPendingContextScope(preloadContext);
+      }
       if (preloadPrompt) {
         sessionStorage.removeItem(preloadKey);
         setInput(preloadPrompt);
@@ -980,6 +993,7 @@ function useChatBootstrapEffect({
     pendingAutoPromptRef,
     setAutoPromptTick,
     setInput,
+    setPendingContextScope,
     setRepo,
     setSuggestions,
     setToken,
@@ -1008,11 +1022,20 @@ function useChatInteractionHandlers({
   textareaRef,
   onAfterMessagePersisted,
   setRetryPrompt,
+  pendingContextScope,
+  setPendingContextScope,
 }: {
   chatId: string | null;
   token: string;
   streaming: boolean;
-  sendMessage: (chatId: string, query: string, token: string, displayText?: string, isCtaFollowup?: boolean) => Promise<StreamedResponse | null>;
+  sendMessage: (
+    chatId: string,
+    query: string,
+    token: string,
+    displayText?: string,
+    isCtaFollowup?: boolean,
+    contextScope?: ChatContextScope | null,
+  ) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedText: string;
   streamedTextRef: React.MutableRefObject<string>;
@@ -1030,6 +1053,8 @@ function useChatInteractionHandlers({
   textareaRef: { current: HTMLTextAreaElement | null };
   onAfterMessagePersisted: () => Promise<void>;
   setRetryPrompt: React.Dispatch<React.SetStateAction<string | null>>;
+  pendingContextScope: ChatContextScope | null;
+  setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
 }) {
   useEffect(() => {
     if (chatId && suggestions.length > 0) {
@@ -1069,6 +1094,8 @@ function useChatInteractionHandlers({
     textareaRef,
     onAfterMessagePersisted,
     setRetryPrompt,
+    pendingContextScope,
+    setPendingContextScope,
   });
 
   const lastAssistantMode = [...messages].reverse().find((m) => m.role === 'assistant' && m.query_mode)?.query_mode ?? null;
@@ -1117,11 +1144,20 @@ function useMessageMutationHandlers({
   textareaRef,
   onAfterMessagePersisted,
   setRetryPrompt,
+  pendingContextScope,
+  setPendingContextScope,
 }: {
   chatId: string | null;
   token: string;
   streaming: boolean;
-  sendMessage: (chatId: string, query: string, token: string, displayText?: string, isCtaFollowup?: boolean) => Promise<StreamedResponse | null>;
+  sendMessage: (
+    chatId: string,
+    query: string,
+    token: string,
+    displayText?: string,
+    isCtaFollowup?: boolean,
+    contextScope?: ChatContextScope | null,
+  ) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedTextRef: React.MutableRefObject<string>;
   pendingMetadata: Omit<StreamedResponse, 'content'> | null;
@@ -1136,6 +1172,8 @@ function useMessageMutationHandlers({
   textareaRef: { current: HTMLTextAreaElement | null };
   onAfterMessagePersisted: () => Promise<void>;
   setRetryPrompt: React.Dispatch<React.SetStateAction<string | null>>;
+  pendingContextScope: ChatContextScope | null;
+  setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
 }) {
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1165,7 +1203,10 @@ function useMessageMutationHandlers({
     setRetryPrompt(null);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    const result = await sendMessage(chatId, modelQuery, token, displayText, isCtaFollowup);
+    const result = await sendMessage(chatId, modelQuery, token, displayText, isCtaFollowup, pendingContextScope);
+    if (pendingContextScope) {
+      setPendingContextScope(null);
+    }
     // Use ref (non-stale) for partial recovery — the state closure captured
     // the empty value from before sendMessage started.
     const latestStreamedText = streamedTextRef.current;
@@ -1257,7 +1298,7 @@ function useMessageMutationHandlers({
     setRetryPrompt(null);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
     void onAfterMessagePersisted().catch(() => undefined);
-  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setRetryPrompt, setSuggestions, textareaRef, onAfterMessagePersisted]);
+  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, pendingContextScope, setMessages, setInput, setInspectedIndex, setInspectorData, setPendingContextScope, setRetryPrompt, setSuggestions, textareaRef, onAfterMessagePersisted]);
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
@@ -1304,6 +1345,7 @@ export default function ChatPage() {
   const [sessionLoading, setSessionLoading] = useState(false);
   const [repo, setRepo] = useState<Repo | null>(null);
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
+  const [pendingContextScope, setPendingContextScope] = useState<ChatContextScope | null>(null);
   const authExpiredNotifiedRef = useRef(false);
 
   // ── Graph viewer state ────────────────────────────────────────────────────
@@ -1432,6 +1474,24 @@ export default function ChatPage() {
     }
     router.push(`/repo/${repoId}/review`);
   }, [messages, repoId, router]);
+  const handleOpenEvidence = useCallback((file: RetrievedFile) => {
+    const files = [file.path].filter(Boolean);
+    const lineHint = file.line_start && file.line_end && file.line_end !== file.line_start
+      ? `L${file.line_start}-L${file.line_end}`
+      : file.line_start
+      ? `L${file.line_start}`
+      : null;
+    const prompt = lineHint
+      ? `Review evidence for ${file.path} at ${lineHint}. Explain why this code was retrieved and assess correctness, security, and test impact.`
+      : `Review evidence for ${file.path}. Explain why this code was retrieved and assess correctness, security, and test impact.`;
+
+    try {
+      sessionStorage.setItem(`codebase:review-prefill:${repoId}`, JSON.stringify({ files, prompt }));
+    } catch {
+      // Ignore storage failures and continue navigation.
+    }
+    router.push(`/repo/${repoId}/review`);
+  }, [repoId, router]);
   const handleOpenSession = useCallback(async (targetChatId: string) => {
     if (!token || streaming || sessionLoading) return;
     try {
@@ -1458,6 +1518,7 @@ export default function ChatPage() {
     setRepo,
     setSuggestions,
     setInput,
+    setPendingContextScope,
     pendingAutoPromptRef,
     setAutoPromptTick,
   });
@@ -1506,6 +1567,8 @@ export default function ChatPage() {
       textareaRef,
       onAfterMessagePersisted: handleSessionsChanged,
       setRetryPrompt,
+      pendingContextScope,
+      setPendingContextScope,
     });
 
   const findNearestUserPromptForAssistant = useCallback((assistantIndex: number): string | null => {
@@ -1583,6 +1646,7 @@ export default function ChatPage() {
             sessionLoading={sessionLoading}
             onCreateQuickAsk={handleCreateQuickAsk}
             onOpenReview={handleOpenReview}
+            onOpenEvidence={handleOpenEvidence}
             threadStats={displayThreadStats}
             graphAvailability={graphAvailability}
             graphKeys={cachedGraphKeys}
@@ -1592,7 +1656,7 @@ export default function ChatPage() {
 
         <div className="xl:sticky xl:top-0 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden">
           <div className="min-h-[20rem] overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:h-full xl:min-h-0 xl:flex-1">
-            <AIInspector data={inspectorPayload} streaming={streaming} />
+            <AIInspector data={inspectorPayload} streaming={streaming} onOpenEvidence={handleOpenEvidence} />
           </div>
         </div>
       </div>

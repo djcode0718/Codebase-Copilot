@@ -9,7 +9,7 @@ import { motion } from 'framer-motion';
 import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2, RefreshCcw, Pencil, ThumbsUp, ThumbsDown, GitBranch } from 'lucide-react';
 import { useState, lazy, Suspense, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
-import type { Message, QueryMode } from '@/lib/types';
+import type { Message, QueryMode, RetrievedFile } from '@/lib/types';
 
 const MermaidBlock = lazy(() => import('@/components/chat/MermaidBlock'));
 
@@ -139,6 +139,18 @@ interface MessageBubbleProps {
   onOpenGraph?: (symbol: string) => void;
   onSuggestion?: (query: string, displayText?: string, isCtaFollowup?: boolean) => void;
   previousUserQuery?: string;
+  onOpenEvidence?: (file: RetrievedFile) => void;
+}
+
+function evidenceAnchorLabel(file: RetrievedFile): string {
+  const fileName = file.path.split('/').pop() || file.path;
+  if (file.line_start && file.line_end && file.line_end !== file.line_start) {
+    return `${fileName}:L${file.line_start}-L${file.line_end}`;
+  }
+  if (file.line_start) {
+    return `${fileName}:L${file.line_start}`;
+  }
+  return fileName;
 }
 
 const INTELLIGENCE_PROMPTS: Record<string, string> = {
@@ -405,7 +417,7 @@ function renderInline(text: string, graphKeys?: Set<string>, onOpenGraph?: (s: s
   });
 }
 
-export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false, graphKeys, onOpenGraph, onSuggestion, previousUserQuery }: MessageBubbleProps) {
+export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false, graphKeys, onOpenGraph, onSuggestion, previousUserQuery, onOpenEvidence }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState<'up' | 'down' | null>(null);
   const isUser = message.role === 'user';
@@ -531,7 +543,21 @@ export default function MessageBubble({ message, onInspect, isInspected, index, 
                   </span>
                 )}
                 {message.retrieved_files && message.retrieved_files.length > 0 && (
-                  <span>{message.retrieved_files.length} chunks</span>
+                  <div className="inline-flex flex-wrap items-center gap-1.5">
+                    <span>{message.retrieved_files.length} chunks</span>
+                    {message.retrieved_files.slice(0, 3).map((file, idx) => (
+                      <button
+                        key={`${file.path}-${idx}`}
+                        type="button"
+                        className="rounded-full border border-border/80 bg-background px-2 py-0.5 text-[11px] hover:border-brand/30 hover:text-brand"
+                        onClick={() => onOpenEvidence?.(file)}
+                        disabled={!onOpenEvidence}
+                        title={file.path}
+                      >
+                        {evidenceAnchorLabel(file)}
+                      </button>
+                    ))}
+                  </div>
                 )}
                 {message.latency_ms && (
                   <span>{message.latency_ms}ms</span>

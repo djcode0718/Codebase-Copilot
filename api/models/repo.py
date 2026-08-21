@@ -77,12 +77,16 @@ class BranchStatusResponse(BaseModel):
     ahead: int
     behind: int
     changed_files: int
+    files_added: int = 0
+    files_modified: int = 0
+    files_deleted: int = 0
     changed_paths: list[str]
     captured_at: str
     indexed_at: Optional[str] = None
     index_status: str
     evaluation_status: str = "unknown"
     health_score: Optional[float] = None
+    sync_status: str = "unknown"
 
 
 class BranchActionResponse(BaseModel):
@@ -120,6 +124,11 @@ class BranchComparisonResponse(BaseModel):
     database_changes: int
     business_logic_changes: int
     dependency_changes: int
+    testing_changes: int = 0
+    health_impact_delta: int = 0
+    security_impact_delta: int = 0
+    test_impact_delta: int = 0
+    impact_summary: str = ""
     risk_assessment: str
     merge_readiness: MergeReadinessResponse
     ai_executive_summary: str

@@ -58,6 +58,8 @@ import type {
 } from '@/lib/types';
 import EngineeringActionRunTimeline, { type EngineeringActionEvent } from '@/components/repo/EngineeringActionRunTimeline';
 import { toast } from 'sonner';
+import { queueChatContext } from '@/lib/chat-context';
+import { canonicalLifecycleStatus, lifecycleLabel } from '@/lib/recommendation-lifecycle';
 
 function SeverityPill({ severity }: { severity: string }) {
   const cls = severity === 'critical'
@@ -422,6 +424,14 @@ function useReviewRibbonActions(args: ReviewRibbonActionsArgs) {
 
   const runRibbonAskAi = useCallback(async () => {
     await runRibbonAction('ask_ai', async () => {
+      queueChatContext(
+        repoId,
+        `Review ${selectedFilePath} and explain key risks, test gaps, and a safe next step.`,
+        {
+          repo_id: repoId,
+          selected_file: selectedFilePath,
+        },
+      );
       await addExplorerConversationEntry(token, repoId, { path: selectedFilePath, role: 'user', content: `Open AI conversation for ${selectedFilePath}` });
       window.dispatchEvent(new CustomEvent('codebase:new-chat', { detail: { repoId } }));
     }, 'AI chat context queued');
@@ -1046,15 +1056,21 @@ export default function RepositoryReviewPage() {
     setStatusUpdating(true);
     try {
       await updateRepositoryHealthRecommendationStatus(token, repoId, recommendationId, status, reason);
+      const nextStatus = canonicalLifecycleStatus(status);
       setHealthRecommendations((prev) =>
         prev.map((rec) =>
           rec.recommendation_id === recommendationId
-            ? { ...rec, current_status: status, dismissed_reason: reason ?? null, lifecycle_updated_at: new Date().toISOString() }
+            ? {
+              ...rec,
+              current_status: nextStatus,
+              dismissed_reason: nextStatus === 'IGNORED' ? (reason ?? null) : null,
+              lifecycle_updated_at: new Date().toISOString(),
+            }
             : rec
         )
       );
-      appendTimelineEvent(buildActionEvent('lifecycle_status', 'succeeded', `${status} for ${recommendationId.slice(0, 8)}`));
-      toast.success(`Recommendation marked ${status.replace(/_/g, ' ').toLowerCase()}`);
+      appendTimelineEvent(buildActionEvent('lifecycle_status', 'succeeded', `${nextStatus} for ${recommendationId.slice(0, 8)}`));
+      toast.success(`Recommendation marked ${lifecycleLabel(nextStatus)}`);
     } catch (err) {
       appendTimelineEvent(buildActionEvent('lifecycle_status', 'failed', err instanceof Error ? err.message : 'Status update failed'));
       toast.error(err instanceof Error ? err.message : 'Failed to update recommendation status');

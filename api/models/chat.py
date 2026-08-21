@@ -34,6 +34,8 @@ class SendMessageRequest(BaseModel):
 class RetrievedFile(BaseModel):
     path: str
     score: float
+    line_start: Optional[int] = None
+    line_end: Optional[int] = None
 
 
 class MessageResponse(BaseModel):
