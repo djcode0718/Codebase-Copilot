@@ -40,6 +40,7 @@ import { toast } from 'sonner';
 import type { Chat, Message, Repo, QueryMode, GraphAvailability, RetrievedFile } from '@/lib/types';
 
 const ARCHITECTURE_QUERY_RE = /(architect|architecture|diagram|mermaid|service map|component relationships|data flow|executive summary)/i;
+const DEBUG_CHAT_PAGE = process.env.NODE_ENV !== 'production';
 
 function looksLikeTestPath(path: string): boolean {
   const normalized = path.replace(/\\/g, '/').toLowerCase();
@@ -626,6 +627,8 @@ function ChatMessageList({
   onOpenGraph?: (symbol: string) => void;
   onOpenEvidence?: (file: RetrievedFile) => void;
 }) {
+  const renderSuggestions = suggestions.length > 0;
+
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin px-5 py-5 space-y-5">
       <AnimatePresence>{showEmptyState && <EmptyThreadState />}</AnimatePresence>
@@ -648,25 +651,7 @@ function ChatMessageList({
         />
       ))}
 
-      {streaming && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex gap-3">
-          <div className="mt-1 flex h-8 w-8 items-center justify-center rounded-full border border-brand/20 bg-brand/10 text-brand">
-            <Cpu size={13} />
-          </div>
-          <div className="max-w-[78%] rounded-2xl border border-border bg-background/70 px-4 py-3 shadow-sm shadow-black/5">
-            <div className="text-sm leading-relaxed text-foreground">
-              {streamedText}
-              {streamedText && <span className="streaming-caret" aria-hidden="true" />}
-              {!streamedText && (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 size={12} className="animate-spin" />
-                  <span className="text-xs">Retrieving…</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </motion.div>
-      )}
+      {streaming && <StreamingPreview streamedText={streamedText} />}
 
       {(error || retryPrompt) && (
         <div className="flex items-center gap-2 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs">
@@ -684,28 +669,108 @@ function ChatMessageList({
         </div>
       )}
 
-      {suggestions.length > 0 && (
-        <div className="pt-2 pb-1">
-          <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Suggested questions</div>
-          <div className="flex flex-wrap gap-2">
-            {suggestions.map((q, i) => (
-              <button
-                key={i}
-                onClick={() => onSuggestion(q)}
-                disabled={!sessionReady || streaming}
-                className="rounded-full border border-border bg-background/70 px-3 py-2 text-left text-xs text-muted-foreground transition-all duration-150 hover:border-brand/30 hover:bg-brand/5 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {q}
-              </button>
-            ))}
-          </div>
-        </div>
+      {renderSuggestions && (
+        <SuggestionChips
+          suggestions={suggestions}
+          disabled={!sessionReady || streaming}
+          onSuggestion={onSuggestion}
+        />
       )}
 
       <div ref={messagesEndRef} />
     </div>
   );
 }
+
+function StreamingPreview({ streamedText }: { streamedText: string }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex gap-3">
+      <div className="mt-1 flex h-8 w-8 items-center justify-center rounded-full border border-brand/20 bg-brand/10 text-brand">
+        <Cpu size={13} />
+      </div>
+      <div className="max-w-[78%] rounded-2xl border border-border bg-background/70 px-4 py-3 shadow-sm shadow-black/5">
+        <div className="text-sm leading-relaxed text-foreground">
+          {streamedText}
+          {streamedText && <span className="streaming-caret" aria-hidden="true" />}
+          {!streamedText && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 size={12} className="animate-spin" />
+              <span className="text-xs">Retrieving…</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function SuggestionChips({
+  suggestions,
+  disabled,
+  onSuggestion,
+}: {
+  suggestions: string[];
+  disabled: boolean;
+  onSuggestion: (query: string) => void;
+}) {
+  return (
+    <div className="pt-2 pb-1">
+      <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Suggested questions</div>
+      <div className="flex flex-wrap gap-2">
+        {suggestions.map((q, i) => (
+          <button
+            key={i}
+            onClick={() => onSuggestion(q)}
+            disabled={disabled}
+            className="rounded-full border border-border bg-background/70 px-3 py-2 text-left text-xs text-muted-foreground transition-all duration-150 hover:border-brand/30 hover:bg-brand/5 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {q}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type ChatWorkspaceProps = {
+  repoId: string;
+  repo: Repo | null;
+  token: string;
+  chatId: string | null;
+  sessionReady: boolean;
+  showEmptyState: boolean;
+  messages: Message[];
+  inspectedIndex: number | null;
+  streaming: boolean;
+  streamedText: string;
+  error: string | null;
+  retryPrompt: string | null;
+  suggestions: string[];
+  isDev: boolean;
+  routedMode: QueryMode | null;
+  input: string;
+  textareaRef: { current: HTMLTextAreaElement | null };
+  messagesEndRef: { current: HTMLDivElement | null };
+  onInspect: (index: number, msg: Message) => void;
+  onSuggestion: (q: string) => void;
+  onRetry: () => void;
+  onTryAgainForAnswer: (index: number, msg: Message) => void;
+  onEditQuestion: (msg: Message) => void;
+  onInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  sessionLoading?: boolean;
+  onCreateQuickAsk: () => void;
+  onOpenReview: () => void;
+  threadStats: { label: string; value: string | number }[];
+  graphAvailability: GraphAvailability;
+  graphKeys?: Set<string>;
+  onOpenGraph: (symbol?: string) => void;
+  onOpenEvidence: (file: RetrievedFile) => void;
+  contextActions: Array<{ id: EngineeringActionId; label: string }>;
+  onRunContextAction: (actionId: EngineeringActionId) => void;
+};
 
 function ChatComposer({
   repoId,
@@ -818,178 +883,291 @@ function ChatWorkspace({
   onOpenEvidence,
   contextActions,
   onRunContextAction,
-}: {
-  repoId: string;
-  repo: Repo | null;
-  token: string;
-  chatId: string | null;
+}: ChatWorkspaceProps) {
+  function renderBody() {
+    return (
+      <ChatWorkspaceBody
+        contextActions={contextActions}
+        onRunContextAction={onRunContextAction}
+        sessionReady={sessionReady}
+        streaming={streaming}
+        sessionLoading={sessionLoading}
+        showEmptyState={showEmptyState}
+        messages={messages}
+        inspectedIndex={inspectedIndex}
+        onInspect={onInspect}
+        streamedText={streamedText}
+        error={error}
+        retryPrompt={retryPrompt}
+        suggestions={suggestions}
+        onSuggestion={onSuggestion}
+        onRetry={onRetry}
+        onTryAgainForAnswer={onTryAgainForAnswer}
+        onEditQuestion={onEditQuestion}
+        messagesEndRef={messagesEndRef}
+        graphKeys={graphKeys}
+        onOpenGraph={onOpenGraph}
+        onOpenEvidence={onOpenEvidence}
+        repoId={repoId}
+        isDev={isDev}
+        routedMode={routedMode}
+        input={input}
+        textareaRef={textareaRef}
+        onInputChange={onInputChange}
+        onKeyDown={onKeyDown}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:flex xl:h-[calc(100dvh-8rem)] xl:flex-col">
+      <ChatWorkspaceHeader
+        repoId={repoId}
+        threadStats={threadStats}
+        sessionLoading={sessionLoading}
+        sessionReady={sessionReady}
+        token={token}
+        streaming={streaming}
+        graphAvailability={graphAvailability}
+        onCreateQuickAsk={onCreateQuickAsk}
+        onOpenReview={onOpenReview}
+        onOpenGraph={onOpenGraph}
+        repo={repo}
+        chatId={chatId}
+      />
+
+      {renderBody()}
+    </div>
+  );
+}
+
+type ChatWorkspaceBodyProps = {
+  contextActions: Array<{ id: EngineeringActionId; label: string }>;
+  onRunContextAction: (actionId: EngineeringActionId) => void;
   sessionReady: boolean;
+  streaming: boolean;
+  sessionLoading?: boolean;
   showEmptyState: boolean;
   messages: Message[];
   inspectedIndex: number | null;
-  streaming: boolean;
+  onInspect: (index: number, msg: Message) => void;
   streamedText: string;
   error: string | null;
   retryPrompt: string | null;
   suggestions: string[];
-  isDev: boolean;
-  routedMode: QueryMode | null;
-  input: string;
-  textareaRef: { current: HTMLTextAreaElement | null };
-  messagesEndRef: { current: HTMLDivElement | null };
-  onInspect: (index: number, msg: Message) => void;
   onSuggestion: (q: string) => void;
   onRetry: () => void;
   onTryAgainForAnswer: (index: number, msg: Message) => void;
   onEditQuestion: (msg: Message) => void;
+  messagesEndRef: { current: HTMLDivElement | null };
+  graphKeys?: Set<string>;
+  onOpenGraph: (symbol?: string) => void;
+  onOpenEvidence: (file: RetrievedFile) => void;
+  repoId: string;
+  isDev: boolean;
+  routedMode: QueryMode | null;
+  input: string;
+  textareaRef: { current: HTMLTextAreaElement | null };
   onInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: () => void;
   onCancel: () => void;
-  sessionLoading?: boolean;
-  onCreateQuickAsk: () => void;
-  onOpenReview: () => void;
-  threadStats: { label: string; value: string | number }[];
-  graphAvailability: GraphAvailability;
-  graphKeys?: Set<string>;
-  onOpenGraph: (symbol?: string) => void;
-  onOpenEvidence: (file: RetrievedFile) => void;
-  contextActions: Array<{ id: EngineeringActionId; label: string }>;
-  onRunContextAction: (actionId: EngineeringActionId) => void;
-}) {
-  return (
-    <div className="overflow-hidden rounded-[1.5rem] border border-border bg-card/80 shadow-lg shadow-black/5 backdrop-blur-sm xl:flex xl:h-[calc(100dvh-8rem)] xl:flex-col">
-        <div className="sticky top-0 z-30 flex-shrink-0 border-b border-border bg-card px-4 py-2.5 shadow-sm backdrop-blur-sm">
-          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between xl:gap-3">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 py-1">
-                <Activity size={13} className="text-brand" />
-                <span className="text-sm font-medium text-foreground">Chat thread</span>
-              </span>
-              <PrioritizedHeaderChips repoId={repoId} threadStats={threadStats} />
-            </div>
+};
 
-            <div className="flex shrink-0 items-center gap-1.5">
-              {(sessionLoading || !sessionReady) && (
-                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-xs text-muted-foreground">
-                  <Loader2 size={12} className="animate-spin" />
-                  {sessionLoading ? 'Loading conversation...' : 'Initialising'}
-                </div>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 border-border px-2.5 text-[11px] cursor-pointer"
-                onClick={onCreateQuickAsk}
-                disabled={!token || streaming}
-              >
-                <Plus size={12} className="mr-1" />
-                New chat
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 border-border px-2.5 text-[11px] cursor-pointer"
-                onClick={onOpenReview}
-                disabled={!token || streaming}
-              >
-                <Wrench size={12} className="mr-1" />
-                Review
-              </Button>
-              {/* View graph button — always visible regardless of query mode */}
-              <Button
-                variant="outline"
-                size="sm"
-                className={cn(
-                  'h-7 border-border px-2.5 text-[11px] cursor-pointer',
-                  graphAvailability === 'available' && 'border-brand/30 text-brand hover:bg-brand/5',
-                )}
-                onClick={() => onOpenGraph()}
-                disabled={graphAvailability !== 'available'}
-                title={
-                  graphAvailability === 'loading' ? 'Checking graph availability…' :
-                  graphAvailability === 'no_graph' ? 'No graph yet — index the repository first' :
-                  graphAvailability === 'error' ? 'Couldn\'t check graph availability — try refreshing' :
-                  'View relationship graph'
-                }
-              >
-                {graphAvailability === 'loading' ? (
-                  <Loader2 size={12} className="mr-1 animate-spin" />
-                ) : (
-                  <GitBranch size={12} className="mr-1" />
-                )}
-                {graphAvailability === 'loading' ? 'Checking…' : 'View graph'}
-              </Button>
-              {repo && chatId && (
-                <ExportMenu repo={repo} token={token} scope="chat" chatIds={[chatId]} />
-              )}
-            </div>
+function ChatWorkspaceBody({
+  contextActions,
+  onRunContextAction,
+  sessionReady,
+  streaming,
+  sessionLoading,
+  showEmptyState,
+  messages,
+  inspectedIndex,
+  onInspect,
+  streamedText,
+  error,
+  retryPrompt,
+  suggestions,
+  onSuggestion,
+  onRetry,
+  onTryAgainForAnswer,
+  onEditQuestion,
+  messagesEndRef,
+  graphKeys,
+  onOpenGraph,
+  onOpenEvidence,
+  repoId,
+  isDev,
+  routedMode,
+  input,
+  textareaRef,
+  onInputChange,
+  onKeyDown,
+  onSubmit,
+  onCancel,
+}: ChatWorkspaceBodyProps) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {contextActions.length > 0 && (
+        <div className="border-b border-border bg-card/40 px-4 py-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Context Actions</span>
+          {contextActions.map((action) => (
+            <Button
+              key={`ctx-${action.id}`}
+              size="sm"
+              variant="outline"
+              className="h-7 border-border px-2 text-[11px]"
+              onClick={() => onRunContextAction(action.id)}
+              disabled={!sessionReady || streaming}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      )}
+      {sessionLoading ? (
+        <div className="flex flex-1 items-center justify-center py-20 text-muted-foreground">
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 size={22} className="animate-spin text-brand" />
+            <span className="text-sm">Loading conversation...</span>
           </div>
         </div>
+      ) : (
+        <ChatMessageList
+          showEmptyState={showEmptyState}
+          messages={messages}
+          inspectedIndex={inspectedIndex}
+          onInspect={onInspect}
+          streaming={streaming}
+          streamedText={streamedText}
+          error={error}
+          retryPrompt={retryPrompt}
+          suggestions={suggestions}
+          onSuggestion={onSuggestion}
+          onRetry={onRetry}
+          onTryAgainForAnswer={onTryAgainForAnswer}
+          onEditQuestion={onEditQuestion}
+          sessionReady={sessionReady}
+          messagesEndRef={messagesEndRef}
+          graphKeys={graphKeys}
+          onOpenGraph={(sym) => onOpenGraph(sym)}
+          onOpenEvidence={onOpenEvidence}
+        />
+      )}
 
-        <div className="flex h-full min-h-0 flex-col">
-          {contextActions.length > 0 && (
-            <div className="border-b border-border bg-card/40 px-4 py-2 flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Context Actions</span>
-              {contextActions.map((action) => (
-                <Button
-                  key={`ctx-${action.id}`}
-                  size="sm"
-                  variant="outline"
-                  className="h-7 border-border px-2 text-[11px]"
-                  onClick={() => onRunContextAction(action.id)}
-                  disabled={!sessionReady || streaming}
-                >
-                  {action.label}
-                </Button>
-              ))}
+      <ChatComposer
+        repoId={repoId}
+        isDev={isDev}
+        routedMode={routedMode}
+        input={input}
+        streaming={streaming}
+        sessionReady={sessionReady}
+        textareaRef={textareaRef}
+        onInputChange={onInputChange}
+        onKeyDown={onKeyDown}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />
+    </div>
+  );
+}
+
+function ChatWorkspaceHeader({
+  repoId,
+  threadStats,
+  sessionLoading,
+  sessionReady,
+  token,
+  streaming,
+  graphAvailability,
+  onCreateQuickAsk,
+  onOpenReview,
+  onOpenGraph,
+  repo,
+  chatId,
+}: {
+  repoId: string;
+  threadStats: { label: string; value: string | number }[];
+  sessionLoading?: boolean;
+  sessionReady: boolean;
+  token: string;
+  streaming: boolean;
+  graphAvailability: GraphAvailability;
+  onCreateQuickAsk: () => void;
+  onOpenReview: () => void;
+  onOpenGraph: (symbol?: string) => void;
+  repo: Repo | null;
+  chatId: string | null;
+}) {
+  return (
+    <div className="sticky top-0 z-30 flex-shrink-0 border-b border-border bg-card px-4 py-2.5 shadow-sm backdrop-blur-sm">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between xl:gap-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 py-1">
+            <Activity size={13} className="text-brand" />
+            <span className="text-sm font-medium text-foreground">Chat thread</span>
+          </span>
+          <PrioritizedHeaderChips repoId={repoId} threadStats={threadStats} />
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          {(sessionLoading || !sessionReady) && (
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-xs text-muted-foreground">
+              <Loader2 size={12} className="animate-spin" />
+              {sessionLoading ? 'Loading conversation...' : 'Initialising'}
             </div>
           )}
-          {sessionLoading ? (
-            <div className="flex flex-1 items-center justify-center py-20 text-muted-foreground">
-              <div className="flex flex-col items-center gap-3">
-                <Loader2 size={22} className="animate-spin text-brand" />
-                <span className="text-sm">Loading conversation...</span>
-              </div>
-            </div>
-          ) : (
-            <ChatMessageList
-              showEmptyState={showEmptyState}
-              messages={messages}
-              inspectedIndex={inspectedIndex}
-              onInspect={onInspect}
-              streaming={streaming}
-              streamedText={streamedText}
-              error={error}
-              retryPrompt={retryPrompt}
-              suggestions={suggestions}
-              onSuggestion={onSuggestion}
-              onRetry={onRetry}
-              onTryAgainForAnswer={onTryAgainForAnswer}
-              onEditQuestion={onEditQuestion}
-              sessionReady={sessionReady}
-              messagesEndRef={messagesEndRef}
-              graphKeys={graphKeys}
-              onOpenGraph={(sym) => onOpenGraph(sym)}
-              onOpenEvidence={onOpenEvidence}
-            />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 border-border px-2.5 text-[11px] cursor-pointer"
+            onClick={onCreateQuickAsk}
+            disabled={!token || streaming}
+          >
+            <Plus size={12} className="mr-1" />
+            New chat
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 border-border px-2.5 text-[11px] cursor-pointer"
+            onClick={onOpenReview}
+            disabled={!token || streaming}
+          >
+            <Wrench size={12} className="mr-1" />
+            Review
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(
+              'h-7 border-border px-2.5 text-[11px] cursor-pointer',
+              graphAvailability === 'available' && 'border-brand/30 text-brand hover:bg-brand/5',
+            )}
+            onClick={() => onOpenGraph()}
+            disabled={graphAvailability !== 'available'}
+            title={
+              graphAvailability === 'loading' ? 'Checking graph availability…' :
+              graphAvailability === 'no_graph' ? 'No graph yet — index the repository first' :
+              graphAvailability === 'error' ? 'Couldn\'t check graph availability — try refreshing' :
+              'View relationship graph'
+            }
+          >
+            {graphAvailability === 'loading' ? (
+              <Loader2 size={12} className="mr-1 animate-spin" />
+            ) : (
+              <GitBranch size={12} className="mr-1" />
+            )}
+            {graphAvailability === 'loading' ? 'Checking…' : 'View graph'}
+          </Button>
+          {repo && chatId && (
+            <ExportMenu repo={repo} token={token} scope="chat" chatIds={[chatId]} />
           )}
-
-          <ChatComposer
-            repoId={repoId}
-            isDev={isDev}
-            routedMode={routedMode}
-            input={input}
-            streaming={streaming}
-            sessionReady={sessionReady}
-            textareaRef={textareaRef}
-            onInputChange={onInputChange}
-            onKeyDown={onKeyDown}
-            onSubmit={onSubmit}
-            onCancel={onCancel}
-          />
         </div>
       </div>
+    </div>
   );
 }
 
@@ -1056,11 +1234,10 @@ function useChatBootstrapEffect({
 
         const saved = localStorage.getItem(`chat_suggestions_${activeChatId}`);
         if (saved) {
-          try {
-            setSuggestions(JSON.parse(saved));
+          const parsed = parseStoredSuggestions(saved);
+          if (parsed.length > 0) {
+            setSuggestions(parsed);
             hasSavedSuggestions = true;
-          } catch {
-            // Ignore invalid local cache.
           }
         }
         hasHistory = historyCount > 0;
@@ -1238,28 +1415,86 @@ function buildFallbackAssistantMessage(chatId: string | null, content: string, m
   };
 }
 
-function useMessageMutationHandlers({
-  chatId,
-  token,
-  streaming,
-  sendMessage,
-  messages,
-  streamedTextRef,
-  pendingMetadata,
-  setMessages,
-  setSuggestions,
-  setInput,
-  setInspectedIndex,
-  setInspectorData,
-  sessionReady,
-  pendingAutoPromptRef,
-  autoPromptTick,
-  textareaRef,
-  onAfterMessagePersisted,
-  setRetryPrompt,
-  pendingContextScope,
-  setPendingContextScope,
-}: {
+function buildInspectorPayloadFromMeta(meta: Omit<StreamedResponse, 'content'> | null, content: string): StreamedResponse {
+  return {
+    content,
+    queryMode: meta?.queryMode ?? null,
+    retrievedFiles: meta?.retrievedFiles ?? [],
+    latencyRetrievalMs: meta?.latencyRetrievalMs ?? null,
+    latencyLlmMs: meta?.latencyLlmMs ?? null,
+    latencyTotalMs: meta?.latencyTotalMs ?? null,
+  };
+}
+
+function buildUserMessage(chatId: string, userQuery: string): Message {
+  return {
+    id: `u-${Date.now()}`,
+    chat_id: chatId,
+    role: 'user',
+    content: userQuery,
+    created_at: new Date().toISOString(),
+  };
+}
+
+function buildAssistantMessage(chatId: string, result: StreamedResponse): Message {
+  return {
+    id: `a-${Date.now()}`,
+    chat_id: chatId,
+    role: 'assistant',
+    content: result.content,
+    query_mode: result.queryMode ?? undefined,
+    retrieved_files: result.retrievedFiles,
+    latency_ms: result.latencyTotalMs ?? undefined,
+    created_at: new Date().toISOString(),
+  };
+}
+
+function buildPartialAssistantMessage(
+  chatId: string,
+  streamedText: string,
+  pendingMetadata: Omit<StreamedResponse, 'content'> | null,
+): Message {
+  return {
+    id: `a-partial-${Date.now()}`,
+    chat_id: chatId,
+    role: 'assistant',
+    content: streamedText,
+    query_mode: pendingMetadata?.queryMode ?? undefined,
+    retrieved_files: pendingMetadata?.retrievedFiles ?? [],
+    latency_ms: pendingMetadata?.latencyTotalMs ?? undefined,
+    created_at: new Date().toISOString(),
+  };
+}
+
+async function tryRecoverPersistedAssistant(
+  token: string,
+  chatId: string,
+  initialMessageCount: number,
+): Promise<Message[] | null> {
+  const expectedMinCount = initialMessageCount + 2;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const latestMessages = await getMessages(token, chatId);
+    const latestAssistant = latestMessages[latestMessages.length - 1];
+    if (latestMessages.length >= expectedMinCount && latestAssistant?.role === 'assistant' && latestAssistant.content?.trim()) {
+      return latestMessages;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+  }
+  return null;
+}
+
+function parseStoredSuggestions(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+}
+
+type UseMessageMutationHandlersParams = {
   chatId: string | null;
   token: string;
   streaming: boolean;
@@ -1287,8 +1522,36 @@ function useMessageMutationHandlers({
   setRetryPrompt: React.Dispatch<React.SetStateAction<string | null>>;
   pendingContextScope: ChatContextScope | null;
   setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
-}) {
+};
+
+function useMessageMutationHandlers({
+  chatId,
+  token,
+  streaming,
+  sendMessage,
+  messages,
+  streamedTextRef,
+  pendingMetadata,
+  setMessages,
+  setSuggestions,
+  setInput,
+  setInspectedIndex,
+  setInspectorData,
+  sessionReady,
+  pendingAutoPromptRef,
+  autoPromptTick,
+  textareaRef,
+  onAfterMessagePersisted,
+  setRetryPrompt,
+  pendingContextScope,
+  setPendingContextScope,
+}: UseMessageMutationHandlersParams) {
   const autoPromptInFlightRef = useRef(false);
+
+  const logMutationDebug = (eventName: string, payload: Record<string, unknown>) => {
+    if (!DEBUG_CHAT_PAGE) return;
+    console.debug(`[chat-page] ${eventName}`, payload);
+  };
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -1296,23 +1559,29 @@ function useMessageMutationHandlers({
     e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
   }, [setInput]);
 
-  function buildInspectorPayloadFromMeta(meta: Omit<StreamedResponse, 'content'> | null, content: string): StreamedResponse {
+  function buildRecoveredInspectorPayload(latestAssistant: Message): StreamedResponse {
     return {
-      content,
-      queryMode: meta?.queryMode ?? null,
-      retrievedFiles: meta?.retrievedFiles ?? [],
-      latencyRetrievalMs: meta?.latencyRetrievalMs ?? null,
-      latencyLlmMs: meta?.latencyLlmMs ?? null,
-      latencyTotalMs: meta?.latencyTotalMs ?? null,
+      content: latestAssistant.content,
+      queryMode: latestAssistant.query_mode ?? null,
+      retrievedFiles: latestAssistant.retrieved_files ?? [],
+      latencyRetrievalMs: null,
+      latencyLlmMs: null,
+      latencyTotalMs: latestAssistant.latency_ms ?? null,
     };
   }
 
   const handleSend = useCallback(async (query: string, displayText?: string, isCtaFollowup?: boolean) => {
     if (!chatId || !token || !query.trim() || streaming) return;
+    logMutationDebug('handleSend start', {
+      chatId,
+      queryLength: (query || '').length,
+      hasDisplayText: Boolean(displayText),
+      isCtaFollowup: Boolean(isCtaFollowup),
+    });
     const initialMessageCount = messages.length;
     const userQuery = (displayText || query).trim();
     const modelQuery = withMermaidGuardrails(query.trim());
-    const userMsg: Message = { id: `u-${Date.now()}`, chat_id: chatId, role: 'user', content: userQuery, created_at: new Date().toISOString() };
+    const userMsg = buildUserMessage(chatId, userQuery);
     setMessages((prev) => [...prev, userMsg]);
     setRetryPrompt(null);
     setInput('');
@@ -1340,16 +1609,8 @@ function useMessageMutationHandlers({
     const latestStreamedText = streamedTextRef.current;
     if (!result || !result.content.trim()) {
       if (latestStreamedText.trim()) {
-        const partialAssistantMsg: Message = {
-          id: `a-partial-${Date.now()}`,
-          chat_id: chatId,
-          role: 'assistant',
-          content: latestStreamedText,
-          query_mode: pendingMetadata?.queryMode ?? undefined,
-          retrieved_files: pendingMetadata?.retrievedFiles ?? [],
-          latency_ms: pendingMetadata?.latencyTotalMs ?? undefined,
-          created_at: new Date().toISOString(),
-        };
+        logMutationDebug('using partial streamed recovery', { chatId, streamedLength: latestStreamedText.length });
+        const partialAssistantMsg = buildPartialAssistantMessage(chatId, latestStreamedText, pendingMetadata);
         setMessages((prev) => [...prev, partialAssistantMsg]);
         setInspectedIndex(messages.length + 1);
         setInspectorData(buildInspectorPayloadFromMeta(pendingMetadata, latestStreamedText));
@@ -1359,25 +1620,15 @@ function useMessageMutationHandlers({
       }
 
       try {
-        const expectedMinCount = initialMessageCount + 2;
-        for (let attempt = 0; attempt < 4; attempt++) {
-          const latestMessages = await getMessages(token, chatId);
+        const latestMessages = await tryRecoverPersistedAssistant(token, chatId, initialMessageCount);
+        if (latestMessages) {
+          logMutationDebug('recovered persisted assistant message', { chatId, recoveredCount: latestMessages.length });
           const latestAssistant = latestMessages[latestMessages.length - 1];
-          if (latestMessages.length >= expectedMinCount && latestAssistant?.role === 'assistant' && latestAssistant.content?.trim()) {
-            setMessages(latestMessages);
-            setInspectedIndex(latestMessages.length - 1);
-            setInspectorData({
-              content: latestAssistant.content,
-              queryMode: latestAssistant.query_mode ?? null,
-              retrievedFiles: latestAssistant.retrieved_files ?? [],
-              latencyRetrievalMs: null,
-              latencyLlmMs: null,
-              latencyTotalMs: latestAssistant.latency_ms ?? null,
-            });
-            void onAfterMessagePersisted().catch(() => undefined);
-            return;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+          setMessages(latestMessages);
+          setInspectedIndex(latestMessages.length - 1);
+          setInspectorData(buildRecoveredInspectorPayload(latestAssistant));
+          void onAfterMessagePersisted().catch(() => undefined);
+          return;
         }
       } catch {
         // If recovery fails, keep the current error flow below.
@@ -1404,16 +1655,7 @@ function useMessageMutationHandlers({
     }
 
     // Build and append the successful assistant message
-    const assistantMsg: Message = {
-      id: `a-${Date.now()}`,
-      chat_id: chatId,
-      role: 'assistant',
-      content: result.content,
-      query_mode: result.queryMode ?? undefined,
-      retrieved_files: result.retrievedFiles,
-      latency_ms: result.latencyTotalMs ?? undefined,
-      created_at: new Date().toISOString(),
-    };
+    const assistantMsg = buildAssistantMessage(chatId, result);
     let insertedAssistantIndex = -1;
     setMessages((prev) => {
       insertedAssistantIndex = prev.length;
@@ -1425,8 +1667,24 @@ function useMessageMutationHandlers({
     setInspectorData(result);
     setRetryPrompt(null);
     if (result.suggestions?.length) setSuggestions(result.suggestions);
+    logMutationDebug('handleSend success', {
+      chatId,
+      responseLength: (result.content || '').length,
+      suggestions: result.suggestions?.length ?? 0,
+    });
     void onAfterMessagePersisted().catch(() => undefined);
-  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, pendingContextScope, setMessages, setInput, setInspectedIndex, setInspectorData, setPendingContextScope, setRetryPrompt, setSuggestions, textareaRef, onAfterMessagePersisted]);
+  }, [buildRecoveredInspectorPayload, chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, pendingContextScope, setMessages, setInput, setInspectedIndex, setInspectorData, setPendingContextScope, setRetryPrompt, setSuggestions, textareaRef, onAfterMessagePersisted]);
+
+  function inspectorPayloadFromMessage(msg: Message): StreamedResponse {
+    return {
+      content: msg.content,
+      queryMode: msg.query_mode ?? null,
+      retrievedFiles: msg.retrieved_files ?? [],
+      latencyRetrievalMs: null,
+      latencyLlmMs: null,
+      latencyTotalMs: msg.latency_ms ?? null,
+    };
+  }
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
@@ -1450,15 +1708,8 @@ function useMessageMutationHandlers({
 
   const handleInspect = useCallback((index: number, msg: Message) => {
     setInspectedIndex(index);
-    setInspectorData({
-      content: msg.content,
-      queryMode: msg.query_mode ?? null,
-      retrievedFiles: msg.retrieved_files ?? [],
-      latencyRetrievalMs: null,
-      latencyLlmMs: null,
-      latencyTotalMs: msg.latency_ms ?? null,
-    });
-  }, [setInspectedIndex, setInspectorData]);
+    setInspectorData(inspectorPayloadFromMessage(msg));
+  }, [setInspectedIndex, setInspectorData, inspectorPayloadFromMessage]);
 
   return { handleInputChange, handleSend, handleKeyDown, handleInspect };
 }
@@ -1480,6 +1731,11 @@ export default function ChatPage() {
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const [pendingContextScope, setPendingContextScope] = useState<ChatContextScope | null>(null);
   const authExpiredNotifiedRef = useRef(false);
+
+  const logPageDebug = (eventName: string, payload: Record<string, unknown> = {}) => {
+    if (!DEBUG_CHAT_PAGE) return;
+    console.debug(`[chat-page] ${eventName}`, payload);
+  };
 
   // ── Graph viewer state ────────────────────────────────────────────────────
   const { fetchKeys, getAvailability } = useGraphCache();
@@ -1566,22 +1822,27 @@ export default function ChatPage() {
       throw err;
     }
   }, [repoId]);
+
+  function buildOptimisticQuickAskSession(sessionChatId: string): Chat {
+    return {
+      id: sessionChatId,
+      repo_id: repoId,
+      user_id: '',
+      title: 'New chat',
+      session_type: 'quick_ask',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      message_count: 0,
+      is_archived: false,
+      is_pinned: false,
+    };
+  }
+
   const handleCreateQuickAsk = useCallback(async () => {
     if (!token) return;
     try {
       const session = await createQuickAskSession(token, repoId);
-      const optimisticSession: Chat = {
-        id: session.chat_id,
-        repo_id: repoId,
-        user_id: '',
-        title: 'New chat',
-        session_type: 'quick_ask',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        message_count: 0,
-        is_archived: false,
-        is_pinned: false,
-      };
+      const optimisticSession = buildOptimisticQuickAskSession(session.chat_id);
       window.dispatchEvent(new CustomEvent('codebase:chat-session-created', { detail: { repoId, session: optimisticSession } }));
       await refreshSessions(token);
       await loadSession(token, session.chat_id);
@@ -1591,7 +1852,7 @@ export default function ChatPage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create repository chat');
     }
-  }, [token, repoId, refreshSessions, loadSession]);
+  }, [buildOptimisticQuickAskSession, token, repoId, refreshSessions, loadSession]);
   const handleOpenReview = useCallback(() => {
     const files = collectReviewTargets(messages);
     const payload = {
@@ -1619,24 +1880,22 @@ export default function ChatPage() {
     });
     router.push(`/repo/${repoId}/explorer`);
   }, [repoId, router]);
+
+  function loadSavedSuggestions(chatSessionId: string): string[] {
+    const saved = localStorage.getItem(`chat_suggestions_${chatSessionId}`);
+    return parseStoredSuggestions(saved);
+  }
+
   const handleOpenSession = useCallback(async (targetChatId: string) => {
     if (!token || streaming || sessionLoading) return;
     try {
       await loadSession(token, targetChatId);
-      const saved = localStorage.getItem(`chat_suggestions_${targetChatId}`);
-      if (!saved) {
-        setSuggestions([]);
-      } else {
-        try {
-          setSuggestions(JSON.parse(saved));
-        } catch {
-          setSuggestions([]);
-        }
-      }
+      const parsed = loadSavedSuggestions(targetChatId);
+      setSuggestions(parsed);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to open conversation');
     }
-  }, [loadSession, sessionLoading, streaming, token]);
+  }, [loadSavedSuggestions, loadSession, sessionLoading, streaming, token]);
   const handleSessionsChanged = useCallback(async () => {
     if (!token) return;
     try {
@@ -1660,22 +1919,24 @@ export default function ChatPage() {
 
   // Listen for sidebar chat-session switch events so the page updates without remount.
   useEffect(() => {
-    function handleSwitchSession(e: Event) {
+    const handleSwitchSession = (e: Event) => {
       const { repoId: targetRepo, chatId: targetChat } = (e as CustomEvent<{ repoId: string; chatId: string }>).detail;
       if (targetRepo !== repoId || !targetChat) return;
+      logPageDebug('switching chat session from event', { targetChat });
       void handleOpenSession(targetChat);
-    }
+    };
     window.addEventListener('codebase:switch-chat-session', handleSwitchSession);
     return () => window.removeEventListener('codebase:switch-chat-session', handleSwitchSession);
   }, [repoId, handleOpenSession]);
 
   // Listen for sidebar "New Chat" event so clicking New Chat works when already on this page.
   useEffect(() => {
-    function handleNewChat(e: Event) {
+    const handleNewChat = (e: Event) => {
       const { repoId: targetRepo } = (e as CustomEvent<{ repoId: string }>).detail;
       if (targetRepo !== repoId) return;
+      logPageDebug('creating quick-ask from sidebar event');
       void handleCreateQuickAsk();
-    }
+    };
     window.addEventListener('codebase:new-chat', handleNewChat);
     return () => window.removeEventListener('codebase:new-chat', handleNewChat);
   }, [repoId, handleCreateQuickAsk]);
@@ -1744,11 +2005,15 @@ export default function ChatPage() {
     () => deriveChatActionContext(pendingContextScope),
     [pendingContextScope],
   );
+  function buildContextActionLabel(actionId: EngineeringActionId): string {
+    return actionId.replace(/_/g, ' ');
+  }
 
   const contextActions = useMemo(
     () => activeChatActionContext ? getContextualEngineeringActions(activeChatActionContext).slice(0, 6) : [],
     [activeChatActionContext],
   );
+
 
   const handleRunContextAction = useCallback((actionId: EngineeringActionId) => {
     const scope = pendingContextScope;
@@ -1757,7 +2022,7 @@ export default function ChatPage() {
     const file = (scope.selected_file || '').trim();
     const symbol = (scope.selected_symbol || '').trim();
     const commit = (scope.commit_sha || '').trim();
-    const actionLabel = actionId.replace(/_/g, ' ');
+    const actionLabel = buildContextActionLabel(actionId);
 
     if (actionId === 'open_evidence') {
       if (!file) {
@@ -1808,11 +2073,17 @@ export default function ChatPage() {
     ].filter(Boolean).join('\n');
 
     void handleSend(followupPrompt, `Context Action: ${actionLabel}`, true);
-  }, [handleSend, pendingContextScope, repoId, router]);
+  }, [buildContextActionLabel, handleSend, pendingContextScope, repoId, router]);
 
   const isDev = process.env.NODE_ENV !== 'production';
   const displayThreadStats = buildThreadStats(messages, suggestions, inspectedIndex);
   const inspectorPayload = buildInspectorPayload(inspectedIndex, pendingMetadata, inspectorData);
+
+  function retryLatestPrompt() {
+    if (!retryPrompt) return;
+    void handleSend(retryPrompt);
+  }
+
   return (
     <>
       <div className="grid grid-cols-1 gap-4 xl:h-[calc(100dvh-8rem)] xl:grid-cols-[minmax(0,1fr)_21rem] xl:items-start xl:overflow-hidden">
@@ -1838,10 +2109,7 @@ export default function ChatPage() {
             messagesEndRef={messagesEndRef}
             onInspect={handleInspect}
             onSuggestion={handleSend}
-            onRetry={() => {
-              if (!retryPrompt) return;
-              void handleSend(retryPrompt);
-            }}
+            onRetry={retryLatestPrompt}
             onTryAgainForAnswer={handleTryAgainForAnswer}
             onEditQuestion={handleEditQuestion}
             onInputChange={handleInputChange}

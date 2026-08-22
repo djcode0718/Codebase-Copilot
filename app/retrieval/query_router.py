@@ -76,21 +76,6 @@ _STRONG_ARCHITECTURAL_PHRASES = {
     "architectural"
 }
 
-_CLASSIFIER_PROMPT = """You are a query classifier for a codebase Q&A system.
-Classify the following query into exactly one of these two categories:
-
-CODE_LOOKUP: Questions about specific code — functions, classes, files,
-             implementations, bugs, usage, or anything that requires
-             finding a specific piece of code to answer.
-
-ARCHITECTURAL: Broad questions about the project — limitations, improvements,
-               design patterns, architecture, suggestions, comparisons,
-               or questions that require reasoning about the codebase as a whole.
-
-Query: {query}
-
-Respond with ONLY the category name: CODE_LOOKUP or ARCHITECTURAL"""
-
 _GENERAL_OOS_PHRASES = {
     "share me good movies list",
     "good movies list",
@@ -245,6 +230,7 @@ def classify_query(query: str) -> QueryMode:
     3. LLM classifier — for ambiguous queries
     """
     query_lower = query.lower()
+    logger.debug("Classifying query (length=%s)", len(query or ""))
 
     if _is_relationship_query(query):
         logger.info("Query classified as RELATIONSHIP")
@@ -258,6 +244,7 @@ def classify_query(query: str) -> QueryMode:
     # Stage 1: Fast keyword pre-check
     arch_score = sum(1 for kw in _ARCHITECTURAL_KEYWORDS if kw in query_lower)
     code_score = sum(1 for kw in _CODE_KEYWORDS if kw in query_lower)
+    logger.debug("Query keyword scores: architectural=%s code_lookup=%s", arch_score, code_score)
 
     if arch_score > code_score and arch_score >= 2:
         logger.info(f"Query classified as ARCHITECTURAL (keyword fast-path, score={arch_score})")
@@ -273,6 +260,7 @@ def classify_query(query: str) -> QueryMode:
         prompt = QUERY_CLASSIFIER_PROMPT.format(query=query)
         response = llm.complete(prompt)
         result = str(response).strip().upper()
+        logger.debug("LLM classifier raw response received (length=%s)", len(result))
 
         if "ARCHITECTURAL" in result:
             logger.info("Query classified as ARCHITECTURAL (LLM classifier)")

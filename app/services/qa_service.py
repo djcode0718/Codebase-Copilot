@@ -48,6 +48,13 @@ _NO_MATCH_CODE_LOOKUP_RESPONSE = (
     "Try rephrasing or asking about a specific file or function."
 )
 
+_CLARIFICATION_RESPONSE = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
+_REFUSAL_INDICATORS = [
+    "i cannot", "i'm sorry", "i am sorry", "as an ai",
+    "i am not able", "i cannot fulfill", "unable to comply",
+    "cannot fulfill this request",
+]
+
 
 _RESOLVE_QUERY_PROMPT = """Given a conversation history between a User and an Assistant, and a new follow-up question from the User, rewrite the follow-up question into a clear, self-contained standalone question.
 Resolve any references, pronouns (like "it", "its", "that", "this"), or context-dependent terms to refer explicitly to what was previously discussed.
@@ -224,6 +231,207 @@ def _build_architectural_engine(
     )
 
 
+def _remember_turn(memory: ChatMemoryBuffer, user_text: str, assistant_text: str) -> None:
+    from llama_index.core.base.llms.types import ChatMessage
+
+    memory.put(ChatMessage(role="user", content=user_text))
+    memory.put(ChatMessage(role="assistant", content=assistant_text))
+
+
+def _build_review_fallback_prompt(question_source: str) -> str:
+    import re
+
+    orig_match = re.search(r"The user specifically asked: '([^']+)'", question_source)
+    original_question = orig_match.group(1) if orig_match else "the requested review"
+    return (
+        f"The user asked: '{original_question}'. "
+        "Please conduct a general best-practices code review of the repository. "
+        "Focus on safe programming structures, input verification, modular design, "
+        "and general code architecture. First explicitly name the most relevant file(s) "
+        "with your reasons, then list standard architectural recommendations."
+    )
+
+
+def _has_refusal(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(ind in lowered for ind in _REFUSAL_INDICATORS)
+
+
+def _run_pre_routing_checks(
+    query: str,
+    index_name: str,
+    memory: ChatMemoryBuffer,
+    chat_engine,
+) -> Optional[Tuple[str, object, ChatMemoryBuffer, QueryMode]]:
+    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent
+
+    excluded_folder = detect_excluded_folder(query)
+    if excluded_folder:
+        logger.info("Early exit: excluded folder reference detected")
+        err_msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
+        _remember_turn(memory, query, err_msg)
+        return err_msg, chat_engine, memory, QueryMode.CODE_LOOKUP
+
+    if detect_aggregation(query):
+        logger.info("Early exit: aggregation query")
+        from app.services.repo_stats_service import handle_aggregation_query
+
+        response_str = handle_aggregation_query(query, index_name)
+        _remember_turn(memory, query, response_str)
+        return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
+
+    superlative_suggest = check_superlative_intent(query)
+    if superlative_suggest:
+        logger.info("Early exit: superlative action suggestion")
+        import json
+
+        response_str = json.dumps(superlative_suggest)
+        _remember_turn(memory, query, response_str)
+        return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
+
+    return None
+
+
+def _resolve_query_mode(query: str, memory: ChatMemoryBuffer) -> Tuple[str, QueryMode]:
+    from app.retrieval.query_router import _is_relationship_query
+
+    if _is_relationship_query(query):
+        logger.info("Query mode relationship detected on raw query")
+        return query, QueryMode.RELATIONSHIP
+
+    resolved_query = resolve_ambiguous_query(query, memory)
+    if resolved_query != query:
+        logger.debug("Resolved ambiguous query for retrieval routing")
+
+    if is_general_knowledge_or_preference_query(query) or is_general_knowledge_or_preference_query(resolved_query):
+        logger.info("Query classified as out-of-scope; returning no-match response")
+        return resolved_query, QueryMode.CODE_LOOKUP
+
+    query_mode = classify_query(resolved_query)
+    logger.info("Query mode selected: %s", query_mode.value)
+    return resolved_query, query_mode
+
+
+def _handle_relationship_query(
+    query: str,
+    resolved_query: str,
+    index_name: str,
+    memory: ChatMemoryBuffer,
+    chat_engine,
+    query_mode: QueryMode,
+) -> Tuple[str, object, ChatMemoryBuffer, QueryMode]:
+    from app.retrieval.query_router import extract_relationship_target
+    from app.llm.prompts import RELATIONSHIP_PROMPT
+
+    target = extract_relationship_target(resolved_query)
+    logger.info("Relationship query target extracted: %s", target)
+    refs = []
+    if target:
+        graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
+        logger.debug("Relationship graph lookup path: %s", graph_path)
+        if os.path.exists(graph_path):
+            try:
+                import json
+                with open(graph_path, "r", encoding="utf-8") as gf:
+                    graph = json.load(gf)
+                refs = graph.get(target, [])
+                if not refs:
+                    for key, val in graph.items():
+                        if key.lower() == target.lower():
+                            refs = val
+                            break
+                logger.info("Relationship lookup completed with %s references", len(refs))
+            except Exception as ex:
+                logger.warning(f"Failed to load relationship graph: {ex}")
+        else:
+            logger.warning(f"Relationship graph file not found at {graph_path}")
+    else:
+        logger.info("Relationship target extraction returned None")
+
+    ref_list_str = "\n".join([f"- {r}" for r in refs]) if refs else "No references found."
+    full_prompt = RELATIONSHIP_PROMPT.format(
+        target_symbol=target or "unknown",
+        references_list=ref_list_str,
+    )
+
+    response = Settings.llm.complete(full_prompt)
+    response_str = str(response).strip()
+    _remember_turn(memory, query, response_str)
+    return response_str, chat_engine, memory, query_mode
+
+
+def _ensure_engine_for_mode(chat_engine, query_mode: QueryMode, last_mode: Optional[QueryMode], vector_index, bm25_retriever, memory):
+    if chat_engine is None or query_mode != last_mode:
+        logger.debug("Rebuilding chat engine for mode=%s (last_mode=%s)", query_mode.value, getattr(last_mode, "value", None))
+        if query_mode == QueryMode.CODE_LOOKUP:
+            return _build_code_lookup_engine(vector_index, bm25_retriever, memory)
+        return _build_architectural_engine(vector_index, memory)
+    return chat_engine
+
+
+def _check_low_confidence(nodes, label: str) -> bool:
+    from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
+
+    top_score = max((float(n.score or 0.0) for n in nodes), default=0.0)
+    logger.debug("%s confidence score evaluated: top_score=%.3f threshold=%.3f", label, top_score, LOW_CONFIDENCE_SIMILARITY_THRESHOLD)
+    if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
+        logger.info("Low confidence (%s): top_score %.3f < %.3f", label, top_score, LOW_CONFIDENCE_SIMILARITY_THRESHOLD)
+        return True
+    return False
+
+
+def _execute_colbert_path(query: str, resolved_query: str, query_mode: QueryMode, chat_engine, memory):
+    retriever = chat_engine._retriever
+    raw_nodes = retriever.retrieve(resolved_query)
+    logger.debug("ColBERT path retrieved %s raw nodes", len(raw_nodes))
+    reranked_nodes = rerank_with_colbert(resolved_query, raw_nodes, top_k=TOP_K_RERANK)
+    logger.debug("ColBERT reranked to %s nodes", len(reranked_nodes))
+
+    if _check_low_confidence(reranked_nodes, "ColBERT"):
+        _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
+        return _CLARIFICATION_RESPONSE
+
+    system_prompt = CODE_LOOKUP_PROMPT if query_mode == QueryMode.CODE_LOOKUP else ARCHITECTURAL_PROMPT
+    context_str = "\n\n".join([
+        f"[{n.node.metadata.get('path', 'unknown')}]\n{n.node.get_content()}"
+        for n in reranked_nodes
+    ])
+    full_prompt = f"{system_prompt}\n\nContext:\n{context_str}\n\nQuestion: {resolved_query}\n\nAnswer:"
+    response = Settings.llm.complete(full_prompt)
+    response_str = str(response).strip()
+
+    if _has_refusal(response_str):
+        logger.warning("Safety refusal detected in ColBERT path; using fallback prompt")
+        response = Settings.llm.complete(_build_review_fallback_prompt(full_prompt))
+        response_str = str(response).strip()
+
+    _remember_turn(memory, query, response_str)
+    return response_str
+
+
+def _execute_standard_path(query: str, resolved_query: str, query_mode: QueryMode, chat_engine, memory):
+    try:
+        retriever = chat_engine._retriever
+        raw_nodes = retriever.retrieve(resolved_query)
+        logger.debug("Standard path retrieved %s raw nodes", len(raw_nodes))
+        if _check_low_confidence(raw_nodes, "RAG"):
+            _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
+            return _CLARIFICATION_RESPONSE
+    except Exception as e:
+        logger.warning(f"Failed to check low confidence threshold: {e}")
+
+    start = time.time()
+    response = chat_engine.chat(resolved_query)
+    response_str = str(response).strip()
+    logger.debug("Standard chat engine call completed in %.2fs", time.time() - start)
+    if _has_refusal(response_str):
+        logger.warning("Safety refusal detected in standard path; using fallback prompt")
+        response = Settings.llm.complete(_build_review_fallback_prompt(resolved_query))
+        response_str = str(response).strip()
+        _remember_turn(memory, query, response_str)
+    return response_str
+
+
 def handle_user_query(
     query: str,
     index_name: str,
@@ -242,248 +450,53 @@ def handle_user_query(
     The chat_engine is rebuilt whenever the query mode switches —
     this preserves memory across turns while using the right retriever.
     """
-    logger.info(f"Query [{index_name}]: {query}")
+    logger.info("Query received for index=%s (length=%s)", index_name, len(query or ""))
 
-    # ── Ensure LlamaIndex settings ─────────────────────────────────────────
-    # Force configured providers to avoid any default-provider drift.
     configure_llamaindex_settings()
+    logger.debug("LlamaIndex settings configured")
 
-    # ── Load indexes ───────────────────────────────────────────────────────
     vector_index, bm25_retriever = _get_indexes(index_name)
+    logger.debug("Indexes loaded for index=%s (bm25_available=%s)", index_name, bm25_retriever is not None)
 
-    # ── Memory ─────────────────────────────────────────────────────────────
     if memory is None:
         memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
+        logger.debug("Initialized new chat memory buffer")
 
     if not is_cta_followup:
-        # ── Check 1: Excluded Folder Check ─────────────────────────────────────
-        from app.retrieval.query_router import detect_excluded_folder
-        excluded_folder = detect_excluded_folder(query)
-        if excluded_folder:
-            logger.info(f"Early exit: Excluded folder '{excluded_folder}' referenced")
-            from llama_index.core.base.llms.types import ChatMessage
-            err_msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
-            memory.put(ChatMessage(role="user", content=query))
-            memory.put(ChatMessage(role="assistant", content=err_msg))
-            return err_msg, chat_engine, memory, QueryMode.CODE_LOOKUP
+        precheck_result = _run_pre_routing_checks(query, index_name, memory, chat_engine)
+        if precheck_result is not None:
+            return precheck_result
 
-        # ── Check 2: Aggregation Check ──────────────────────────────────────────
-        from app.retrieval.query_router import detect_aggregation
-        if detect_aggregation(query):
-            logger.info("Early exit: Aggregation query detected")
-            from app.services.repo_stats_service import handle_aggregation_query
-            from llama_index.core.base.llms.types import ChatMessage
-            response_str = handle_aggregation_query(query, index_name)
-            memory.put(ChatMessage(role="user", content=query))
-            memory.put(ChatMessage(role="assistant", content=response_str))
-            return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
-
-        # ── Check 3: Superlative / Action Suggestion Check ──────────────────────
-        from app.retrieval.query_router import check_superlative_intent
-        superlative_suggest = check_superlative_intent(query)
-        if superlative_suggest:
-            logger.info(f"Early exit: Superlative query matched action '{superlative_suggest['suggested_action']}'")
-            import json
-            from llama_index.core.base.llms.types import ChatMessage
-            response_str = json.dumps(superlative_suggest)
-            memory.put(ChatMessage(role="user", content=query))
-            memory.put(ChatMessage(role="assistant", content=response_str))
-            return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
-
-    # ── Route query (first check: RELATIONSHIP check on raw query) ─────────
-    from app.retrieval.query_router import _is_relationship_query
-    if _is_relationship_query(query):
-        resolved_query = query
-        query_mode = QueryMode.RELATIONSHIP
-        logger.info(f"Query mode: {query_mode.value} (bypassed rewriting)")
-    else:
-        # ── Query Resolution (Context-Aware Query Rewriting) ───────────────────
-        resolved_query = resolve_ambiguous_query(query, memory)
-        if resolved_query != query:
-            logger.info(f"Resolved context-aware query: '{resolved_query}'")
-
-        if is_general_knowledge_or_preference_query(query) or is_general_knowledge_or_preference_query(resolved_query):
-            from llama_index.core.base.llms.types import ChatMessage
-            memory.put(ChatMessage(role="user", content=query))
-            memory.put(ChatMessage(role="assistant", content=_NO_MATCH_CODE_LOOKUP_RESPONSE))
-            return _NO_MATCH_CODE_LOOKUP_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
-
-        # ── Route query ────────────────────────────────────────────────────────
-        query_mode = classify_query(resolved_query)
-        logger.info(f"Query mode: {query_mode.value}")
+    resolved_query, query_mode = _resolve_query_mode(query, memory)
+    if query_mode == QueryMode.CODE_LOOKUP and (
+        is_general_knowledge_or_preference_query(query)
+        or is_general_knowledge_or_preference_query(resolved_query)
+    ):
+        _remember_turn(memory, query, _NO_MATCH_CODE_LOOKUP_RESPONSE)
+        return _NO_MATCH_CODE_LOOKUP_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
 
     if query_mode == QueryMode.RELATIONSHIP:
-        from app.retrieval.query_router import extract_relationship_target
-        from app.llm.prompts import RELATIONSHIP_PROMPT
-        
-        target = extract_relationship_target(resolved_query)
-        logger.info(f"Stage -1: RELATIONSHIP query detected. Target symbol: '{target}'")
-        refs = []
-        if target:
-            graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
-            if os.path.exists(graph_path):
-                try:
-                    import json
-                    with open(graph_path, "r", encoding="utf-8") as gf:
-                        graph = json.load(gf)
-                    refs = graph.get(target, [])
-                    if not refs:
-                        for key, val in graph.items():
-                            if key.lower() == target.lower():
-                                refs = val
-                                break
-                    if refs:
-                        logger.info(f"Stage -1: Relationship graph lookup SUCCEEDED for '{target}'. Found {len(refs)} references.")
-                    else:
-                        logger.info(f"Stage -1: Relationship graph lookup EMPTY/FAILED for '{target}'.")
-                except Exception as ex:
-                    logger.warning(f"Failed to load relationship graph: {ex}")
-            else:
-                logger.warning(f"Relationship graph file not found at {graph_path}")
-        else:
-            logger.info("Stage -1: Relationship target extraction returned None.")
-        
-        ref_list_str = "\n".join([f"- {r}" for r in refs]) if refs else "No references found."
-        full_prompt = RELATIONSHIP_PROMPT.format(
-            target_symbol=target or "unknown",
-            references_list=ref_list_str
-        )
-        
-        response = Settings.llm.complete(full_prompt)
-        response_str = str(response).strip()
-        
-        from llama_index.core.base.llms.types import ChatMessage
-        memory.put(ChatMessage(role="user", content=query))
-        memory.put(ChatMessage(role="assistant", content=response_str))
-        
-        return response_str, chat_engine, memory, query_mode
+        return _handle_relationship_query(query, resolved_query, index_name, memory, chat_engine, query_mode)
 
-    # Rebuild engine if mode changed (or first query)
-    if chat_engine is None or query_mode != last_mode:
-        if query_mode == QueryMode.CODE_LOOKUP:
-            chat_engine = _build_code_lookup_engine(vector_index, bm25_retriever, memory)
-        else:
-            chat_engine = _build_architectural_engine(vector_index, memory)
+    chat_engine = _ensure_engine_for_mode(
+        chat_engine,
+        query_mode,
+        last_mode,
+        vector_index,
+        bm25_retriever,
+        memory,
+    )
 
-    # ── Retrieve + rerank (ColBERT applied here if enabled) ────────────────
-    # CondensePlusContextChatEngine handles retrieval internally,
-    # but we intercept nodes for ColBERT reranking before the LLM call.
-    #
-    # ── COLBERT ON ──────────────────────────────────────────────────────
-    # To disable ColBERT: set USE_COLBERT=False in config.py
     from app.config import USE_COLBERT
 
     if USE_COLBERT:
-        # Retrieve nodes manually → rerank → inject into engine response
         try:
-            condensed_query = resolved_query
-            retriever = chat_engine._retriever
-            raw_nodes = retriever.retrieve(condensed_query)
-            reranked_nodes = rerank_with_colbert(resolved_query, raw_nodes, top_k=TOP_K_RERANK)
-
-            # ── Low Confidence Check (ColBERT) ──────────────────────────────────
-            top_score = max((float(n.score or 0.0) for n in reranked_nodes), default=0.0)
-            from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
-            if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
-                logger.info(f"Low confidence (ColBERT): top_score {top_score:.3f} < {LOW_CONFIDENCE_SIMILARITY_THRESHOLD}")
-                from llama_index.core.base.llms.types import ChatMessage
-                clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
-                memory.put(ChatMessage(role="user", content=query))
-                memory.put(ChatMessage(role="assistant", content=clarification))
-                return clarification, chat_engine, memory, query_mode
-
-            # Build response using reranked context
-            from llama_index.core.response_synthesizers import get_response_synthesizer
-            from llama_index.core import QueryBundle
-
-            system_prompt = (
-                CODE_LOOKUP_PROMPT
-                if query_mode == QueryMode.CODE_LOOKUP
-                else ARCHITECTURAL_PROMPT
-            )
-            synthesizer = get_response_synthesizer(llm=Settings.llm)
-            context_str = "\n\n".join([
-                f"[{n.node.metadata.get('path', 'unknown')}]\n{n.node.get_content()}"
-                for n in reranked_nodes
-            ])
-            full_prompt = f"{system_prompt}\n\nContext:\n{context_str}\n\nQuestion: {resolved_query}\n\nAnswer:"
-            response = Settings.llm.complete(full_prompt)
-            response_str = str(response).strip()
-
-            # Refusal check and fallback retry
-            refusal_indicators = [
-                "i cannot", "i'm sorry", "i am sorry", "as an ai", 
-                "i am not able", "i cannot fulfill", "unable to comply",
-                "cannot fulfill this request"
-            ]
-            if any(ind in response_str.lower() for ind in refusal_indicators):
-                logger.warning("Safety refusal detected in ColBERT Q&A! Retrying with fallback reworded prompt...")
-                import re
-                orig_match = re.search(r"The user specifically asked: '([^']+)'", full_prompt)
-                original_question = orig_match.group(1) if orig_match else "the requested review"
-                fallback_prompt = (
-                    f"The user asked: '{original_question}'. "
-                    "Please conduct a general best-practices code review of the repository. "
-                    "Focus on safe programming structures, input verification, modular design, "
-                    "and general code architecture. First explicitly name the most relevant file(s) "
-                    "with your reasons, then list standard architectural recommendations."
-                )
-                response = Settings.llm.complete(fallback_prompt)
-                response_str = str(response).strip()
-
-            # Update memory manually (storing the ORIGINAL user question)
-            from llama_index.core.base.llms.types import ChatMessage
-            memory.put(ChatMessage(role="user", content=query))
-            memory.put(ChatMessage(role="assistant", content=response_str))
-
+            logger.debug("Executing ColBERT path for query_mode=%s", query_mode.value)
+            response_str = _execute_colbert_path(query, resolved_query, query_mode, chat_engine, memory)
             return response_str, chat_engine, memory, query_mode
         except Exception as e:
             logger.warning(f"ColBERT pipeline failed: {e} — falling back to chat engine")
 
-    # ── Low Confidence Check (Standard) ─────────────────────────────────────
-    try:
-        retriever = chat_engine._retriever
-        raw_nodes = retriever.retrieve(resolved_query)
-        top_score = max((float(n.score or 0.0) for n in raw_nodes), default=0.0)
-        from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
-        if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
-            logger.info(f"Low confidence (RAG): top_score {top_score:.3f} < {LOW_CONFIDENCE_SIMILARITY_THRESHOLD}")
-            from llama_index.core.base.llms.types import ChatMessage
-            clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
-            memory.put(ChatMessage(role="user", content=query))
-            memory.put(ChatMessage(role="assistant", content=clarification))
-            return clarification, chat_engine, memory, query_mode
-    except Exception as e:
-        logger.warning(f"Failed to check low confidence threshold: {e}")
-
-    # Standard path (ColBERT disabled or failed)
-    start = time.time()
-    response = chat_engine.chat(resolved_query)
-    response_str = str(response).strip()
-    refusal_indicators = [
-        "i cannot", "i'm sorry", "i am sorry", "as an ai", 
-        "i am not able", "i cannot fulfill", "unable to comply",
-        "cannot fulfill this request"
-    ]
-    if any(ind in response_str.lower() for ind in refusal_indicators):
-        logger.warning("Safety refusal detected in standard Q&A! Retrying with fallback reworded prompt...")
-        import re
-        orig_match = re.search(r"The user specifically asked: '([^']+)'", resolved_query)
-        original_question = orig_match.group(1) if orig_match else "the requested review"
-        fallback_prompt = (
-            f"The user asked: '{original_question}'. "
-            "Please conduct a general best-practices code review of the repository. "
-            "Focus on safe programming structures, input verification, modular design, "
-            "and general code architecture. First explicitly name the most relevant file(s) "
-            "with your reasons, then list standard architectural recommendations."
-        )
-        response = Settings.llm.complete(fallback_prompt)
-        response_str = str(response).strip()
-        
-        # We manually overwrite the assistant message content in memory
-        from llama_index.core.base.llms.types import ChatMessage
-        memory.put(ChatMessage(role="user", content=query))
-        memory.put(ChatMessage(role="assistant", content=response_str))
-        return response_str, chat_engine, memory, query_mode
-
+    logger.debug("Executing standard chat-engine path for query_mode=%s", query_mode.value)
+    response_str = _execute_standard_path(query, resolved_query, query_mode, chat_engine, memory)
     return response_str, chat_engine, memory, query_mode
