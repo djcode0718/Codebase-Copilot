@@ -168,6 +168,7 @@ Queries are automatically classified into:
 | --------------- | ----------------------------------- |
 | `code_lookup`   | strict grounded code explanations   |
 | `architectural` | higher-order engineering reasoning  |
+| `relationship`  | dependency/symbol relationship mapping |
 
 This lets the system stay faithful for code lookup while reasoning more broadly for design discussions.
 
