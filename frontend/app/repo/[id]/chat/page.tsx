@@ -1169,7 +1169,6 @@ function useChatInteractionHandlers({
   pendingContextScope: ChatContextScope | null;
   setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
 }) {
-  const autoPromptDispatchingRef = useRef(false);
   useEffect(() => {
     if (chatId && suggestions.length > 0) {
       try {
@@ -1289,7 +1288,7 @@ function useMessageMutationHandlers({
   pendingContextScope: ChatContextScope | null;
   setPendingContextScope: React.Dispatch<React.SetStateAction<ChatContextScope | null>>;
 }) {
-  const autoPromptDispatchingRef = useRef(false);
+  const autoPromptInFlightRef = useRef(false);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -1431,14 +1430,14 @@ function useMessageMutationHandlers({
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;
-    if (autoPromptDispatchingRef.current) return;
+    if (autoPromptInFlightRef.current) return;
     const prompt = (pendingAutoPromptRef.current || '').trim();
     if (!prompt) return;
     const shouldRunAsCtaFollowup = Boolean(pendingContextScope);
     pendingAutoPromptRef.current = null;
-    autoPromptDispatchingRef.current = true;
+    autoPromptInFlightRef.current = true;
     void handleSend(prompt, prompt, shouldRunAsCtaFollowup).finally(() => {
-      autoPromptDispatchingRef.current = false;
+      autoPromptInFlightRef.current = false;
     });
   }, [autoPromptTick, chatId, handleSend, sessionReady, streaming, pendingAutoPromptRef, pendingContextScope]);
 

@@ -62,6 +62,25 @@ class TestIndexRepository:
         body = resp.json()
         assert body["index_name"] == "my-repo"
 
+    def test_index_sanitizes_name_from_url_with_query(self, client, mock_supabase, fake_user_id, fake_repo_id):
+        created_record = {
+            "id": fake_repo_id,
+            "name": "my-repo",
+            "source_url": "https://github.com/x/my-repo.git?ref=main",
+            "index_name": "my-repo",
+            "status": "indexing",
+            "user_id": fake_user_id,
+        }
+        chain = MagicMock()
+        chain.execute.return_value = MagicMock(data=[created_record])
+        mock_supabase.table.return_value.insert.return_value = chain
+
+        resp = client.post("/api/repo/index", json={"source": "https://github.com/x/my-repo.git?ref=main"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["index_name"] == "my-repo"
+
     def test_index_local_path(self, client, mock_supabase, fake_user_id, fake_repo_id):
         created_record = {
             "id": fake_repo_id,

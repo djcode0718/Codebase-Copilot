@@ -34,6 +34,7 @@ from api.models.repo import (
 from api.routers._repo_access import ensure_repo_access
 from api.services import supabase_service, repo_branch_service
 from api.services.indexing_service import indexing_event_generator
+from app.ingestion.repo_naming import derive_repo_name
 from app.config import LLM_PROVIDER, INDEX_DIR, REPOS_DIR
 from app.utils.logger import get_logger
 
@@ -139,12 +140,7 @@ async def index_repository(
             message="Repository is already being indexed. Reusing the active indexing session.",
         )
 
-    if source.startswith("http"):
-        name = source.rstrip("/").split("/")[-1]
-        if name.endswith(".git"):
-            name = name[:-4]
-    else:
-        name = os.path.basename(os.path.normpath(source))
+    name = derive_repo_name(source)
 
     # Create DB record
     repo_record = supabase_service.create_repo_record(

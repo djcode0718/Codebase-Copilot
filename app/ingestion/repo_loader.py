@@ -1,12 +1,14 @@
 import os
 import stat
 import shutil
+import subprocess
 import git
 import threading
 import uuid
 from urllib.parse import urlparse, quote
 from typing import Optional
 from app.config import REPOS_DIR
+from app.ingestion.repo_naming import derive_repo_name, is_valid_url, normalize_clone_source
 from app.utils.git_auth import get_git_auth_token
 from app.utils.logger import get_logger
 import time
@@ -15,6 +17,45 @@ logger = get_logger(__name__)
 
 _REPO_DIR_LOCKS = {}
 _REPO_DIR_LOCKS_GUARD = threading.Lock()
+
+
+class CloneRepositoryError(RuntimeError):
+    """Raised when clone fails with enough context for SSE diagnostics."""
+
+    def __init__(self, message: str, clone_source: str, clone_target_path: str):
+        super().__init__(message)
+        self.clone_source = clone_source
+        self.clone_target_path = clone_target_path
+
+
+def _is_errno_22(error: Exception) -> bool:
+    current = error
+    while current is not None:
+        if isinstance(current, OSError) and getattr(current, "errno", None) == 22:
+            return True
+        current = getattr(current, "__cause__", None)
+    lowered = str(error).lower()
+    return (
+        "[errno 22]" in lowered
+        or "winerror 87" in lowered
+        or "invalid argument" in lowered
+    )
+
+
+def _build_windows_short_target_dir(repo_name: str, primary_target_dir: str) -> str | None:
+    if os.name != "nt":
+        return None
+
+    primary_abs = os.path.abspath(primary_target_dir)
+    primary_drive = os.path.splitdrive(primary_abs)[0] or "C:"
+    short_root = os.path.join(f"{primary_drive}\\", "cb-repos")
+    short_target = os.path.abspath(os.path.join(short_root, repo_name))
+
+    if os.path.normcase(short_target) == os.path.normcase(primary_abs):
+        return None
+
+    os.makedirs(short_root, exist_ok=True)
+    return short_target
 
 
 def _get_repo_dir_lock(path: str) -> threading.Lock:
@@ -85,12 +126,6 @@ def _remove_existing_repo_dir(target_dir: str) -> None:
         logger.warning("Direct cleanup failed for %s: %s. Trying move-aside strategy.", target_dir, exc)
         _move_aside_and_cleanup(target_dir)
 
-def is_valid_url(url: str) -> bool:
-    try:
-        result = urlparse(url)
-        return all([result.scheme, result.netloc])
-    except ValueError:
-        return False
 
 
 def _build_authenticated_url(source: str, token: Optional[str] = None) -> str:
@@ -130,12 +165,49 @@ def _clone_repository(source: str, target_dir: str) -> None:
     is_github_https = parsed.scheme == "https" and parsed.hostname == "github.com"
     clone_env = os.environ.copy()
     clone_env["GIT_TERMINAL_PROMPT"] = "0"
-    clone_env["GIT_ASKPASS"] = "echo"
+    clone_env.pop("GIT_ASKPASS", None)
     clone_env["GCM_INTERACTIVE"] = "Never"
+
+    def _clone_with_git_cli(clone_source: str) -> None:
+        args = [
+            "git",
+            "-c",
+            "core.longpaths=true",
+            "-c",
+            "core.protectNTFS=false",
+            "clone",
+            clone_source,
+            target_dir,
+        ]
+        result = subprocess.run(
+            args,
+            env=clone_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        details = stderr or stdout or f"git exited with code {result.returncode}"
+        if _is_auth_error(details):
+            raise ValueError(
+                "Git clone authentication failed. This repository may be private. "
+                "Set GIT_AUTH_TOKEN (or GITHUB_TOKEN) in backend environment with repo read access."
+            )
+        raise RuntimeError(details)
 
     try:
         # Public repositories should clone without credentials first.
         git.Repo.clone_from(source, target_dir, env=clone_env)
+    except OSError as os_err:
+        # GitPython can throw Errno 22 on some Windows clone invocations; retry via git CLI.
+        if _is_errno_22(os_err):
+            _remove_existing_repo_dir(target_dir)
+            _clone_with_git_cli(source)
+            return
+        raise
     except git.exc.GitCommandError as e:
         err = str(e)
         if not _is_auth_error(err):
@@ -146,7 +218,14 @@ def _clone_repository(source: str, target_dir: str) -> None:
             _remove_existing_repo_dir(target_dir)
             try:
                 authed_source = _build_authenticated_url(source, token=token)
-                git.Repo.clone_from(authed_source, target_dir, env=clone_env)
+                try:
+                    git.Repo.clone_from(authed_source, target_dir, env=clone_env)
+                except OSError as os_err:
+                    if _is_errno_22(os_err):
+                        _remove_existing_repo_dir(target_dir)
+                        _clone_with_git_cli(authed_source)
+                    else:
+                        raise
                 return
             except git.exc.GitCommandError as retry_err:
                 if not _is_auth_error(str(retry_err)):
@@ -166,23 +245,53 @@ def load_repository(source: str) -> str:
     """
     if is_valid_url(source):
         logger.info(f"Source identified as URL: {source}")
-        # Create a folder name from the repo url
-        repo_name = source.rstrip('/').split('/')[-1]
-        if repo_name.endswith('.git'):
-            repo_name = repo_name[:-4]
-            
+        clone_source = normalize_clone_source(source)
+        repo_name = derive_repo_name(source)
+
         target_dir = os.path.join(REPOS_DIR, repo_name)
-        repo_lock = _get_repo_dir_lock(target_dir)
+        candidate_targets = [target_dir]
+        short_target_dir = _build_windows_short_target_dir(repo_name, target_dir)
+        if short_target_dir:
+            candidate_targets.append(short_target_dir)
 
-        with repo_lock:
-            _remove_existing_repo_dir(target_dir)
-            logger.info(f"Cloning repository into {target_dir}")
+        start_time = time.time()
+        last_error = None
 
-            start_time = time.time()
-            _clone_repository(source, target_dir)
-            logger.info(f"Cloning completed in {time.time() - start_time:.2f}s")
-        
-        return target_dir
+        for candidate_target in candidate_targets:
+            repo_lock = _get_repo_dir_lock(candidate_target)
+            with repo_lock:
+                stage_dir = f"{candidate_target}.clone-{uuid.uuid4().hex[:8]}"
+                logger.info("Cloning repository into staging path %s", stage_dir)
+                _remove_existing_repo_dir(stage_dir)
+
+                try:
+                    _clone_repository(clone_source, stage_dir)
+                    _remove_existing_repo_dir(candidate_target)
+                    os.replace(stage_dir, candidate_target)
+                    logger.info(
+                        "Cloning completed in %.2fs (final path: %s)",
+                        time.time() - start_time,
+                        candidate_target,
+                    )
+                    return candidate_target
+                except Exception as exc:
+                    last_error = exc
+                    _remove_existing_repo_dir(stage_dir)
+                    can_retry_with_next_target = (
+                        candidate_target != candidate_targets[-1]
+                        and (_is_errno_22(exc) or isinstance(exc, (PermissionError, OSError)))
+                    )
+                    if can_retry_with_next_target:
+                        logger.warning(
+                            "Clone failed at %s (%s). Retrying with alternate target.",
+                            candidate_target,
+                            exc,
+                        )
+                        continue
+                    break
+
+        final_target = candidate_targets[-1] if short_target_dir else target_dir
+        raise CloneRepositoryError(str(last_error), clone_source, final_target) from last_error
     else:
         logger.info(f"Source identified as local path: {source}")
         if not os.path.exists(source) or not os.path.isdir(source):

@@ -219,6 +219,8 @@ import os
 import json
 from typing import AsyncGenerator, Optional
 
+from app.config import OLLAMA_EMBED_MODEL
+
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -319,15 +321,75 @@ def _check_ollama_running() -> bool:
 def _check_model_available(model_name: str = "nomic-embed-text") -> bool:
     """Returns True if the given model is pulled in Ollama."""
     try:
-        import httpx
-        r = httpx.get("http://localhost:11434/api/tags", timeout=3)
-        if r.status_code != 200:
-            return False
-        data = r.json()
-        models = [m.get("name", "") for m in data.get("models", [])]
+        models = _list_ollama_models()
         return any(m.startswith(model_name) for m in models)
     except Exception:
         return False
+
+
+def _list_ollama_models() -> list[str]:
+    """Return installed Ollama model names from /api/tags."""
+    import httpx
+
+    r = httpx.get("http://localhost:11434/api/tags", timeout=5)
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    return [m.get("name", "") for m in data.get("models", []) if isinstance(m, dict)]
+
+
+def _pull_ollama_model(model_name: str) -> bool:
+    """Best-effort non-streaming pull for missing Ollama models."""
+    import httpx
+
+    response = httpx.post(
+        "http://localhost:11434/api/pull",
+        json={"name": model_name, "stream": False},
+        timeout=180,
+    )
+    return response.status_code == 200
+
+
+def _ensure_embedding_model_available(emit, model_name: str) -> bool:
+    if _check_model_available(model_name):
+        return True
+
+    emit(
+        "cloning",
+        f"Embedding model '{model_name}' not found. Attempting automatic Ollama pull...",
+        5,
+        embed_model=model_name,
+    )
+
+    try:
+        pulled = _pull_ollama_model(model_name)
+    except Exception as exc:
+        logger.warning("Automatic Ollama model pull failed: %s", exc)
+        pulled = False
+
+    if pulled and _check_model_available(model_name):
+        emit(
+            "cloning",
+            f"Embedding model ready: {model_name}",
+            7,
+            embed_model=model_name,
+            embed_model_pulled=True,
+        )
+        return True
+
+    available_models = _list_ollama_models()
+    available = ", ".join(available_models) if available_models else "none"
+    emit(
+        "error",
+        "Embedding model not found in Ollama.\n"
+        f"Expected: {model_name}\n"
+        "Run:  ollama pull nomic-embed-text",
+        100,
+        embed_model=model_name,
+        available_ollama_models=available,
+        auto_pull_attempted=True,
+    )
+    return False
 
 
 def _emit_progress_event(
@@ -403,13 +465,7 @@ def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
         )
         return None
 
-    if not _check_model_available("nomic-embed-text"):
-        emit(
-            "error",
-            "Embedding model not found in Ollama.\n"
-            "Run:  ollama pull nomic-embed-text",
-            100,
-        )
+    if not _ensure_embedding_model_available(emit, OLLAMA_EMBED_MODEL):
         return None
 
     pipeline_dependencies = _load_pipeline_dependencies(emit)
@@ -518,6 +574,33 @@ def _build_inflight_event(scope: str) -> dict:
     }
 
 
+def _extract_clone_error_context(error: Exception) -> dict:
+    clone_source = getattr(error, "clone_source", None)
+    clone_target_path = getattr(error, "clone_target_path", None)
+    if not clone_source and not clone_target_path:
+        return {}
+    context = {}
+    if clone_source:
+        context["clone_source"] = clone_source
+    if clone_target_path:
+        context["clone_target_path"] = clone_target_path
+    return context
+
+
+def _format_indexing_error_message(error: Exception, context: dict) -> str:
+    message = str(error)
+    clone_source = context.get("clone_source")
+    clone_target_path = context.get("clone_target_path")
+    details = []
+    if clone_source:
+        details.append(f"clone_source={clone_source}")
+    if clone_target_path:
+        details.append(f"clone_target_path={clone_target_path}")
+    if not details:
+        return message
+    return f"{message}\n" + "\n".join(details)
+
+
 async def run_indexing_pipeline(
     source: str,
     repo_id: str,
@@ -534,7 +617,8 @@ async def run_indexing_pipeline(
 
         except Exception as e:
             logger.error(f"Indexing pipeline failed: {e}", exc_info=True)
-            emit("error", str(e), 100)
+            context = _extract_clone_error_context(e)
+            emit("error", _format_indexing_error_message(e, context), 100, **context)
             return None
 
     try:
@@ -544,9 +628,15 @@ async def run_indexing_pipeline(
         # emit the error so the SSE generator doesn't hang on queue.get().
         logger.error(f"run_in_executor raised unexpectedly: {e}", exc_info=True)
         try:
+            context = _extract_clone_error_context(e)
             loop.call_soon_threadsafe(
                 progress_queue.put_nowait,
-                {"step": "error", "message": str(e), "progress": 100},
+                {
+                    "step": "error",
+                    "message": _format_indexing_error_message(e, context),
+                    "progress": 100,
+                    **context,
+                },
             )
         except Exception:
             pass

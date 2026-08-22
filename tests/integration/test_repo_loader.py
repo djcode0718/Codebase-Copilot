@@ -74,3 +74,20 @@ def test_load_repository_clones_into_clean_target(tmp_path, monkeypatch):
     assert os.path.normcase(target) == os.path.normcase(str(existing))
     assert os.path.exists(os.path.join(target, "new.txt"))
     assert not os.path.exists(os.path.join(target, "old.txt"))
+
+
+def test_load_repository_normalizes_url_before_clone(tmp_path, monkeypatch):
+    monkeypatch.setattr(repo_loader, "REPOS_DIR", str(tmp_path))
+    captured = {}
+
+    def fake_clone_from(source, target_dir, **_kwargs):
+        captured["source"] = source
+        os.makedirs(target_dir, exist_ok=True)
+
+    monkeypatch.setattr(repo_loader.git.Repo, "clone_from", staticmethod(fake_clone_from))
+
+    target = repo_loader.load_repository("https://github.com/example/demo.git?tab=readme#top")
+
+    assert os.path.normcase(target) == os.path.normcase(str(tmp_path / "demo"))
+    assert captured["source"] == "https://github.com/example/demo.git"
+
