@@ -1,6 +1,20 @@
 from __future__ import annotations
 
 from api.services import auth_service
+from api.dependencies import get_current_user
+from api.routers import auth
+
+
+def test_logout_audit_requires_authenticated_user_dependency():
+    route = next(r for r in auth.router.routes if getattr(r, "path", "") == "/logout/audit")
+    dependency_calls = [dep.call for dep in route.dependant.dependencies]
+    assert get_current_user in dependency_calls
+
+
+def test_password_reset_complete_requires_authenticated_user_dependency():
+    route = next(r for r in auth.router.routes if getattr(r, "path", "") == "/password-reset/audit-complete")
+    dependency_calls = [dep.call for dep in route.dependant.dependencies]
+    assert get_current_user in dependency_calls
 
 
 def test_register_preflight_allows_new_email(client, monkeypatch):

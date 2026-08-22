@@ -251,20 +251,18 @@ async def login_audit(
 @router.post(
     "/logout/audit",
     response_model=GenericAuthResponse,
-    tags=["public"],
-    openapi_extra={"security": []},
+    tags=["auth"],
+    dependencies=[Depends(get_current_user)],
 )
 async def logout_audit(
     body: LogoutAuditRequest,
     request: Request,
-    user_id: Optional[str] = Depends(get_optional_user),
+    user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    PUBLIC ENDPOINT (optional authentication).
-    Records logout events for security auditing. Can be called by:
-    - Authenticated users (session.user_id is captured)
-    - Anonymous/guest users (provided email for audit trail)
+    AUTHENTICATED ENDPOINT.
+    Records logout events for security auditing.
     """
     normalized_email: Optional[str] = None
     if body.email:
@@ -333,19 +331,18 @@ async def password_reset_audit_request(
 @router.post(
     "/password-reset/audit-complete",
     response_model=GenericAuthResponse,
-    tags=["public"],
-    openapi_extra={"security": []},
+    tags=["auth"],
+    dependencies=[Depends(get_current_user)],
 )
 async def password_reset_audit_complete(
     body: PasswordResetCompleteAuditRequest,
     request: Request,
-    user_id: Optional[str] = Depends(get_optional_user),
+    user_id: str = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
     """
-    PUBLIC ENDPOINT (optional authentication).
+    AUTHENTICATED ENDPOINT.
     Records password reset completion for audit logging.
-    Can be called by authenticated users or guests resetting their password.
     """
     normalized_email = None
     if body.email:
