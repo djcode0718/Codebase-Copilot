@@ -7,13 +7,13 @@ Full query pipeline with dual-mode routing:
         │
         ├── CODE_LOOKUP mode ──────────────────────────────────────────────
         │     BM25 + Dense hybrid (RRF fusion)
-        │     → ColBERT reranking        ← can be disabled via USE_COLBERT
+        │     → Reranking                ← can be disabled via USE_RERANKER
         │     → Strict "answer from code" prompt
         │
         └── ARCHITECTURAL mode ────────────────────────────────────────────
               Dense retrieval only (architectural context doc surfaces naturally)
               → Larger top_k to catch summary nodes
-              → ColBERT reranking        ← can be disabled via USE_COLBERT
+              → Reranking                ← can be disabled via USE_RERANKER
               → Relaxed "reason about the codebase" prompt
 
 Both modes use CondensePlusContextChatEngine for multi-turn conversation.
@@ -487,15 +487,15 @@ def handle_user_query(
         memory,
     )
 
-    from app.config import USE_COLBERT
+    from app.config import USE_RERANKER
 
-    if USE_COLBERT:
+    if USE_RERANKER:
         try:
-            logger.debug("Executing ColBERT path for query_mode=%s", query_mode.value)
+            logger.debug("Executing Reranker path for query_mode=%s", query_mode.value)
             response_str = _execute_colbert_path(query, resolved_query, query_mode, chat_engine, memory)
             return response_str, chat_engine, memory, query_mode
         except Exception as e:
-            logger.warning(f"ColBERT pipeline failed: {e} — falling back to chat engine")
+            logger.warning(f"Reranker pipeline failed: {e} — falling back to chat engine")
 
     logger.debug("Executing standard chat-engine path for query_mode=%s", query_mode.value)
     response_str = _execute_standard_path(query, resolved_query, query_mode, chat_engine, memory)

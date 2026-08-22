@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from supabase import Client
 
 from api.services import supabase_service
-from app.config import OLLAMA_EMBED_MODEL, TOP_K_CHUNKS, TOP_K_RERANK, USE_COLBERT, get_repos_dir
+from app.config import OLLAMA_EMBED_MODEL, TOP_K_CHUNKS, TOP_K_RERANK, USE_RERANKER, get_repos_dir
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -371,7 +371,7 @@ def _cache_key(payload: Dict[str, Any]) -> str:
         "retrieval_settings": payload.get("retrieval_settings") or {
             "top_k_chunks": TOP_K_CHUNKS,
             "top_k_rerank": TOP_K_RERANK,
-            "colbert_enabled": USE_COLBERT,
+            "colbert_enabled": USE_RERANKER,
         },
         "prompt_version": payload.get("prompt_version") or PROMPT_VERSION_DEFAULT,
         "mode": payload.get("mode") or "standard",
@@ -575,7 +575,7 @@ async def run_evaluation_center(
             "avg_latency_retrieval": 230.0,
             "avg_latency_rerank": 80.0,
             "avg_latency_llm": 0.0,
-            "colbert_enabled": USE_COLBERT,
+            "colbert_enabled": USE_RERANKER,
             "total_queries": 0,
             "results": [],
         }
@@ -591,7 +591,7 @@ async def run_evaluation_center(
             "avg_latency_retrieval": float(base.get("avg_latency_retrieval", 230.0)),
             "avg_latency_rerank": float(base.get("avg_latency_rerank", 80.0)),
             "avg_latency_llm": 0.0,
-            "colbert_enabled": bool(base.get("colbert_enabled", USE_COLBERT)),
+            "colbert_enabled": bool(base.get("colbert_enabled", USE_RERANKER)),
             "total_queries": int(base.get("total_queries", 0)),
             "results": [],
         }
@@ -622,7 +622,7 @@ async def run_evaluation_center(
         "retrieval_settings": retrieval_settings or {
             "top_k_chunks": TOP_K_CHUNKS,
             "top_k_rerank": TOP_K_RERANK,
-            "colbert_enabled": USE_COLBERT,
+            "colbert_enabled": USE_RERANKER,
         },
         "prompt_version": prompt_version or PROMPT_VERSION_DEFAULT,
         "cache_key": cache_key,

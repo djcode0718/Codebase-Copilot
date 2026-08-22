@@ -80,12 +80,12 @@
 # # ── Health check ──────────────────────────────────────────────────────────────
 # @app.get("/api/health")
 # async def health():
-#     from app.config import LLM_PROVIDER, USE_COLBERT, USE_FAST_LLM
+#     from app.config import LLM_PROVIDER, USE_RERANKER, USE_FAST_LLM
 #     return {
 #         "status": "ok",
 #         "llm_provider": LLM_PROVIDER,
 #         "use_fast_llm": USE_FAST_LLM,
-#         "colbert_enabled": USE_COLBERT,
+#         "colbert_enabled": USE_RERANKER,
 #     }
 
 
@@ -212,7 +212,7 @@ app.include_router(graph.router,       prefix="/api/repo",  tags=["Relationship 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
-    from app.config import LLM_PROVIDER, USE_COLBERT, USE_FAST_LLM, OLLAMA_EMBED_MODEL
+    from app.config import LLM_PROVIDER, USE_RERANKER, USE_FAST_LLM, OLLAMA_EMBED_MODEL
 
     active_provider = None
     active_model = None
@@ -231,7 +231,7 @@ async def health():
         "active_llm_provider": active_provider,
         "active_llm_model": active_model,
         "use_fast_llm": USE_FAST_LLM,
-        "colbert_enabled": USE_COLBERT,
+        "colbert_enabled": USE_RERANKER,
         # Keep health checks fast and deterministic (no heavy optional imports).
         "embed_model": OLLAMA_EMBED_MODEL,
     }

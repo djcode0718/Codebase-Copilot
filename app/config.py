@@ -73,13 +73,13 @@ TOP_K_RERANK  = 5    # final chunks passed to LLM prompt
 CHUNK_LINES        = 50    # lines per chunk for CodeSplitter
 CHUNK_MAX_CHARS    = 1500  # hard char cap per chunk
 
-# ─── ColBERT ──────────────────────────────────────────────────────────────────
-# Set to False to disable ColBERT reranking entirely.
+# ─── Reranking ────────────────────────────────────────────────────────────────
+# Set to False to disable reranking entirely.
 # When False: pipeline uses RRF fusion scores from QueryFusionRetriever.
-# When True:  ColBERT reranks the top TOP_K_CHUNKS results (~2-3s extra/query).
+# When True:  Reranker rescores the top TOP_K_CHUNKS results (~2-3s extra/query).
 #
-# TO DISABLE COLBERT: set USE_COLBERT=false in .env
-USE_COLBERT = os.getenv("USE_COLBERT", "true").lower() == "true"
+# TO DISABLE RERANKER: set USE_RERANKER=false in .env
+USE_RERANKER = os.getenv("USE_RERANKER", os.getenv("USE_COLBERT", "true")).lower() == "true"
 
 # ─── LLM Fallback Configuration ──────────────────────────────────────────────
 # Maximum retry-after delay (in seconds) that we will wait for before falling back to the next model.

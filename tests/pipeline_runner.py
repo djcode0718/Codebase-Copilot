@@ -145,16 +145,16 @@ def preflight_check():
     step_start("Configuration", ".env")
     from dotenv import load_dotenv
     load_dotenv(os.path.join(ROOT, ".env"))
-    from app.config import LLM_PROVIDER, USE_FAST_LLM, GROQ_FAST_MODEL, USE_COLBERT
+    from app.config import LLM_PROVIDER, USE_FAST_LLM, GROQ_FAST_MODEL, USE_RERANKER
     active_llm = f"Groq ({GROQ_FAST_MODEL})" if USE_FAST_LLM else f"{LLM_PROVIDER}"
     step_done("Configuration")
     metric("LLM provider", active_llm)
     metric("USE_FAST_LLM", USE_FAST_LLM)
-    metric("USE_COLBERT", USE_COLBERT)
+    metric("USE_RERANKER", USE_RERANKER)
     metric("Embedding", "nomic-embed-text (Ollama)")
 
     print()
-    return USE_COLBERT
+    return USE_RERANKER
 
 
 # ─────────────────────────────────────────────────────────────────────────────
