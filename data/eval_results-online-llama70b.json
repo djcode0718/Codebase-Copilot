@@ -115,14 +115,13 @@
       ],
       "hit": true,
       "reciprocal_rank": 0.5,
-      "answer": "### Supported LLM Providers\n\nThe following LLM providers are supported, as listed in the `README.md` file:\n\n1. **Groq**: An API-based provider with a fast, free tier.\n2. **Gemini**: An API-based provider known for being stable and having good reasoning capabilities.\n3. **OpenAI**: An API-based provider that requires credits for usage.\n4. **Ollama**: A local provider that is fully offline.\n\nThese providers are also referenced in the `.env` file for environment variable configuration and in the `app/llm/llm_client.py` file for implementation details.",
+      "answer": "### Supported LLM Providers\n\nThe following LLM providers are supported, as listed in the `README.md` file:\n\n1. **Groq**: An API-based provider with a fast, free tier.\n2. **Gemini**: An API-based provider known for being stable and having good reasoning capabilities.\n3. **Ollama**: A local provider that is fully offline.\n\nThese providers are also referenced in the `.env` file for environment variable configuration and in the `app/llm/llm_client.py` file for implementation details.",
       "faithfulness_score": 1.0,
       "relevancy_score": 1.0,
       "keywords_found": [
         "gemini",
         "ollama",
-        "groq",
-        "openai"
+        "groq"
       ],
       "keyword_hit_rate": 1.0,
       "latency_total": 5.033083915710449,

@@ -50,7 +50,7 @@ The system combines:
 * **export capabilities** (MD, JSON, chat history)
 * conversational memory & multi-turn context
 * evaluation pipelines (Hit Rate, MRR, Faithfulness, Relevancy, Latency)
-* multi-LLM orchestration (Ollama, Groq, Gemini, OpenAI)
+* multi-LLM orchestration (Ollama, Groq, Gemini)
 * a REST API backend (FastAPI)
 * persistent storage & auth (Supabase)
 * a production-grade Next.js frontend
@@ -174,7 +174,7 @@ This lets the system stay faithful for code lookup while reasoning more broadly 
 
 ### ⚡ Multi-LLM Support
 
-Supports **Ollama** (offline/local), **Groq**, **Gemini**, and **OpenAI** — with local inference, cloud inference, and evaluation-specific switching, all through centralized configuration.
+Supports **Ollama** (offline/local), **Groq**, and **Gemini** — with local inference, cloud inference, and evaluation-specific switching, all through centralized configuration.
 
 ### 🌐 FastAPI REST Backend
 
@@ -335,7 +335,7 @@ Frontend-focused regression checks now also include a lightweight Vitest harness
 | Layer            | Technologies                                                              |
 | ----------------- | -------------------------------------------------------------------------- |
 | **AI / Retrieval**| LlamaIndex, BM25, ChromaDB, ColBERT, Hybrid Retrieval, Reciprocal Rank Fusion |
-| **LLMs**          | Ollama, Groq, Gemini, OpenAI                                              |
+| **LLMs**          | Ollama, Groq, Gemini                                                      |
 | **Parsing**       | tree-sitter, tree-sitter-language-pack                                   |
 | **Backend API**   | FastAPI, Uvicorn, Pydantic, Server-Sent Events (SSE)                      |
 | **Database & Auth**| Supabase (PostgreSQL), Supabase Auth (JWT)                              |
@@ -638,7 +638,7 @@ Before response generation, memory retrieval checks current session context plus
 
 ### 9️⃣ LLM Generation
 
-Responses generated via Ollama, Groq, Gemini, or OpenAI, with local inference, cloud inference, evaluation-specific LLM switching, and token-level SSE streaming via the FastAPI backend.
+Responses generated via Ollama, Groq, or Gemini, with local inference, cloud inference, evaluation-specific LLM switching, and token-level SSE streaming via the FastAPI backend.
 
 ---
 

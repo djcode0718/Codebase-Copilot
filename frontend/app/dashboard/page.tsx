@@ -187,7 +187,7 @@ function EmptyStateCard() {
         Paste a GitHub URL above to index your first repository and unlock grounded chat, evaluation, and activity telemetry.
       </p>
       <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs text-brand">
-        <span>Try: github.com/openai/whisper</span>
+        <span>Try: github.com/facebook/react</span>
         <ArrowRight size={12} />
       </div>
     </motion.div>
