@@ -76,15 +76,15 @@ def test_repo_crud():
     print(f"         (user has {initial_count} existing repos)")
 
     r = requests.post(f"{BASE}/api/repo/index", headers=HEADERS,
-                      json={"source": "https://github.com/openai/whisper"})
-    check("POST /api/repo/index (whisper.git) → 200", r, 200,
-          lambda b: b.get("status") == "indexing" and b.get("index_name") == "whisper")
+                      json={"source": "https://github.com/google/jax"})
+    check("POST /api/repo/index (jax) → 200", r, 200,
+          lambda b: b.get("status") == "indexing" and b.get("index_name") == "jax")
     repo_id = r.json().get("repo_id") if r.status_code == 200 else None
 
     r = requests.post(f"{BASE}/api/repo/index", headers=HEADERS,
-                      json={"source": "https://github.com/openai/gpt-2.git"})
+                      json={"source": "https://github.com/google/jax.git"})
     check("POST /api/repo/index (.git suffix stripped) → 200", r, 200,
-          lambda b: b.get("index_name") == "gpt-2")
+          lambda b: b.get("index_name") == "jax")
     repo_id2 = r.json().get("repo_id") if r.status_code == 200 else None
 
     if repo_id:

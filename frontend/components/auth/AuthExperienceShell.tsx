@@ -87,7 +87,7 @@ const SUPPORTED_TECH = [
   'Spring',
   'PostgreSQL',
   'Redis',
-  'OpenAI',
+  'Groq',
   'Claude',
   'Gemini',
   'LangChain',

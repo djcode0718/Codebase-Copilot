@@ -41,8 +41,7 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-print("ACTIVE EMBED MODEL:", Settings.embed_model)
-print("EMBED MODEL TYPE:", type(Settings.embed_model))
+
 
 def _get_chroma_collection(index_name: str):
     """Return (chroma_client, collection) for a given index name."""

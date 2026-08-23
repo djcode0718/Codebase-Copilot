@@ -36,7 +36,7 @@ numpy>=1.26.0
 
 # ─── ColBERT reranking ────────────────────────────────────────────────────────
 # Used for late-interaction reranking (especially strong on code)
-# To disable: set USE_COLBERT=False in config.py (no uninstall needed)
+# To disable: set USE_RERANKER=False in config.py (no uninstall needed)
 ragatouille
 
 llama-index-postprocessor-colbert-rerank

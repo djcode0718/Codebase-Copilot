@@ -18,7 +18,7 @@ def test_rerank_fallback_rrf():
         NodeWithScore(node=TextNode(text="first"), score=0.2),
         NodeWithScore(node=TextNode(text="second"), score=0.8),
     ]
-    with patch("app.config.USE_COLBERT", False):
+    with patch("app.config.USE_RERANKER", False):
         result = reranker.rerank_with_colbert("query", nodes, top_k=2)
         assert len(result) == 2
         assert result[0].node.get_content() == "second"
@@ -37,7 +37,7 @@ def test_rerank_cross_encoder():
     # After sigmoid: "first" → ≈0.711, "second" → ≈0.525
     mock_encoder.predict.return_value = [0.9, 0.1]
 
-    with patch("app.config.USE_COLBERT", True), \
+    with patch("app.config.USE_RERANKER", True), \
          patch("app.retrieval.reranker._load_cross_encoder", return_value=mock_encoder):
         result = reranker.rerank_with_colbert("query", nodes, top_k=2)
         assert len(result) == 2

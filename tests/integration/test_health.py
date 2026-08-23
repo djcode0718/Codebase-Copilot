@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_health.py
 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Tests for GET /api/health endpoint.
@@ -18,7 +18,7 @@ class TestHealth:
         with (
             patch("app.config.LLM_PROVIDER", "groq"),
             patch("app.config.USE_FAST_LLM", False),
-            patch("app.config.USE_COLBERT", False),
+            patch("app.config.USE_RERANKER", False),
         ):
             resp = client.get("/api/health")
         assert resp.status_code == 200
@@ -27,7 +27,7 @@ class TestHealth:
         with (
             patch("app.config.LLM_PROVIDER", "groq"),
             patch("app.config.USE_FAST_LLM", False),
-            patch("app.config.USE_COLBERT", False),
+            patch("app.config.USE_RERANKER", False),
         ):
             resp = client.get("/api/health")
 
@@ -40,7 +40,7 @@ class TestHealth:
         with (
             patch("app.config.LLM_PROVIDER", "groq"),
             patch("app.config.USE_FAST_LLM", False),
-            patch("app.config.USE_COLBERT", False),
+            patch("app.config.USE_RERANKER", False),
         ):
             resp = client.get("/api/health")
 

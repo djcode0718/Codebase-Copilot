@@ -80,7 +80,7 @@ const features = [
   },
   {
     title: 'Multi-LLM Support',
-    description: 'Groq, Ollama, Google Gemini, and OpenAI. Switch providers per-session without re-indexing.',
+    description: 'Groq, Ollama, and Google Gemini. Switch providers per-session without re-indexing.',
     icon: Zap,
     accent: 'text-teal-500 border-teal-500/20 bg-teal-500/10',
   },

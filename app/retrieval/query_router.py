@@ -277,7 +277,7 @@ def classify_query(query: str) -> QueryMode:
 
 # Named constant for low-confidence similarity threshold.
 # NOTE: This value is measured against the maximum similarity score of retrieved nodes
-# (CrossEncoder sigmoid scores when USE_COLBERT=True, or Cosine similarity when False).
+# (CrossEncoder sigmoid scores when USE_RERANKER=True, or Cosine similarity when False).
 # This threshold should be empirically tuned as retrieval configuration and query patterns evolve.
 LOW_CONFIDENCE_SIMILARITY_THRESHOLD = 0.40
 

@@ -25,7 +25,7 @@ from llama_index.core.memory import ChatMemoryBuffer
 from app.llm.llm_client import configure_llamaindex_settings
 from app.retrieval.query_router import QueryMode, is_general_knowledge_or_preference_query
 from app.config import (
-    USE_COLBERT,
+    USE_RERANKER,
     TOP_K_CHUNKS,
     TOP_K_RERANK,
     LLM_PROVIDER,
@@ -122,20 +122,20 @@ def _looks_repository_intent(query: str) -> bool:
     return any(marker in text for marker in ("/", "\\", "::", "()", "{", "}"))
 
 
-def _should_force_no_match(query: str, top_score: float, use_colbert: bool = True) -> bool:
+def _should_force_no_match(query: str, top_score: float, use_reranker: bool = True) -> bool:
     """Short-circuit clearly out-of-scope prompts to the strict no-match response.
 
     Score-scale contract:
-    - When use_colbert=True:  top_score is CrossEncoder sigmoid-normalized → (0, 1).
+    - When use_reranker=True:  top_score is CrossEncoder sigmoid-normalized → (0, 1).
         Relevant queries score ≥ 0.60; out-of-scope queries cluster at ≈ 0.50.
         Threshold 0.60 confirmed by 7-query calibration (4 answerable + 3 OOS).
-    - When use_colbert=False: top_score is an RRF score in [0, ~0.10].
+    - When use_reranker=False: top_score is an RRF score in [0, ~0.10].
         RRF scores are never meaningful as an out-of-scope signal (max ≈ 0.033
         even for on-topic queries). Skip the score check entirely.
     """
     if _looks_repository_intent(query):
         return False
-    if not use_colbert:
+    if not use_reranker:
         # RRF scores max at ~0.03 regardless of relevance — score threshold is
         # meaningless here; rely solely on _looks_repository_intent.
         return False
@@ -163,7 +163,7 @@ async def _retrieve_nodes(retriever, resolved_query: str):
 
 
 async def _rerank_nodes(resolved_query: str, raw_nodes):
-    if USE_COLBERT and raw_nodes:
+    if USE_RERANKER and raw_nodes:
         from app.retrieval.reranker import rerank_with_colbert
 
         return await asyncio.get_event_loop().run_in_executor(
@@ -891,7 +891,7 @@ async def stream_chat_response(
         # since the retrieved content is code, not natural language. Silencing those
         # queries defeats the purpose of ARCHITECTURAL mode.
         # RELATIONSHIP mode is handled separately above (returns before this point).
-        if query_mode == QueryMode.CODE_LOOKUP and _should_force_no_match(query, top_score, use_colbert=USE_COLBERT):
+        if query_mode == QueryMode.CODE_LOOKUP and _should_force_no_match(query, top_score, use_reranker=USE_RERANKER):
             logger.info("Streaming forced no-match response for non-repository intent")
             full_response = _NO_MATCH_CODE_LOOKUP_RESPONSE
             for evt in _build_no_match_events(

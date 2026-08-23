@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_app_config.py
 Unit tests for app/config.py â€” env var loading, defaults, directory creation.
 Pure Python, no external services needed.
@@ -160,20 +160,32 @@ class TestRetrievalConfig:
         assert cfg.CHUNK_MAX_CHARS > 0
 
 
-class TestColbertConfig:
-    def test_use_colbert_is_bool(self):
+class TestRerankerConfig:
+    def test_use_reranker_is_bool(self):
         import app.config as cfg
-        assert isinstance(cfg.USE_COLBERT, bool)
+        assert isinstance(cfg.USE_RERANKER, bool)
 
-    def test_use_colbert_false(self):
-        cfg = reload_config({"USE_COLBERT": "false"})
-        assert cfg.USE_COLBERT is False
+    def test_use_reranker_false(self):
+        cfg = reload_config({"USE_RERANKER": "false"})
+        assert cfg.USE_RERANKER is False
 
-    def test_use_colbert_true(self):
-        cfg = reload_config({"USE_COLBERT": "true"})
-        assert cfg.USE_COLBERT is True
+    def test_use_reranker_true(self):
+        cfg = reload_config({"USE_RERANKER": "true"})
+        assert cfg.USE_RERANKER is True
 
-    def test_use_colbert_case_insensitive(self):
-        cfg = reload_config({"USE_COLBERT": "TRUE"})
-        assert cfg.USE_COLBERT is True
+    def test_use_reranker_case_insensitive(self):
+        cfg = reload_config({"USE_RERANKER": "TRUE"})
+        assert cfg.USE_RERANKER is True
+
+    def test_use_reranker_fallback_to_colbert(self):
+        old_val = os.environ.pop("USE_RERANKER", None)
+        try:
+            cfg = reload_config({"USE_COLBERT": "false"})
+            assert cfg.USE_RERANKER is False
+            cfg = reload_config({"USE_COLBERT": "true"})
+            assert cfg.USE_RERANKER is True
+        finally:
+            if old_val is not None:
+                os.environ["USE_RERANKER"] = old_val
+
 

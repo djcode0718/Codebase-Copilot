@@ -9,8 +9,8 @@ Model: colbert-ir/colbertv2.0 (~440MB, CPU inference, runs well on M4)
 Latency: ~2-3s per query for 10 chunks on M4 16GB
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TO DISABLE COLBERT:
-  In config.py → set USE_COLBERT = False
+TO DISABLE RERANKER:
+  In config.py → set USE_RERANKER = False
   No other file needs to change.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
@@ -53,7 +53,7 @@ def _load_cross_encoder():
         logger.warning(
             "sentence-transformers not installed.\n"
             "Run: pip install sentence-transformers\n"
-            "Or set USE_COLBERT=False in config.py to disable."
+            "Or set USE_RERANKER=False in config.py to disable."
         )
         return None
 
@@ -83,9 +83,9 @@ def rerank_with_colbert(
     if not nodes:
         return []
 
-    from app.config import USE_COLBERT
+    from app.config import USE_RERANKER
 
-    if USE_COLBERT:
+    if USE_RERANKER:
         reranker = _load_cross_encoder()
 
         if reranker is not None:
