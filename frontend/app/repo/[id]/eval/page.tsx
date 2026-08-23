@@ -583,6 +583,7 @@ export default function EvalPage() {
     evalData,
     history,
     comparison,
+    previousRunComparison,
     selectedMode,
     selectedBaselineId,
     loading,

@@ -401,8 +401,15 @@ def _emit_progress_event(
     **kwargs,
 ):
     event = {"step": step, "message": message, "progress": progress, **kwargs}
+    logger.debug(
+        "Queueing progress event (step=%s, progress=%s, extras=%s)",
+        step,
+        progress,
+        sorted(kwargs.keys()),
+    )
     try:
         loop.call_soon_threadsafe(progress_queue.put_nowait, event)
+        logger.debug("Progress event queued successfully (step=%s, progress=%s)", step, progress)
     except Exception as e:
         logger.warning(f"Failed to emit progress event: {e}")
 
@@ -607,8 +614,16 @@ async def run_indexing_pipeline(
     progress_queue: asyncio.Queue,
 ) -> Optional[dict]:
     loop = asyncio.get_event_loop()
+    logger.debug("Starting run_indexing_pipeline (repo_id=%s)", repo_id)
 
     def emit(step: str, message: str, progress: int, **kwargs):
+        logger.debug(
+            "Emit requested from pipeline thread (repo_id=%s, step=%s, progress=%s, extras=%s)",
+            repo_id,
+            step,
+            progress,
+            sorted(kwargs.keys()),
+        )
         _emit_progress_event(loop, progress_queue, step, message, progress, **kwargs)
 
     def _run_pipeline():
@@ -623,6 +638,11 @@ async def run_indexing_pipeline(
 
     try:
         result = await loop.run_in_executor(None, _run_pipeline)
+        logger.debug(
+            "run_in_executor completed (repo_id=%s, has_result=%s)",
+            repo_id,
+            result is not None,
+        )
     except Exception as e:
         # Safety net: if _run_pipeline raised despite all internal guards,
         # emit the error so the SSE generator doesn't hang on queue.get().
@@ -641,6 +661,7 @@ async def run_indexing_pipeline(
         except Exception:
             pass
         result = None
+    logger.debug("run_indexing_pipeline finished (repo_id=%s)", repo_id)
     return result
 
 
@@ -651,10 +672,12 @@ async def indexing_event_generator(
 ) -> AsyncGenerator[str, None]:
     from api.services import supabase_service
     source_key = source.strip().lower()
+    logger.debug("Starting indexing_event_generator (repo_id=%s, source_key=%s)", repo_id, source_key)
 
     # ── Check if already indexed or in-flight ──────────────────────────────────
     repo = supabase_service.get_repo(supabase, repo_id)
     if not repo:
+        logger.debug("Repository lookup failed in indexing stream (repo_id=%s)", repo_id)
         yield f"data: {json.dumps({'step': 'error', 'message': 'Repository not found.', 'progress': 0})}\n\n"
         return
 
@@ -662,6 +685,7 @@ async def indexing_event_generator(
     if repo["status"] == "ready":
         logger.info(f"Repository {repo_id} is already indexed. Returning existing metadata.")
         ready_event = _build_existing_repo_done_event(repo)
+        logger.debug("Yielding cached ready event (repo_id=%s)", repo_id)
         yield f"data: {json.dumps(ready_event)}\n\n"
         return
 
@@ -669,18 +693,26 @@ async def indexing_event_generator(
     if repo_id in _indexing_in_flight:
         logger.warning(f"Indexing already in progress for repo {repo_id}. Rejecting concurrent attempt.")
         in_flight_event = _build_inflight_event("repository")
+        logger.debug("Yielding in-flight repository event (repo_id=%s)", repo_id)
         yield f"data: {json.dumps(in_flight_event)}\n\n"
         return
 
     if source_key in _indexing_sources_in_flight:
         logger.warning(f"Indexing already in progress for source {source}. Rejecting concurrent attempt.")
         in_flight_source_event = _build_inflight_event("source")
+        logger.debug("Yielding in-flight source event (repo_id=%s, source_key=%s)", repo_id, source_key)
         yield f"data: {json.dumps(in_flight_source_event)}\n\n"
         return
 
     # Mark this repo as in-flight
     _indexing_in_flight.add(repo_id)
     _indexing_sources_in_flight.add(source_key)
+    logger.debug(
+        "Marked indexing in-flight (repo_id=%s, in_flight_count=%s, source_in_flight_count=%s)",
+        repo_id,
+        len(_indexing_in_flight),
+        len(_indexing_sources_in_flight),
+    )
 
     # First event is emitted before pipeline thread starts to avoid a silent 0% UI.
     bootstrap_event = {
@@ -688,6 +720,7 @@ async def indexing_event_generator(
         "message": "Initialising indexing stream...",
         "progress": 1,
     }
+    logger.debug("Yielding bootstrap event (repo_id=%s)", repo_id)
     yield f"data: {json.dumps(bootstrap_event)}\n\n"
 
     progress_queue: asyncio.Queue = asyncio.Queue()
@@ -695,30 +728,44 @@ async def indexing_event_generator(
     indexing_task = asyncio.ensure_future(
         run_indexing_pipeline(source, repo_id, progress_queue)
     )
+    logger.debug("Spawned indexing pipeline task (repo_id=%s)", repo_id)
 
     try:
         while True:
             try:
                 # Timeout increased to 5 minutes (300.0 seconds)
+                logger.debug("Waiting for progress event (repo_id=%s, timeout_s=300)", repo_id)
                 event = await asyncio.wait_for(progress_queue.get(), timeout=300.0)
+                logger.debug(
+                    "Received progress event (repo_id=%s, step=%s, progress=%s, keys=%s)",
+                    repo_id,
+                    event.get("step"),
+                    event.get("progress"),
+                    sorted(event.keys()),
+                )
             except asyncio.TimeoutError:
                 timeout_event = {
                     "step": "error",
                     "message": "Indexing timed out after 5 minutes.",
                     "progress": 100,
                 }
+                logger.warning("Progress queue timed out (repo_id=%s)", repo_id)
+                logger.debug("Yielding timeout error event (repo_id=%s)", repo_id)
                 yield f"data: {json.dumps(timeout_event)}\n\n"
                 try:
                     supabase_service.update_repo_status(
                         supabase, repo_id, status="failed"
                     )
+                    logger.debug("Updated repository status to failed after timeout (repo_id=%s)", repo_id)
                 except Exception:
                     pass
                 break
 
+            logger.debug("Yielding SSE event (repo_id=%s, step=%s)", repo_id, event.get("step"))
             yield f"data: {json.dumps(event)}\n\n"
 
             if event["step"] == "done":
+                logger.debug("Handling done event (repo_id=%s)", repo_id)
                 try:
                     supabase_service.update_repo_status(
                         supabase,
@@ -727,6 +774,7 @@ async def indexing_event_generator(
                         file_count=event.get("file_count"),
                         node_count=event.get("node_count"),
                     )
+                    logger.debug("Updated repository status to ready (repo_id=%s)", repo_id)
                 except Exception as db_err:
                     logger.warning(f"Failed to update repo status in DB: {db_err}")
 
@@ -735,17 +783,26 @@ async def indexing_event_generator(
                 break
 
             if event["step"] == "error":
+                logger.debug("Handling error event (repo_id=%s)", repo_id)
                 try:
                     supabase_service.update_repo_status(
                         supabase, repo_id, status="failed"
                     )
+                    logger.debug("Updated repository status to failed (repo_id=%s)", repo_id)
                 except Exception:
                     pass
                 break
 
     finally:
         if not indexing_task.done():
+            logger.debug("Cancelling unfinished indexing task (repo_id=%s)", repo_id)
             indexing_task.cancel()
         # Always remove from in-flight set when done
         _indexing_in_flight.discard(repo_id)
         _indexing_sources_in_flight.discard(source_key)
+        logger.debug(
+            "Cleared in-flight markers (repo_id=%s, in_flight_count=%s, source_in_flight_count=%s)",
+            repo_id,
+            len(_indexing_in_flight),
+            len(_indexing_sources_in_flight),
+        )

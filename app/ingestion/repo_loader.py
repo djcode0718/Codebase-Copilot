@@ -142,6 +142,71 @@ def _move_aside_and_cleanup(path: str) -> None:
         logger.warning("Deferred cleanup failed for %s: %s", moved_path, exc)
 
 
+def _promote_staged_clone(stage_dir: str, target_dir: str, attempts: int = 8, base_delay_s: float = 0.12) -> None:
+    """Promote a staged clone directory into the final target path with retries."""
+    logger.debug(
+        "Starting staged clone promotion (stage=%s, target=%s, attempts=%s, base_delay=%.2fs)",
+        stage_dir,
+        target_dir,
+        attempts,
+        base_delay_s,
+    )
+
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            os.replace(stage_dir, target_dir)
+            logger.debug(
+                "Staged clone promotion succeeded (stage=%s, target=%s, attempt=%s)",
+                stage_dir,
+                target_dir,
+                attempt,
+            )
+            return
+        except FileNotFoundError:
+            logger.error(
+                "Staged clone promotion failed because stage path is missing (stage=%s, target=%s)",
+                stage_dir,
+                target_dir,
+            )
+            raise
+        except (PermissionError, OSError) as exc:
+            last_error = exc
+            stage_exists = os.path.exists(stage_dir)
+            target_exists = os.path.exists(target_dir)
+            logger.warning(
+                "Staged clone promotion retry needed (attempt %s/%s, stage=%s, target=%s, "
+                "stage_exists=%s, target_exists=%s, winerror=%s, error=%s)",
+                attempt,
+                attempts,
+                stage_dir,
+                target_dir,
+                stage_exists,
+                target_exists,
+                getattr(exc, "winerror", None),
+                exc,
+            )
+
+            if target_exists:
+                try:
+                    logger.debug("Promotion retry cleanup: removing target before next attempt (%s)", target_dir)
+                    _remove_existing_repo_dir(target_dir)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Promotion retry cleanup failed for %s: %s",
+                        target_dir,
+                        cleanup_exc,
+                    )
+
+            if attempt == attempts:
+                break
+
+            delay = min(base_delay_s * (2 ** (attempt - 1)), 1.2)
+            time.sleep(delay)
+
+    raise last_error
+
+
 def _remove_existing_repo_dir(target_dir: str) -> None:
     if not os.path.exists(target_dir):
         logger.debug("Directory removal skipped because target does not exist: %s", target_dir)
@@ -348,7 +413,12 @@ def load_repository(source: str) -> str:
                     _clone_repository(clone_source, stage_dir)
                     logger.debug("Clone into staging path completed: %s", stage_dir)
                     _remove_existing_repo_dir(candidate_target)
-                    os.replace(stage_dir, candidate_target)
+                    logger.debug(
+                        "Promoting staged clone into final target (stage=%s, target=%s)",
+                        stage_dir,
+                        candidate_target,
+                    )
+                    _promote_staged_clone(stage_dir, candidate_target)
                     logger.info(
                         "Cloning completed in %.2fs (final path: %s)",
                         time.time() - start_time,

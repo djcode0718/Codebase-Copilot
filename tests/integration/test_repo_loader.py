@@ -91,3 +91,33 @@ def test_load_repository_normalizes_url_before_clone(tmp_path, monkeypatch):
     assert os.path.normcase(target) == os.path.normcase(str(tmp_path / "demo"))
     assert captured["source"] == "https://github.com/example/demo.git"
 
+
+def test_load_repository_retries_stage_promotion_after_permission_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(repo_loader, "REPOS_DIR", str(tmp_path))
+
+    def fake_clone_from(source, target_dir, **_kwargs):
+        os.makedirs(target_dir, exist_ok=True)
+        with open(os.path.join(target_dir, "new.txt"), "w", encoding="utf-8") as f:
+            f.write(source)
+
+    monkeypatch.setattr(repo_loader.git.Repo, "clone_from", staticmethod(fake_clone_from))
+
+    real_replace = os.replace
+    calls = {"count": 0}
+
+    def flaky_replace(src, dst):
+        src_name = os.path.basename(src)
+        if ".clone-" in src_name:
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise PermissionError("transient rename lock")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(repo_loader.os, "replace", flaky_replace)
+    monkeypatch.setattr(repo_loader.time, "sleep", lambda _: None)
+
+    target = repo_loader.load_repository("https://github.com/example/demo")
+
+    assert os.path.normcase(target) == os.path.normcase(str(tmp_path / "demo"))
+    assert calls["count"] == 3
+    assert os.path.exists(os.path.join(target, "new.txt"))
