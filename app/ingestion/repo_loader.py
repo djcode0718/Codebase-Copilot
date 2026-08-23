@@ -1,11 +1,12 @@
 import os
+import re
 import stat
 import shutil
 import subprocess
 import git
 import threading
 import uuid
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, quote, parse_qsl, urlencode
 from typing import Optional
 from app.config import REPOS_DIR
 from app.ingestion.repo_naming import derive_repo_name, is_valid_url, normalize_clone_source
@@ -19,19 +20,53 @@ _REPO_DIR_LOCKS = {}
 _REPO_DIR_LOCKS_GUARD = threading.Lock()
 
 
+def _redact_sensitive_text_for_log(value: object) -> str:
+    text = "" if value is None else str(value)
+    if not text:
+        return text
+
+    text = re.sub(r"(?i)(x-access-token:)[^@\s]+", r"\1***", text)
+    text = re.sub(r"(?i)(bearer\s+)[a-z0-9._\-]+", r"\1***", text)
+    text = re.sub(
+        r"(?i)\b(token|access_token|api[_-]?key|secret|password|passwd)\b\s*[:=]\s*([^&\s,;]+)",
+        r"\1=***",
+        text,
+    )
+    text = re.sub(
+        r"(?i)([?&](?:token|access_token|api[_-]?key|secret|password)=)[^&\s]+",
+        r"\1***",
+        text,
+    )
+    return text
+
+
 def _redact_clone_source_for_log(source: str) -> str:
     """Return a source string that is safe to include in logs."""
     try:
         parsed = urlparse(source)
         if parsed.scheme and parsed.netloc:
+            netloc = parsed.netloc
             if parsed.username or parsed.password:
                 host = parsed.hostname or ""
                 if parsed.port:
                     host = f"{host}:{parsed.port}"
-                return parsed._replace(netloc=host).geturl()
+                netloc = host
+
+            if parsed.query:
+                sensitive_keys = {"token", "access_token", "api_key", "secret", "password"}
+                query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+                masked_query = [
+                    (k, "***" if k.lower() in sensitive_keys else v)
+                    for k, v in query_pairs
+                ]
+                return _redact_sensitive_text_for_log(
+                    parsed._replace(netloc=netloc, query=urlencode(masked_query, doseq=True)).geturl()
+                )
+
+            return _redact_sensitive_text_for_log(parsed._replace(netloc=netloc).geturl())
     except Exception:
         pass
-    return source
+    return _redact_sensitive_text_for_log(source)
 
 
 class CloneRepositoryError(RuntimeError):
@@ -300,18 +335,19 @@ def _clone_repository(source: str, target_dir: str) -> None:
         stderr = (result.stderr or "").strip()
         stdout = (result.stdout or "").strip()
         details = stderr or stdout or f"git exited with code {result.returncode}"
+        safe_details = _redact_sensitive_text_for_log(details)
         logger.warning(
             "git CLI clone fallback failed (source=%s, return_code=%s): %s",
             safe_cli_source,
             result.returncode,
-            details,
+            safe_details,
         )
         if _is_auth_error(details):
             raise ValueError(
                 "Git clone authentication failed. This repository may be private. "
                 "Set GIT_AUTH_TOKEN (or GITHUB_TOKEN) in backend environment with repo read access."
             )
-        raise RuntimeError(details)
+        raise RuntimeError(safe_details)
 
     try:
         # Public repositories should clone without credentials first.
@@ -320,7 +356,11 @@ def _clone_repository(source: str, target_dir: str) -> None:
         logger.debug("Primary GitPython clone succeeded (source=%s)", safe_source)
     except OSError as os_err:
         # GitPython can throw Errno 22 on some Windows clone invocations; retry via git CLI.
-        logger.warning("Primary GitPython clone raised OSError for %s: %s", safe_source, os_err)
+        logger.warning(
+            "Primary GitPython clone raised OSError for %s: %s",
+            safe_source,
+            _redact_sensitive_text_for_log(os_err),
+        )
         if _is_errno_22(os_err):
             logger.info("Detected Errno 22 clone failure; retrying with git CLI for %s", safe_source)
             _remove_existing_repo_dir(target_dir)
@@ -329,7 +369,11 @@ def _clone_repository(source: str, target_dir: str) -> None:
         raise
     except git.exc.GitCommandError as e:
         err = str(e)
-        logger.warning("Primary GitPython clone command failed for %s: %s", safe_source, err)
+        logger.warning(
+            "Primary GitPython clone command failed for %s: %s",
+            safe_source,
+            _redact_sensitive_text_for_log(err),
+        )
         if not _is_auth_error(err):
             raise
 
@@ -345,7 +389,11 @@ def _clone_repository(source: str, target_dir: str) -> None:
                     git.Repo.clone_from(authed_source, target_dir, env=clone_env)
                     logger.debug("Authenticated GitPython clone succeeded (source=%s)", safe_authed_source)
                 except OSError as os_err:
-                    logger.warning("Authenticated GitPython clone raised OSError for %s: %s", safe_authed_source, os_err)
+                    logger.warning(
+                        "Authenticated GitPython clone raised OSError for %s: %s",
+                        safe_authed_source,
+                        _redact_sensitive_text_for_log(os_err),
+                    )
                     if _is_errno_22(os_err):
                         logger.info("Detected Errno 22 during authenticated clone; retrying with git CLI")
                         _remove_existing_repo_dir(target_dir)
@@ -354,7 +402,11 @@ def _clone_repository(source: str, target_dir: str) -> None:
                         raise
                 return
             except git.exc.GitCommandError as retry_err:
-                logger.warning("Authenticated GitPython clone failed for %s: %s", safe_source, retry_err)
+                logger.warning(
+                    "Authenticated GitPython clone failed for %s: %s",
+                    safe_source,
+                    _redact_sensitive_text_for_log(retry_err),
+                )
                 if not _is_auth_error(str(retry_err)):
                     raise
 
@@ -431,7 +483,7 @@ def load_repository(source: str) -> str:
                         "Clone attempt failed for target=%s stage=%s: %s",
                         candidate_target,
                         stage_dir,
-                        exc,
+                        _redact_sensitive_text_for_log(exc),
                     )
                     _remove_existing_repo_dir(stage_dir)
                     can_retry_with_next_target = (
@@ -442,7 +494,7 @@ def load_repository(source: str) -> str:
                         logger.warning(
                             "Clone failed at %s (%s). Retrying with alternate target.",
                             candidate_target,
-                            exc,
+                            _redact_sensitive_text_for_log(exc),
                         )
                         continue
                     logger.error("Clone workflow stopping after failure at target=%s", candidate_target)
@@ -454,7 +506,7 @@ def load_repository(source: str) -> str:
             time.time() - start_time,
             _redact_clone_source_for_log(clone_source),
             final_target,
-            last_error,
+            _redact_sensitive_text_for_log(last_error),
         )
         raise CloneRepositoryError(str(last_error), clone_source, final_target) from last_error
     else:

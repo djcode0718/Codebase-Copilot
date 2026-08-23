@@ -22,6 +22,22 @@ def test_build_authenticated_url_keeps_non_github_url(monkeypatch) -> None:
     assert repo_loader._build_authenticated_url(source) == source
 
 
+def test_redact_clone_source_for_log_masks_url_credentials() -> None:
+    source = "https://x-access-token:abc123@github.com/org/repo.git"
+    redacted = repo_loader._redact_clone_source_for_log(source)
+    assert "abc123" not in redacted
+    assert "x-access-token" not in redacted
+    assert redacted == "https://github.com/org/repo.git"
+
+
+def test_redact_clone_source_for_log_masks_sensitive_query_params() -> None:
+    source = "https://github.com/org/repo.git?access_token=abc123&ref=main"
+    redacted = repo_loader._redact_clone_source_for_log(source)
+    assert "abc123" not in redacted
+    assert "access_token=***" in redacted
+    assert "ref=main" in redacted
+
+
 def test_clone_repository_maps_auth_errors(monkeypatch, tmp_path) -> None:
     def fake_clone(*_args, **_kwargs):
         raise repo_loader.git.exc.GitCommandError("clone", 128, stderr="fatal: could not read Username for 'https://github.com': terminal prompts disabled")

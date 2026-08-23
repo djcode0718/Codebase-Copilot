@@ -156,6 +156,22 @@ def test_looks_repository_intent_true(query):
 ])
 def test_looks_repository_intent_false(query):
     assert chat_service._looks_repository_intent(query) is False
+def test_redact_sensitive_text_for_log_masks_tokens_and_passwords():
+    text = "Bearer abc123 token=xyz password=secret https://x-access-token:abc@github.com/org/repo"
+    redacted = chat_service._redact_sensitive_text_for_log(text)
+    assert "abc123" not in redacted
+    assert "xyz" not in redacted
+    assert "secret" not in redacted
+    assert "x-access-token" in redacted
+    assert "***" in redacted
+
+
+def test_query_fingerprint_for_log_does_not_include_raw_query():
+    query = "my token is super-secret"
+    fp = chat_service._query_fingerprint_for_log(query)
+    assert "super-secret" not in fp
+    assert "len=" in fp
+    assert "sha1=" in fp
 
 
 # ─── _should_force_no_match ──────────────────────────────────────────────────

@@ -16,6 +16,8 @@ so multi-turn conversation works correctly within a server session.
 """
 
 import asyncio
+import hashlib
+import re
 import time
 from typing import AsyncGenerator, Optional, Tuple, List, Dict, Any
 
@@ -43,6 +45,33 @@ logger = get_logger(__name__)
 # This lives as long as the FastAPI process is running.
 # On server restart, LlamaIndex rebuilds from ChromaDB (fast, no re-embedding).
 _session_cache: dict = {}
+
+
+def _redact_sensitive_text_for_log(value: Any) -> str:
+    """Best-effort masking for auth material before writing to logs."""
+    text = "" if value is None else str(value)
+    if not text:
+        return text
+
+    text = re.sub(r"(?i)(x-access-token:)[^@\s]+", r"\1***", text)
+    text = re.sub(r"(?i)(bearer\s+)[a-z0-9._\-]+", r"\1***", text)
+    text = re.sub(
+        r"(?i)\b(token|access_token|api[_-]?key|secret|password|passwd)\b\s*[:=]\s*([^&\s,;]+)",
+        r"\1=***",
+        text,
+    )
+    text = re.sub(
+        r"(?i)([?&](?:token|access_token|api[_-]?key|secret|password)=)[^&\s]+",
+        r"\1***",
+        text,
+    )
+    return text
+
+
+def _query_fingerprint_for_log(query: str) -> str:
+    text = (query or "").strip()
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10] if text else "empty"
+    return f"len={len(text)} sha1={digest}"
 
 
 def _get_or_init_session(repo_id: str, chat_id: str):
@@ -227,13 +256,13 @@ def _build_context_str(reranked_nodes) -> str:
 def _build_history_str(memory) -> str:
     try:
         history_msgs = memory.get()
-        history_str = ""
+        lines = []
         for msg in history_msgs[-40:]:
             role = msg.get("role", "")
             content = msg.get("content", "")
             if role and content:
-                history_str += f"{role.upper()}: {content}\n"
-        return history_str
+                lines.append(f"{role.upper()}: {content}")
+        return "\n".join(lines) + ("\n" if lines else "")
     except Exception:
         return ""
 
@@ -307,8 +336,8 @@ async def _recover_from_stream_failure(full_prompt: str, llm_err: Exception) -> 
     except Exception as recover_err:
         logger.warning(
             "Non-stream recovery failed after streaming failure (%s): %s",
-            llm_err,
-            recover_err,
+            _redact_sensitive_text_for_log(llm_err),
+            _redact_sensitive_text_for_log(recover_err),
         )
 
     try:
@@ -327,8 +356,8 @@ async def _recover_from_stream_failure(full_prompt: str, llm_err: Exception) -> 
     except Exception as sync_recover_err:
         logger.warning(
             "Sync non-stream recovery failed after streaming failure (%s): %s",
-            llm_err,
-            sync_recover_err,
+            _redact_sensitive_text_for_log(llm_err),
+            _redact_sensitive_text_for_log(sync_recover_err),
         )
 
     return _first_token_fallback_response(), "safe_fallback"
@@ -379,15 +408,16 @@ async def _resolve_query_mode(query: str, memory, classify_query):
         configure_llamaindex_settings()
         return classify_query(resolved)
 
-    resolved_query = await asyncio.get_event_loop().run_in_executor(
-        None, _resolve_query_with_settings
-    )
+    loop = asyncio.get_running_loop()
+    resolved_query = await loop.run_in_executor(None, _resolve_query_with_settings)
     if resolved_query != query:
-        logger.info(f"Resolved context-aware streaming query: '{resolved_query}'")
+        logger.info(
+            "Resolved context-aware streaming query (original=%s, resolved=%s)",
+            _query_fingerprint_for_log(query),
+            _query_fingerprint_for_log(resolved_query),
+        )
 
-    query_mode = await asyncio.get_event_loop().run_in_executor(
-        None, _classify_query_with_settings, resolved_query
-    )
+    query_mode = await loop.run_in_executor(None, _classify_query_with_settings, resolved_query)
     return resolved_query, query_mode
 
 
@@ -504,7 +534,7 @@ def _hydrate_memory(memory, persisted_history: Optional[List[Dict[str, Any]]]) -
             hydrated = True
         return hydrated
     except Exception as e:
-        logger.warning(f"Failed to hydrate chat memory from persisted history: {e}")
+        logger.warning("Failed to hydrate chat memory from persisted history: %s", _redact_sensitive_text_for_log(e))
         return False
 
 
@@ -582,7 +612,7 @@ def _relationship_prompt_payload(index_name: str, memory, resolved_query: str, q
     import os
 
     target = extract_relationship_target(resolved_query)
-    logger.info("Stage -1: RELATIONSHIP query detected in stream. target=%s", target)
+    logger.info("Stage -1: RELATIONSHIP query detected in stream. target=%s", _redact_sensitive_text_for_log(target))
     refs = []
     if target:
         from app.config import INDEX_DIR
@@ -602,7 +632,7 @@ def _relationship_prompt_payload(index_name: str, memory, resolved_query: str, q
                             break
                 logger.info("Relationship graph stream lookup returned %s references", len(refs))
             except Exception as ex:
-                logger.warning(f"Failed to load relationship graph in stream: {ex}")
+                logger.warning("Failed to load relationship graph in stream: %s", _redact_sensitive_text_for_log(ex))
         else:
             logger.warning(f"Relationship graph file not found at {graph_path}")
     else:
@@ -750,7 +780,7 @@ async def _generate_followup_suggestions(query: str, response_text: str) -> List
             return cleaned[:3]
         return _default_followup_suggestions()
     except Exception as e:
-        logger.warning(f"Failed to generate follow-up suggestions: {e}")
+        logger.warning("Failed to generate follow-up suggestions: %s", _redact_sensitive_text_for_log(e))
         return _default_followup_suggestions()
 
 
@@ -972,11 +1002,17 @@ async def stream_chat_response(
             llm_provider = usage.get("provider")
             llm_model = usage.get("model")
         except StreamFirstTokenTimeoutError as timeout_err:
-            logger.warning(f"LLM stream startup timeout; attempting non-stream recovery: {timeout_err}")
+            logger.warning(
+                "LLM stream startup timeout; attempting non-stream recovery: %s",
+                _redact_sensitive_text_for_log(timeout_err),
+            )
             full_response, response_path = await _recover_from_stream_failure(full_prompt, timeout_err)
             yield to_sse_data({'type': 'token', 'content': full_response})
         except Exception as llm_err:
-            logger.warning(f"LLM streaming failed; attempting non-stream recovery: {llm_err}")
+            logger.warning(
+                "LLM streaming failed; attempting non-stream recovery: %s",
+                _redact_sensitive_text_for_log(llm_err),
+            )
             full_response, response_path = await _recover_from_stream_failure(full_prompt, llm_err)
             yield to_sse_data({'type': 'token', 'content': full_response})
 
@@ -1001,7 +1037,7 @@ async def stream_chat_response(
         try:
             _persist_memory_turn(repo_id, chat_id, memory, query, full_response, query_mode)
         except Exception as mem_err:
-            logger.warning(f"Memory update failed: {mem_err}")
+            logger.warning("Memory update failed: %s", _redact_sensitive_text_for_log(mem_err))
 
         t_total_ms = int((time.time() - t_start) * 1000)
 
