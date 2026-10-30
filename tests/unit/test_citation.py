@@ -69,3 +69,115 @@ def test_retrieve_and_answer_strict_citation_mode(mock_rerank, mock_classify, mo
         
         assert res == "Check valid.py"
         assert mock_llm.complete.call_count == 2
+
+
+def test_valid_citations_with_line_numbers(tmp_path):
+    """Valid citations with existing files and valid line ranges pass validation."""
+    from app.services.qa_service import validate_citations, validate_citation_details
+
+    # Create a 50-line file
+    test_file = tmp_path / "service.py"
+    test_file.write_text("\n".join([f"line_{i}" for i in range(1, 51)]))
+
+    retrieved = {"service.py"}
+    text = "Refer to `service.py:10-25` and service.py:30 for implementation details."
+
+    invalid = validate_citations(text, retrieved, str(tmp_path))
+    assert invalid == []
+
+    details = validate_citation_details(text, retrieved, str(tmp_path))
+    assert len(details["valid"]) >= 1
+    assert details["invalid_files"] == []
+    assert details["fabricated_lines"] == []
+
+
+def test_invalid_filenames_detected(tmp_path):
+    """Non-existent or hallucinated filenames are flagged as invalid."""
+    from app.services.qa_service import validate_citations, validate_citation_details
+
+    retrieved = {"real_file.py"}
+    text = "The code is in phantom_service.py and ghost_handler.ts."
+
+    invalid = validate_citations(text, retrieved, str(tmp_path))
+    assert sorted(invalid) == ["ghost_handler.ts", "phantom_service.py"]
+
+    details = validate_citation_details(text, retrieved, str(tmp_path))
+    assert "phantom_service.py" in details["invalid_files"]
+    assert "ghost_handler.ts" in details["invalid_files"]
+
+
+def test_fabricated_line_numbers_detected(tmp_path):
+    """Line numbers exceeding physical file length are flagged as fabricated."""
+    from app.services.qa_service import validate_citations, validate_citation_details
+
+    # Create file with 20 lines
+    test_file = tmp_path / "short_script.py"
+    test_file.write_text("\n".join([f"print({i})" for i in range(20)]))
+
+    retrieved = {"short_script.py"}
+    # Line 999 exceeds 20 lines
+    text = "Check `short_script.py:999` for the entry point."
+
+    invalid = validate_citations(text, retrieved, str(tmp_path))
+    assert "short_script.py:999" in invalid
+
+    details = validate_citation_details(text, retrieved, str(tmp_path))
+    assert len(details["fabricated_lines"]) == 1
+    assert details["fabricated_lines"][0]["path"] == "short_script.py"
+    assert details["fabricated_lines"][0]["line"] == 999
+
+
+def test_mixed_valid_and_invalid_citations(tmp_path):
+    """Mixed text containing valid files, invalid files, and fabricated lines is partitioned correctly."""
+    from app.services.qa_service import validate_citations, validate_citation_details
+
+    (tmp_path / "valid_a.py").write_text("\n".join([f"x = {i}" for i in range(100)]))
+    (tmp_path / "valid_b.py").write_text("x = 1\n")  # 1 line
+
+    retrieved = {"valid_a.py", "valid_b.py"}
+    text = (
+        "Look at valid_a.py:15-30 (valid), valid_b.py:500 (fabricated line), "
+        "and imaginary_helper.py (hallucinated file)."
+    )
+
+    invalid = validate_citations(text, retrieved, str(tmp_path))
+    assert "imaginary_helper.py" in invalid
+    assert "valid_b.py:500" in invalid
+    assert "valid_a.py:15" not in invalid
+    assert "valid_a.py" not in invalid
+
+
+def test_citations_outside_retrieved_context(tmp_path):
+    """Citations that exist in repo but were outside retrieved context are tracked but not flagged as hallucinated."""
+    from app.services.qa_service import validate_citation_details
+
+    (tmp_path / "in_ctx.py").write_text("print('context')")
+    (tmp_path / "outside_ctx.py").write_text("print('repo only')")
+
+    retrieved = {"in_ctx.py"}  # outside_ctx is NOT retrieved
+    text = "See in_ctx.py and outside_ctx.py."
+
+    details = validate_citation_details(text, retrieved, str(tmp_path))
+    assert "outside_ctx.py" in details["outside_context"]
+    assert details["invalid_files"] == []  # Not a nonexistent hallucination
+
+
+def test_sanitize_citations_preserves_valid_and_neutralizes_invalid(tmp_path):
+    """Sanitizer preserves valid citations and line references, strips fabricated lines, and omits invalid files."""
+    from app.services.qa_service import sanitize_citations
+
+    (tmp_path / "core.py").write_text("\n".join([f"# line {i}" for i in range(50)]))
+
+    retrieved = {"core.py"}
+    text = "Review core.py:10-20 for logic, fake_lib.py for helpers, and core.py:9999 for cleanup."
+
+    sanitized = sanitize_citations(text, retrieved, str(tmp_path))
+
+    # Valid citation with lines is preserved
+    assert "core.py:10-20" in sanitized
+    # Fake file is neutralized
+    assert "fake_lib.py" not in sanitized
+    # Fabricated line on valid file is stripped to valid file reference
+    assert "core.py:9999" not in sanitized
+    assert "core.py" in sanitized
+

@@ -161,10 +161,6 @@ function ChatContextMenu({
   const [menuPosition, setMenuPosition] = useState({ left: x, top: y });
 
   useEffect(() => {
-    setMenuPosition({ left: x, top: y });
-  }, [x, y]);
-
-  useEffect(() => {
     function updateMenuPosition() {
       if (typeof window === 'undefined') return;
       const viewportPadding = 8;
@@ -175,7 +171,7 @@ function ChatContextMenu({
       const maxLeft = Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding);
       const maxTop = Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding);
 
-      let nextLeft = Math.min(Math.max(x, viewportPadding), maxLeft);
+      const nextLeft = Math.min(Math.max(x, viewportPadding), maxLeft);
       let nextTop = y;
 
       // Prefer showing below the anchor, but flip above if bottom would clip.
@@ -210,11 +206,11 @@ function ChatContextMenu({
   }, [onClose]);
 
   const items = [
-    { key: 'open'     as const, icon: MessageSquare,                label: 'Open' },
-    { key: 'rename'   as const, icon: Pencil,                       label: 'Rename' },
-    { key: 'pin'      as const, icon: chat.is_pinned ? PinOff : Pin, label: chat.is_pinned ? 'Unpin' : 'Pin' },
-    { key: 'archive'  as const, icon: Archive,                      label: chat.is_archived ? 'Unarchive' : 'Archive' },
-    { key: 'download' as const, icon: Download,                     label: 'Export' },
+    { key: 'open'     as const, icon: MessageSquare,                label: 'Open', danger: false },
+    { key: 'rename'   as const, icon: Pencil,                       label: 'Rename', danger: false },
+    { key: 'pin'      as const, icon: chat.is_pinned ? PinOff : Pin, label: chat.is_pinned ? 'Unpin' : 'Pin', danger: false },
+    { key: 'archive'  as const, icon: Archive,                      label: chat.is_archived ? 'Unarchive' : 'Archive', danger: false },
+    { key: 'download' as const, icon: Download,                     label: 'Export', danger: false },
     { key: 'delete'   as const, icon: Trash2,                       label: 'Delete', danger: true },
   ] as const;
 

@@ -44,10 +44,31 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+def _get_file_line_count(file_path: str) -> Optional[int]:
+    """Return total number of lines in file if it exists, else None."""
+    try:
+        if os.path.isfile(file_path):
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                return sum(1 for _ in f)
+    except Exception:
+        pass
+    return None
+
+
+_CITATION_REGEX = re.compile(
+    r'(?P<prefix>\[`?|`|\b)'
+    r'(?P<path>[a-zA-Z0-9_\-\./]+\.[a-zA-Z0-9]{2,4})'
+    r'(?:(?::|#L?)(?P<start>\d+)(?:-(?:L)?(?P<end>\d+))?)?'
+    r'(?P<suffix>`?\]?|`|\b)'
+)
+
+_VALID_EXTENSIONS = {
+    "py", "js", "ts", "jsx", "tsx", "html", "css", "json", "yml", "yaml",
+    "md", "sh", "go", "rs", "cpp", "c", "h", "java", "sql", "txt"
+}
+
+
 def extract_cited_files(text: str) -> Set[str]:
-    # Match paths like: folder/sub/file.py, file.py, folder/file.js, etc.
-    # Exclude common punctuation like quotes or brackets.
-    # Pattern: words, dashes, dots, slashes, ending with an alphanumeric extension of 2-4 chars.
     matches = re.findall(r"\b[a-zA-Z0-9_\-\./]+\.[a-zA-Z0-9]{2,4}\b", text)
     results = set()
     for m in matches:
@@ -55,9 +76,92 @@ def extract_cited_files(text: str) -> Set[str]:
         if m_clean.endswith((".", "/")):
             continue
         ext = m_clean.split(".")[-1].lower()
-        if ext in ("py", "js", "ts", "jsx", "tsx", "html", "css", "json", "yml", "yaml", "md", "sh", "go", "rs", "cpp", "c", "h"):
+        if ext in _VALID_EXTENSIONS:
             results.add(m_clean)
     return results
+
+
+def extract_citations_with_lines(text: str) -> List[dict]:
+    citations = []
+    seen = set()
+    for match in _CITATION_REGEX.finditer(text):
+        raw = match.group(0)
+        path = match.group("path").strip("`'\".,()[]{}")
+        if path.endswith((".", "/")):
+            continue
+        ext = path.split(".")[-1].lower()
+        if ext not in _VALID_EXTENSIONS:
+            continue
+        start_line = int(match.group("start")) if match.group("start") else None
+        end_line = int(match.group("end")) if match.group("end") else None
+        key = (path, start_line, end_line)
+        if key not in seen:
+            seen.add(key)
+            citations.append({
+                "raw": raw,
+                "path": path,
+                "start_line": start_line,
+                "end_line": end_line,
+            })
+    return citations
+
+
+def validate_citation_details(
+    text: str,
+    retrieved_paths: Set[str],
+    repo_path: str,
+) -> dict:
+    citations = extract_citations_with_lines(text)
+    details = {
+        "valid": [],
+        "invalid_files": [],
+        "fabricated_lines": [],
+        "outside_context": [],
+    }
+
+    norm_retrieved = {os.path.normpath(p) for p in (retrieved_paths or set()) if p}
+
+    for cite in citations:
+        path = cite["path"]
+        start_line = cite["start_line"]
+        end_line = cite["end_line"]
+        full_path = os.path.join(repo_path, path) if repo_path else ""
+
+        is_in_retrieved = (
+            path in retrieved_paths
+            or os.path.normpath(path) in norm_retrieved
+            or any(r.endswith(path) or path.endswith(r) for r in retrieved_paths)
+        )
+        file_exists = bool(full_path and os.path.exists(full_path))
+
+        if not file_exists and not is_in_retrieved:
+            if path not in details["invalid_files"]:
+                details["invalid_files"].append(path)
+            continue
+
+        # Check line numbers if file exists on disk
+        if file_exists and start_line is not None:
+            line_count = _get_file_line_count(full_path)
+            if line_count is not None and (start_line > line_count or start_line <= 0):
+                details["fabricated_lines"].append({
+                    "path": path,
+                    "line": start_line,
+                    "max_lines": line_count,
+                })
+                continue
+
+        # Citation is valid; check whether in context or outside context
+        if not is_in_retrieved and file_exists:
+            details["outside_context"].append(path)
+
+        details["valid"].append({
+            "path": path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "in_context": is_in_retrieved,
+        })
+
+    return details
 
 
 def validate_citations(
@@ -65,25 +169,49 @@ def validate_citations(
     retrieved_paths: Set[str],
     repo_path: str
 ) -> List[str]:
-    cited = extract_cited_files(text)
-    invalid = []
-    for path in cited:
-        # Check if it exists physically in the workspace
-        full_path = os.path.join(repo_path, path)
-        if os.path.exists(full_path):
-            continue
-        # Or check if it is exactly one of the retrieved paths
-        if path in retrieved_paths:
-            continue
-        # Also check relative path comparisons (in case they have different leading slashes or directories)
-        matched = False
-        for r_path in retrieved_paths:
-            if r_path.endswith(path) or path.endswith(r_path):
-                matched = True
-                break
-        if not matched:
-            invalid.append(path)
-    return sorted(invalid)
+    details = validate_citation_details(text, retrieved_paths, repo_path)
+    invalid = list(details["invalid_files"])
+    for fab in details["fabricated_lines"]:
+        invalid.append(f"{fab['path']}:{fab['line']}")
+    return sorted(list(set(invalid)))
+
+
+def sanitize_citations(text: str, retrieved_paths: Set[str], repo_path: str) -> str:
+    """
+    Sanitize response text by:
+    1. Stripping fabricated line numbers from valid files (leaving valid file reference intact).
+    2. Removing or unlinking invalid/hallucinated filenames so they are not delivered as verified citations.
+    3. Preserving all valid citations and their valid line references.
+    """
+    if not text:
+        return text
+
+    details = validate_citation_details(text, retrieved_paths, repo_path)
+    invalid_files = set(details["invalid_files"])
+    fabricated_lines = {item["path"]: item["line"] for item in details["fabricated_lines"]}
+
+    if not invalid_files and not fabricated_lines:
+        return text
+
+    sanitized = text
+
+    # Strip fabricated line numbers from references to valid files (e.g. `valid.py:9999` -> `valid.py`)
+    for path, bad_line in fabricated_lines.items():
+        pattern = re.compile(re.escape(path) + r'(?::|#L?)' + str(bad_line) + r'(?:-(?:L)?\d+)?\b')
+        sanitized = pattern.sub(path, sanitized)
+
+    # For invalid/hallucinated files, remove or neutralize them
+    for bad_file in invalid_files:
+        md_link_pattern = re.compile(r'\[([^\]]+)\]\(' + re.escape(bad_file) + r'(?:#[^)]*)?\)')
+        sanitized = md_link_pattern.sub(r'\1', sanitized)
+        bracket_pattern = re.compile(r'\[`?' + re.escape(bad_file) + r'(?::\d+(?:-\d+)?)?`?\]')
+        sanitized = bracket_pattern.sub("[unverified reference omitted]", sanitized)
+        backtick_pattern = re.compile(r'`' + re.escape(bad_file) + r'(?::\d+(?:-\d+)?)?`')
+        sanitized = backtick_pattern.sub("[unverified reference omitted]", sanitized)
+        word_pattern = re.compile(r'\b' + re.escape(bad_file) + r'(?::\d+(?:-\d+)?)?\b')
+        sanitized = word_pattern.sub("[unverified reference omitted]", sanitized)
+
+    return sanitized
 
 
 _NO_MATCH_CODE_LOOKUP_RESPONSE = (
@@ -322,7 +450,12 @@ def _run_pre_routing_checks(
     memory: ChatMemoryBuffer,
     chat_engine,
 ) -> Optional[Tuple[str, object, ChatMemoryBuffer, QueryMode]]:
-    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent
+    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent, detect_greeting, GREETING_RESPONSE
+
+    if detect_greeting(query):
+        logger.info("Early exit: greeting detected")
+        _remember_turn(memory, query, GREETING_RESPONSE)
+        return GREETING_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
 
     excluded_folder = detect_excluded_folder(query)
     if excluded_folder:
@@ -432,14 +565,39 @@ def _ensure_engine_for_mode(chat_engine, query_mode: QueryMode, last_mode: Optio
     return chat_engine
 
 
-def _check_low_confidence(nodes, label: str) -> bool:
-    from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
+def _check_low_confidence(nodes, label: str, query_mode: Optional[QueryMode] = None) -> bool:
+    """
+    Check if retrieved nodes have sufficiently low confidence to warrant clarification.
+    Safely differentiates score types:
+    - Empty nodes: always low confidence (genuine no-results).
+    - RRF scores (max ~0.05): scale mismatch - never reject RRF nodes based on a 0.40 threshold.
+    - ARCHITECTURAL mode: broad questions reasoning over code context should not be aborted.
+    - CrossEncoder scores: only reject when scores are genuinely negligible (< 0.20) indicating no evidence.
+    """
+    if not nodes:
+        logger.info("Low confidence (%s): no nodes retrieved", label)
+        return True
 
+    if query_mode == QueryMode.ARCHITECTURAL:
+        return False
+
+    from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
     top_score = max((float(n.score or 0.0) for n in nodes), default=0.0)
     logger.debug("%s confidence score evaluated: top_score=%.3f threshold=%.3f", label, top_score, LOW_CONFIDENCE_SIMILARITY_THRESHOLD)
-    if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
-        logger.info("Low confidence (%s): top_score %.3f < %.3f", label, top_score, LOW_CONFIDENCE_SIMILARITY_THRESHOLD)
+
+    # RRF scores from QueryFusionRetriever are in [0, ~0.10].
+    # Comparing RRF scores against a 0.40 threshold is an incompatible scale error.
+    if top_score <= 0.10 and any(n.score is not None for n in nodes):
+        logger.debug("%s: Detected RRF score scale (top_score=%.4f); preserving retrieved nodes for generation.", label, top_score)
+        return False
+
+    # For normalized cross-encoder / vector similarity scores:
+    # A true low confidence threshold is when top_score is genuinely low (< 0.20).
+    effective_threshold = min(LOW_CONFIDENCE_SIMILARITY_THRESHOLD, 0.20)
+    if top_score < effective_threshold:
+        logger.info("Low confidence (%s): top_score %.3f < %.3f", label, top_score, effective_threshold)
         return True
+
     return False
 
 
@@ -460,7 +618,7 @@ def _execute_cross_encoder_path(
     reranked_nodes = rerank_with_cross_encoder(resolved_query, raw_nodes, top_k=TOP_K_RERANK, index_name=index_name)
     logger.debug("Cross-Encoder reranked to %s nodes", len(reranked_nodes))
 
-    if _check_low_confidence(reranked_nodes, "Cross-Encoder"):
+    if _check_low_confidence(reranked_nodes, "Cross-Encoder", query_mode=query_mode):
         _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
         return _CLARIFICATION_RESPONSE
 
@@ -500,7 +658,10 @@ def _execute_cross_encoder_path(
                     logger.info("Hallucination resolved after retry.")
                     break
             if invalid_citations:
-                logger.warning(f"Strict citation validation failed after 2 retries. Returning response with invalid citations: {invalid_citations}")
+                logger.warning(f"Strict citation validation: sanitizing {len(invalid_citations)} unverified reference(s) from response")
+                response_str = sanitize_citations(response_str, retrieved_paths, repo_path)
+        elif CITATION_VALIDATION_MODE == "filter":
+            response_str = sanitize_citations(response_str, retrieved_paths, repo_path)
         else:
             logger.warning(f"Response cited hallucinated files: {invalid_citations}")
 
@@ -524,7 +685,7 @@ def _execute_standard_path(
         retriever = chat_engine._retriever
         raw_nodes = retriever.retrieve(resolved_query)
         logger.debug("Standard path retrieved %s raw nodes", len(raw_nodes))
-        if _check_low_confidence(raw_nodes, "RAG"):
+        if _check_low_confidence(raw_nodes, "RAG", query_mode=query_mode):
             _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
             return _CLARIFICATION_RESPONSE
     except Exception as e:
@@ -558,6 +719,11 @@ def _execute_standard_path(
                 if not invalid_citations:
                     logger.info("Hallucination resolved after retry.")
                     break
+            if invalid_citations:
+                logger.warning(f"Strict citation validation: sanitizing {len(invalid_citations)} unverified reference(s) from standard response")
+                response_str = sanitize_citations(response_str, retrieved_paths, repo_path)
+        elif CITATION_VALIDATION_MODE == "filter":
+            response_str = sanitize_citations(response_str, retrieved_paths, repo_path)
         else:
             logger.warning(f"Standard path response cited hallucinated files: {invalid_citations}")
 

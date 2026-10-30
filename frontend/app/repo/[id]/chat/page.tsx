@@ -16,7 +16,7 @@ import MessageBubble, { SimpleMarkdown } from '@/components/chat/MessageBubble';
 import AIInspector from '@/components/chat/AIInspector';
 import ExportMenu from '@/components/repo/ExportMenu';
 const RelationshipGraphViewer = lazy(() => import('@/components/chat/RelationshipGraphViewer'));
-import { useChatStream, type StreamedResponse } from '@/hooks/useChatStream';
+import { useChatStream, type StreamedResponse, type StreamCallbacks } from '@/hooks/useChatStream';
 import { useGraphCache } from '@/hooks/useGraphCache';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -1034,7 +1034,7 @@ function useChatInteractionHandlers({
     token: string,
     displayText?: string,
     isCtaFollowup?: boolean,
-    callbacks?: any
+    callbacks?: StreamCallbacks
   ) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedText: string;
@@ -1153,7 +1153,7 @@ function useMessageMutationHandlers({
     token: string,
     displayText?: string,
     isCtaFollowup?: boolean,
-    callbacks?: any
+    callbacks?: StreamCallbacks
   ) => Promise<StreamedResponse | null>;
   messages: Message[];
   streamedTextRef: React.MutableRefObject<string>;
@@ -1190,7 +1190,20 @@ function useMessageMutationHandlers({
   }
 
   const handleSend = useCallback(async (query: string, displayText?: string, isCtaFollowup?: boolean) => {
-    if (!chatId || !token || !query.trim() || streaming) return;
+    if (!query.trim() || streaming) return;
+    if (!token) {
+      toast.error('Authentication session expired. Please sign in again.');
+      return;
+    }
+    if (!chatId) {
+      if (!sessionReady) {
+        toast.info('Conversation session is initializing. Your action will start shortly.');
+        pendingAutoPromptRef.current = query;
+        return;
+      }
+      toast.error('No active conversation session. Please refresh or create a new chat.');
+      return;
+    }
     const initialMessageCount = messages.length;
     const userQuery = (displayText || query).trim();
     const modelQuery = withMermaidGuardrails(query.trim());
@@ -1296,7 +1309,7 @@ function useMessageMutationHandlers({
     }
 
     void onAfterMessagePersisted().catch(() => undefined);
-  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setRetryPrompt, setSuggestions, setFollowupPending, textareaRef, onAfterMessagePersisted]);
+  }, [chatId, token, streaming, sendMessage, messages.length, streamedTextRef, pendingMetadata, setMessages, setInput, setInspectedIndex, setInspectorData, setRetryPrompt, setSuggestions, setFollowupPending, textareaRef, onAfterMessagePersisted, sessionReady, pendingAutoPromptRef]);
 
   useEffect(() => {
     if (!sessionReady || !chatId || streaming) return;

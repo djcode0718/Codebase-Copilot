@@ -250,3 +250,58 @@ async def test_stream_chat_relationship_clarification_flow(
     )
     assert "early_response" in res_err
     assert "Could you point me to a specific file" in res_err["early_response"]
+
+
+def test_vague_queries_classified_as_architectural():
+    """Verify that vague/broad exploration queries are classified as ARCHITECTURAL instead of strict CODE_LOOKUP."""
+    from app.retrieval.query_router import classify_query, QueryMode
+
+    with patch("app.retrieval.query_router._get_router_llm") as mock_get_llm:
+        mock_llm = MagicMock()
+        mock_llm.complete.return_value = "ARCHITECTURAL"
+        mock_get_llm.return_value = mock_llm
+
+        vague_queries = [
+            "security",
+            "how does it work?",
+            "what is this?",
+            "explain",
+            "how does it work",
+            "what is this",
+            "explain this",
+        ]
+
+        for q in vague_queries:
+            mode = classify_query(q)
+            assert mode == QueryMode.ARCHITECTURAL, f"Query '{q}' should be classified as ARCHITECTURAL, got {mode}"
+
+
+def test_vague_queries_with_resilient_llm_classifier():
+    """Verify that ambiguous queries query the resilient LLM classifier and map response appropriately."""
+    from app.retrieval.query_router import classify_query, QueryMode
+
+    with patch("app.retrieval.query_router._get_router_llm") as mock_get_llm:
+        mock_llm = MagicMock()
+        mock_llm.complete.return_value = "ARCHITECTURAL"
+        mock_get_llm.return_value = mock_llm
+
+        # Ambiguous query that reaches Stage 2
+        mode = classify_query("Can you tell me about the big picture here?")
+        assert mode == QueryMode.ARCHITECTURAL
+        mock_llm.complete.assert_called_once()
+
+
+def test_specific_code_queries_remain_code_lookup():
+    """Specific function/class/file queries must remain strict CODE_LOOKUP."""
+    from app.retrieval.query_router import classify_query, QueryMode
+
+    specific_queries = [
+        "where is parse_documents function defined?",
+        "show me the implementation of load_repository in file repo_loader.py",
+        "what parameters does build_vector_index take?",
+    ]
+
+    for q in specific_queries:
+        mode = classify_query(q)
+        assert mode == QueryMode.CODE_LOOKUP, f"Specific query '{q}' should be CODE_LOOKUP, got {mode}"
+

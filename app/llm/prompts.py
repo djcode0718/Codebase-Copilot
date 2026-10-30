@@ -118,7 +118,8 @@ CODE_LOOKUP: Questions about specific code — functions, classes, files,
              finding a specific piece of code to answer.
 
 ARCHITECTURAL: Broad questions about the project — limitations, improvements,
-               design patterns, architecture, suggestions, comparisons,
+               design patterns, architecture, security, suggestions, comparisons,
+               vague/exploratory questions (e.g. "security", "how does it work?", "what is this?", "explain"),
                or questions that require reasoning about the codebase as a whole.
 
 Query: {query}

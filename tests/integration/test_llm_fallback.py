@@ -18,6 +18,8 @@ from app.services.llm_fallback import (
 def create_mock_llm(model_name: str, provider: str = "MockProvider"):
     mock_llm = MagicMock()
     mock_llm.__class__.__name__ = provider
+    mock_llm._cb_provider = provider
+    mock_llm._cb_model_name = model_name
     mock_llm.model = model_name
     mock_llm.complete = MagicMock()
     mock_llm.stream_complete = MagicMock()
@@ -254,4 +256,73 @@ async def test_concurrent_last_llm_usage():
     
     assert usage1 == {"provider": "ProviderA", "model": "ModelA"}
     assert usage2 == {"provider": "ProviderB", "model": "ModelB"}
+
+
+def test_circuit_breaker_quota_exhaustion_and_bypass():
+    from app.services.llm_fallback import (
+        is_daily_quota_exhausted,
+        record_quota_exhaustion,
+        is_circuit_open,
+        clear_circuit_breaker,
+        _CIRCUIT_BREAKER_STATE,
+    )
+    
+    # 1. Test quota detection
+    daily_err = Exception("Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests (limit: 20/day)")
+    assert is_daily_quota_exhausted(daily_err) is True
+    
+    transient_err = Exception("Rate limit reached. Please try again in 5s.")
+    assert is_daily_quota_exhausted(transient_err) is False
+
+    # 2. Test tripping and clearing circuit
+    clear_circuit_breaker("MockGemini", "gemini-2.5-flash")
+    assert is_circuit_open("MockGemini", "gemini-2.5-flash") is False
+    
+    record_quota_exhaustion("MockGemini", "gemini-2.5-flash", delay=3600)
+    assert is_circuit_open("MockGemini", "gemini-2.5-flash") is True
+
+    # 3. Test ResilientFallbackLLM skips tripped circuit immediately
+    llm1 = create_mock_llm("gemini-2.5-flash", provider="MockGemini")
+    llm2 = create_mock_llm("qwen-3.8-27b", provider="MockGroq")
+    llm2.complete.return_value = make_completion_response("Groq response")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[llm1, llm2])
+    res = pipeline.complete("test query")
+
+    assert res.text == "Groq response"
+    llm1.complete.assert_not_called()  # Tripped: skipped completely!
+    llm2.complete.assert_called_once()
+
+    # Clean up
+    clear_circuit_breaker("MockGemini", "gemini-2.5-flash")
+
+
+def test_circuit_breaker_automatic_trip_on_quota_error():
+    from app.services.llm_fallback import clear_circuit_breaker, is_circuit_open
+
+    llm1 = create_mock_llm("gemini-2.5-flash", provider="MockGemini")
+    llm2 = create_mock_llm("qwen-3.8-27b", provider="MockGroq")
+    
+    # Model 1 fails with daily quota exhaustion
+    llm1.complete.side_effect = Exception("429 ResourceExhausted: Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests (limit: 20/day)")
+    llm2.complete.return_value = make_completion_response("Groq fallback")
+
+    clear_circuit_breaker("MockGemini", "gemini-2.5-flash")
+    pipeline = ResilientFallbackLLM(fallback_chain=[llm1, llm2])
+
+    # First call: trips breaker and falls back to llm2
+    res1 = pipeline.complete("first call")
+    assert res1.text == "Groq fallback"
+    assert llm1.complete.call_count == 1
+    assert is_circuit_open("MockGemini", "gemini-2.5-flash") is True
+
+    # Second call: circuit is OPEN, so llm1 is NOT called at all
+    res2 = pipeline.complete("second call")
+    assert res2.text == "Groq fallback"
+    assert llm1.complete.call_count == 1  # Still 1! Not called again
+    assert llm2.complete.call_count == 2
+
+    # Clean up
+    clear_circuit_breaker("MockGemini", "gemini-2.5-flash")
+
 

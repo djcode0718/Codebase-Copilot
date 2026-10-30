@@ -25,20 +25,27 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_cached_resilient_llm = None
+_cached_embed_model = None
+
+
 def get_llm():
     """
     Returns a resilient LLM that automatically falls back across all
     available configured providers/models.
     """
-    from app.services.llm_fallback import get_resilient_llm
+    global _cached_resilient_llm
+    if _cached_resilient_llm is None:
+        from app.services.llm_fallback import get_resilient_llm
 
-    logger.info(
-        "Loading resilient LLM manager (provider=%s, fast_mode=%s, fast_model=%s)",
-        LLM_PROVIDER,
-        USE_FAST_LLM,
-        GROQ_FAST_MODEL,
-    )
-    return get_resilient_llm()
+        logger.info(
+            "Loading resilient LLM manager (provider=%s, fast_mode=%s, fast_model=%s)",
+            LLM_PROVIDER,
+            USE_FAST_LLM,
+            GROQ_FAST_MODEL,
+        )
+        _cached_resilient_llm = get_resilient_llm()
+    return _cached_resilient_llm
 
 
 def get_embed_model():
@@ -47,12 +54,15 @@ def get_embed_model():
 
     Always local, regardless of configured generative provider.
     """
-    from llama_index.embeddings.ollama import OllamaEmbedding
-    logger.info(f"Loading embedding model: {OLLAMA_EMBED_MODEL} via Ollama")
-    return OllamaEmbedding(
-        model_name=OLLAMA_EMBED_MODEL,
-        base_url=OLLAMA_BASE_URL,
-    )
+    global _cached_embed_model
+    if _cached_embed_model is None:
+        from llama_index.embeddings.ollama import OllamaEmbedding
+        logger.info(f"Loading embedding model: {OLLAMA_EMBED_MODEL} via Ollama")
+        _cached_embed_model = OllamaEmbedding(
+            model_name=OLLAMA_EMBED_MODEL,
+            base_url=OLLAMA_BASE_URL,
+        )
+    return _cached_embed_model
 
 
 def configure_llamaindex_settings():
@@ -68,7 +78,7 @@ def configure_llamaindex_settings():
     Settings.llm = get_llm()
     Settings.embed_model = get_embed_model()
 
-    logger.info(
+    logger.debug(
         f"LlamaIndex configured — LLM: {LLM_PROVIDER}, "
         f"embed: {OLLAMA_EMBED_MODEL} (Ollama)"
     )

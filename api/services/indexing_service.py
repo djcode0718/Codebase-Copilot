@@ -458,6 +458,50 @@ def _load_pipeline_dependencies(emit):
     )
 
 
+def _validate_staged_index(staging_dir: str, min_nodes: int = 1) -> bool:
+    """Validate that the staged index has valid Chroma artifacts and manifest."""
+    chroma_dir = os.path.join(staging_dir, "chroma")
+    if not os.path.exists(chroma_dir):
+        raise ValueError(f"Validation failed: Chroma directory missing at {chroma_dir}")
+    sqlite_file = os.path.join(chroma_dir, "chroma.sqlite3")
+    if not os.path.exists(sqlite_file) or os.path.getsize(sqlite_file) == 0:
+        raise ValueError(f"Validation failed: chroma.sqlite3 missing or empty at {sqlite_file}")
+    manifest_file = os.path.join(staging_dir, "manifest.json")
+    if not os.path.exists(manifest_file):
+        raise ValueError(f"Validation failed: manifest.json missing at {manifest_file}")
+    return True
+
+
+def _promote_staged_index(staging_index_name: str, final_index_name: str) -> None:
+    """Atomically promote a staged index to final index name with rollback on failure."""
+    from app.config import INDEX_DIR
+    import uuid
+    import shutil
+    import chromadb
+    chromadb.api.client.SharedSystemClient.clear_system_cache()
+
+    staging_dir = os.path.join(INDEX_DIR, staging_index_name)
+    final_dir = os.path.join(INDEX_DIR, final_index_name)
+
+    if not os.path.exists(staging_dir):
+        raise FileNotFoundError(f"Staged index not found: {staging_dir}")
+
+    backup_dir = f"{final_dir}.backup-{uuid.uuid4().hex[:8]}"
+    if os.path.exists(final_dir):
+        os.replace(final_dir, backup_dir)
+
+    try:
+        os.replace(staging_dir, final_dir)
+        chromadb.api.client.SharedSystemClient.clear_system_cache()
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir, ignore_errors=True)
+    except Exception as e:
+        logger.error(f"Failed to promote staged index from {staging_dir} to {final_dir}: {e}")
+        if os.path.exists(backup_dir) and not os.path.exists(final_dir):
+            os.replace(backup_dir, final_dir)
+        raise
+
+
 def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
     # Emit immediately so UI never appears stalled while pre-flight checks/imports run.
     emit("cloning", "Preparing indexing environment...", 1)
@@ -564,40 +608,62 @@ def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
     logger.info(f"Total nodes: {len(nodes)}")
 
     # Step 4 - Embed
-    emit("embedding", f"Building embeddings for {len(nodes)} chunks…", 65)
-    build_vector_index(nodes, index_name)
+    from app.config import INDEX_DIR
+    import uuid
+    import shutil
+    is_existing = os.path.exists(os.path.join(INDEX_DIR, index_name))
+    build_index_name = f"{index_name}_stage_{uuid.uuid4().hex[:8]}" if is_existing else index_name
+    staging_dir = os.path.join(INDEX_DIR, build_index_name)
 
-    # Build initial manifest
-    from app.indexing.incremental import build_initial_manifest
     try:
-        build_initial_manifest(nodes, repo_path, index_name)
-    except Exception as me:
-        logger.warning(f"Failed to build initial manifest: {me}")
+        emit("embedding", f"Building embeddings for {len(nodes)} chunks…", 65)
+        build_vector_index(nodes, build_index_name)
 
-    # Step 4.5 - Git History Indexing
-    emit("history", "Extracting git log history…", 75)
-    try:
-        from app.ingestion.git_history import build_and_save_full_git_history
-        build_and_save_full_git_history(valid_files, repo_path, index_name)
-    except Exception as ge:
-        logger.warning(f"Failed to build git history: {ge}", exc_info=True)
+        # Build initial manifest
+        from app.indexing.incremental import build_initial_manifest
+        try:
+            build_initial_manifest(nodes, repo_path, build_index_name)
+        except Exception as me:
+            logger.warning(f"Failed to build initial manifest: {me}")
 
-    # Step 5 - Relationship Graph
-    emit("graph", "Building call and reference graph…", 80)
-    try:
-        from app.parsing.relationship_graph import RelationshipGraphBuilder
-        import json
-        from app.config import INDEX_DIR
-        graph_builder = RelationshipGraphBuilder(repo_path)
-        graph = graph_builder.build_graph(valid_files)
-        graph_dir = os.path.join(INDEX_DIR, index_name)
-        os.makedirs(graph_dir, exist_ok=True)
-        graph_path = os.path.join(graph_dir, "relationship_graph.json")
-        with open(graph_path, "w", encoding="utf-8") as gf:
-            json.dump(graph, gf, indent=2)
-        logger.info(f"Relationship graph saved to {graph_path} with {len(graph)} symbols")
-    except Exception as ge:
-        logger.warning(f"Failed to build relationship graph: {ge}", exc_info=True)
+        # Step 4.5 - Git History Indexing
+        emit("history", "Extracting git log history…", 75)
+        try:
+            from app.ingestion.git_history import build_and_save_full_git_history
+            build_and_save_full_git_history(valid_files, repo_path, build_index_name)
+        except Exception as ge:
+            logger.warning(f"Failed to build git history: {ge}", exc_info=True)
+
+        # Step 5 - Relationship Graph
+        emit("graph", "Building call and reference graph…", 80)
+        try:
+            from app.parsing.relationship_graph import RelationshipGraphBuilder
+            import json
+            graph_builder = RelationshipGraphBuilder(repo_path)
+            graph = graph_builder.build_graph(valid_files)
+            graph_dir = os.path.join(INDEX_DIR, build_index_name)
+            os.makedirs(graph_dir, exist_ok=True)
+            graph_path = os.path.join(graph_dir, "relationship_graph.json")
+            with open(graph_path, "w", encoding="utf-8") as gf:
+                json.dump(graph, gf, indent=2)
+            logger.info(f"Relationship graph saved to {graph_path} with {len(graph)} symbols")
+        except Exception as ge:
+            logger.warning(f"Failed to build relationship graph: {ge}", exc_info=True)
+
+        if is_existing:
+            emit("activating", "Validating and activating replacement index…", 88)
+            _validate_staged_index(staging_dir, min_nodes=len(nodes))
+            _promote_staged_index(build_index_name, index_name)
+
+        # Invalidate cached retrievers only after successful promotion
+        from app.services.qa_service import invalidate_index_cache
+        invalidate_index_cache(index_name)
+
+    except Exception as build_err:
+        if is_existing and os.path.exists(staging_dir):
+            logger.warning(f"Index build failed in staging; removing staging artifacts {staging_dir}: {build_err}")
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        raise build_err
 
     # Step 6 - Done
     emit("summary", "Finalising architectural context…", 90)
@@ -843,10 +909,14 @@ async def indexing_event_generator(
             if event["step"] == "error":
                 logger.debug("Handling error event (repo_id=%s)", repo_id)
                 try:
+                    index_name = repo.get("index_name", repo.get("name", "repo"))
+                    from app.config import INDEX_DIR
+                    has_prior_index = os.path.exists(os.path.join(INDEX_DIR, index_name, "chroma", "chroma.sqlite3"))
+                    new_status = "ready" if has_prior_index else "failed"
                     supabase_service.update_repo_status(
-                        supabase, repo_id, status="failed"
+                        supabase, repo_id, status=new_status
                     )
-                    logger.debug("Updated repository status to failed (repo_id=%s)", repo_id)
+                    logger.debug("Updated repository status to %s (has_prior_index=%s, repo_id=%s)", new_status, has_prior_index, repo_id)
                 except Exception:
                     pass
                 break

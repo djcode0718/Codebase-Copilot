@@ -160,6 +160,19 @@ async def index_repository(
     )
 
 
+import threading
+
+_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+_REFRESH_LOCKS_GUARD = threading.Lock()
+
+
+def _get_refresh_lock(repo_id: str) -> threading.Lock:
+    with _REFRESH_LOCKS_GUARD:
+        if repo_id not in _REFRESH_LOCKS:
+            _REFRESH_LOCKS[repo_id] = threading.Lock()
+        return _REFRESH_LOCKS[repo_id]
+
+
 @router.post("/{repo_id}/refresh", response_model=IndexRepoResponse)
 async def refresh_repository(
     repo_id: str,
@@ -173,24 +186,39 @@ async def refresh_repository(
     if repo["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    if repo.get("status") == "indexing":
+    lock = _get_refresh_lock(repo_id)
+    if not lock.acquire(blocking=False):
         return IndexRepoResponse(
             repo_id=repo_id,
             index_name=repo.get("index_name", repo.get("name", "repo")),
             status="indexing",
-            message="Repository is already being indexed.",
+            message="Repository refresh is already in progress.",
         )
 
-    index_name = repo.get("index_name", repo.get("name", "repo"))
-    _remove_repo_artifacts(index_name)
-    supabase_service.reset_repo_for_reindex(supabase, repo_id)
+    try:
+        from api.services.indexing_service import _indexing_in_flight
+        if repo_id in _indexing_in_flight or repo.get("status") == "indexing":
+            return IndexRepoResponse(
+                repo_id=repo_id,
+                index_name=repo.get("index_name", repo.get("name", "repo")),
+                status="indexing",
+                message="Repository is already being indexed.",
+            )
 
-    return IndexRepoResponse(
-        repo_id=repo_id,
-        index_name=index_name,
-        status="indexing",
-        message="Repository refresh started. Open the SSE stream to re-index latest changes.",
-    )
+        index_name = repo.get("index_name", repo.get("name", "repo"))
+        # B7 Fix: Never delete existing repo clone or index directory here.
+        # The existing working index remains intact and queryable until a replacement
+        # is cloned, parsed, embedded, and successfully activated in staging.
+        supabase_service.reset_repo_for_reindex(supabase, repo_id)
+
+        return IndexRepoResponse(
+            repo_id=repo_id,
+            index_name=index_name,
+            status="indexing",
+            message="Repository refresh started. Open the SSE stream to re-index latest changes.",
+        )
+    finally:
+        lock.release()
 
 
 @router.get("/{repo_id}/index-progress")

@@ -30,15 +30,15 @@ USE_FAST_LLM = os.getenv("USE_FAST_LLM", "false").lower() == "true"
 # Swap between these two in .env to compare speed vs quality:
 #   "llama-3.3-70b-versatile"  → better quality,  ~2-3s latency  (recommended for evals)
 #   "llama-3.1-8b-instant"   → faster,          ~0.5-1s latency (good for quick demos)
-GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "llama-3.3-70b-versatile")
+GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "qwen/qwen3.8-27b")
 
 # ─── API Keys ────────────────────────────────────────────────────────────────
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 
 # ─── Provider Models ─────────────────────────────────────────────────────────
-GEMINI_LLM_MODEL = os.getenv("GEMINI_LLM_MODEL", "models/gemini-flash-latest")
-GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+GEMINI_LLM_MODEL = os.getenv("GEMINI_LLM_MODEL", "models/gemini-3.5-flash")
+GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "qwen/qwen3.8-27b")
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -88,12 +88,11 @@ LLM_FALLBACK_RETRY_THRESHOLD = int(os.getenv("LLM_FALLBACK_RETRY_THRESHOLD", "10
 # Configured fallback chain of model definitions (comma-separated "provider:model_name").
 LLM_FALLBACK_CHAIN_STR = os.getenv(
     "LLM_FALLBACK_CHAIN",
-    "gemini:models/gemini-3.6-flash,"
+    "gemini:models/gemini-3.5-flash,"
+    "gemini:models/gemini-3.5-flash-lite,"
     "gemini:models/gemini-3.1-flash-lite,"
-    "gemini:models/gemini-2.0-flash,"
-    "gemini:models/gemini-2.0-flash-lite,"
-    "gemini:models/gemini-flash-latest,"
-    "groq:llama-3.3-70b-versatile"
+    "groq:qwen/qwen3.8-27b,"
+    "ollama:llama3.2:3b"
 )
 
 # ─── Streaming Guard Configuration ───────────────────────────────────────────
@@ -122,4 +121,4 @@ INDEX_GIT_HISTORY = os.getenv("INDEX_GIT_HISTORY", "true").lower() == "true"
 GIT_HISTORY_MAX_COMMITS_PER_FILE = int(os.getenv("GIT_HISTORY_MAX_COMMITS_PER_FILE", "50"))
 
 # -- Citation validation controls ---------------------------------------------
-CITATION_VALIDATION_MODE = os.getenv("CITATION_VALIDATION_MODE", "log").lower()
+CITATION_VALIDATION_MODE = os.getenv("CITATION_VALIDATION_MODE", "strict").lower()

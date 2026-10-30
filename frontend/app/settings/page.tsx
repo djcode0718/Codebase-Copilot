@@ -121,8 +121,8 @@ export default function SettingsPage() {
           <Label>API Base URL</Label>
           <Input
             value={apiBase}
-            onChange={(e) => setApiBase(e.target.value)}
-            className="bg-background/70 border-border font-code text-sm"
+            readOnly
+            className="bg-background/70 border-border font-code text-sm text-muted-foreground"
             placeholder="http://localhost:8000"
           />
           <p className="text-xs text-muted-foreground">

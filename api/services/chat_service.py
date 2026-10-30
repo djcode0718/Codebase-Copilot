@@ -122,6 +122,8 @@ _REPO_INTENT_KEYWORDS = {
     "authenticated", "authentication", "credential", "credentials", "secret",
     "token", "key", "env", "environment", "setting", "settings",
     "llm", "embedding", "vector", "index", "retrieval", "pipeline",
+    # Repository structure / entry points
+    "main", "entry", "entrypoint", "entry point", "entry-point", "application", "app", "startup", "start", "run",
 }
 
 
@@ -581,7 +583,11 @@ def _stream_prechecks(query: str, index_name: str, memory, is_cta_followup: bool
     if is_cta_followup:
         return None
 
-    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent
+    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent, detect_greeting, GREETING_RESPONSE
+
+    if detect_greeting(query):
+        logger.info("Stream early exit: greeting detected")
+        return _stream_early_response_payload(memory, query, GREETING_RESPONSE)
 
     excluded_folder = detect_excluded_folder(query)
     if excluded_folder:
@@ -720,14 +726,15 @@ async def _prepare_stream_prompt(
     from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
 
     logger.info("Preparing stream prompt for repo=%s chat=%s", repo_id, chat_id)
-    vector_index, bm25_retriever = await _load_indexes(index_name)
-    logger.debug("Loaded stream indexes (bm25_available=%s)", bm25_retriever is not None)
     memory = _get_or_create_memory(repo_id, chat_id, persisted_history)
     logger.debug("Loaded/created stream memory (hydrated_history=%s)", bool(persisted_history))
 
     precheck = _stream_prechecks(query, index_name, memory, is_cta_followup)
     if precheck is not None:
         return precheck
+
+    vector_index, bm25_retriever = await _load_indexes(index_name)
+    logger.debug("Loaded stream indexes (bm25_available=%s)", bm25_retriever is not None)
 
     resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
     logger.info("Resolved stream query mode=%s", query_mode.value)
@@ -922,8 +929,11 @@ async def stream_chat_response(
 
         # ── Low Confidence Check (Streaming) ──────────────────────────────────
         from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
-        if query_mode != QueryMode.RELATIONSHIP and top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
-            logger.info("Streaming low-confidence clarification path triggered")
+        is_rrf_scale = top_score <= 0.10 and any(n.score is not None for n in reranked_nodes)
+        is_truly_low = (not is_rrf_scale) and (top_score < min(LOW_CONFIDENCE_SIMILARITY_THRESHOLD, 0.20))
+
+        if query_mode == QueryMode.CODE_LOOKUP and (not reranked_nodes or (is_truly_low and not _looks_repository_intent(query))):
+            logger.info("Streaming low-confidence clarification path triggered (top_score=%.3f)", top_score)
             clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
             for evt in _terminal_events(
                 text=clarification,

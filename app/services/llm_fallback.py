@@ -6,7 +6,7 @@ import threading
 import inspect
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, List, Optional, AsyncGenerator
+from typing import Any, Dict, List, Optional, AsyncGenerator
 from pydantic import Field
 
 from llama_index.core.llms import CustomLLM, CompletionResponse, CompletionResponseGen, LLMMetadata
@@ -113,6 +113,61 @@ def parse_retry_delay(err: Exception) -> Optional[int]:
 
     return None
 
+_CIRCUIT_BREAKER_STATE: Dict[str, float] = {}
+_cb_lock = threading.Lock()
+
+
+def is_daily_quota_exhausted(err: Exception) -> bool:
+    """Check if the exception indicates daily or long-duration quota exhaustion."""
+    msg = str(err).lower()
+    if (
+        "per day" in msg
+        or "requests per day" in msg
+        or "freetier" in msg
+        or "free_tier_requests" in msg
+        or "generate_content_free_tier" in msg
+        or "limit: 20" in msg
+        or "exceeded your current quota" in msg
+    ):
+        return True
+    delay = parse_retry_delay(err)
+    if delay is not None and delay > 600:
+        return True
+    return False
+
+
+def record_quota_exhaustion(provider: str, model_name: str, delay: Optional[int] = None) -> None:
+    """Trip circuit breaker for a model whose quota is exhausted."""
+    key = f"{provider}/{model_name}"
+    cooldown = min(float(delay), 86400.0) if (delay is not None and delay > 0) else 3600.0
+    with _cb_lock:
+        _CIRCUIT_BREAKER_STATE[key] = time.time() + cooldown
+    logger.warning(
+        f"Circuit breaker tripped for {key}: quota exhausted. Cooling down for {cooldown:.1f}s."
+    )
+
+
+def is_circuit_open(provider: str, model_name: str) -> bool:
+    """Return True if circuit is open (model in cooldown window)."""
+    key = f"{provider}/{model_name}"
+    with _cb_lock:
+        cooldown_until = _CIRCUIT_BREAKER_STATE.get(key)
+        if cooldown_until is None:
+            return False
+        if time.time() < cooldown_until:
+            return True
+        del _CIRCUIT_BREAKER_STATE[key]
+        logger.info(f"Circuit breaker reset for {key} (cooldown period expired).")
+        return False
+
+
+def clear_circuit_breaker(provider: str, model_name: str) -> None:
+    """Clear open circuit upon confirmed success."""
+    key = f"{provider}/{model_name}"
+    with _cb_lock:
+        _CIRCUIT_BREAKER_STATE.pop(key, None)
+
+
 def _provider_and_model(llm: Any) -> tuple[str, str]:
     provider = getattr(llm, "_cb_provider", type(llm).__name__)
     model_name = getattr(llm, "_cb_model_name", getattr(llm, "model", getattr(llm, "model_name", "unknown")))
@@ -159,6 +214,11 @@ class ResilientFallbackLLM(CustomLLM):
         errors = {}
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
+            if is_circuit_open(provider, model_name):
+                logger.info(
+                    f"Skipping {provider}/{model_name}: circuit breaker is open (cooling down)."
+                )
+                continue
             
             # Allow up to 1 retry attempt if retry-after delay is small
             retries = 1
@@ -170,9 +230,16 @@ class ResilientFallbackLLM(CustomLLM):
                     )
                     response = llm.complete(prompt, **kwargs)
                     _record_llm_usage(provider, model_name)
+                    clear_circuit_breaker(provider, model_name)
                     logger.info(f"Completion succeeded with {provider}/{model_name}.")
                     return response
                 except Exception as e:
+                    if is_daily_quota_exhausted(e):
+                        delay = parse_retry_delay(e)
+                        record_quota_exhaustion(provider, model_name, delay)
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
+
                     if not is_rate_limit_or_quota_error(e):
                         logger.warning(
                             f"Non-rate-limit error on {provider}/{model_name}. Trying next fallback model: {e}"
@@ -206,6 +273,11 @@ class ResilientFallbackLLM(CustomLLM):
             errors = {}
             for llm in self.fallback_chain:
                 provider, model_name = _provider_and_model(llm)
+                if is_circuit_open(provider, model_name):
+                    logger.info(
+                        f"Skipping {provider}/{model_name}: circuit breaker is open (cooling down)."
+                    )
+                    continue
                 
                 retries = 1
                 for attempt in range(retries + 1):
@@ -219,6 +291,7 @@ class ResilientFallbackLLM(CustomLLM):
                         for chunk in stream_response:
                             if not tokens_yielded:
                                 _record_llm_usage(provider, model_name)
+                                clear_circuit_breaker(provider, model_name)
                             tokens_yielded = True
                             yield chunk
                         logger.info(f"Streaming completion succeeded with {provider}/{model_name}.")
@@ -227,6 +300,12 @@ class ResilientFallbackLLM(CustomLLM):
                         if tokens_yielded:
                             logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
                             raise e
+
+                        if is_daily_quota_exhausted(e):
+                            delay = parse_retry_delay(e)
+                            record_quota_exhaustion(provider, model_name, delay)
+                            errors[f"{provider}/{model_name}"] = str(e)
+                            break
 
                         if not is_rate_limit_or_quota_error(e):
                             logger.warning(
@@ -263,6 +342,11 @@ class ResilientFallbackLLM(CustomLLM):
         errors = {}
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
+            if is_circuit_open(provider, model_name):
+                logger.info(
+                    f"Skipping {provider}/{model_name}: circuit breaker is open (cooling down)."
+                )
+                continue
             
             retries = 1
             for attempt in range(retries + 1):
@@ -273,9 +357,16 @@ class ResilientFallbackLLM(CustomLLM):
                     )
                     response = await llm.acomplete(prompt, **kwargs)
                     _record_llm_usage(provider, model_name)
+                    clear_circuit_breaker(provider, model_name)
                     logger.info(f"Async completion succeeded with {provider}/{model_name}.")
                     return response
                 except Exception as e:
+                    if is_daily_quota_exhausted(e):
+                        delay = parse_retry_delay(e)
+                        record_quota_exhaustion(provider, model_name, delay)
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
+
                     if not is_rate_limit_or_quota_error(e):
                         logger.warning(
                             f"Non-rate-limit error on {provider}/{model_name}. Trying next fallback model: {e}"
@@ -308,6 +399,11 @@ class ResilientFallbackLLM(CustomLLM):
         errors = {}
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
+            if is_circuit_open(provider, model_name):
+                logger.info(
+                    f"Skipping {provider}/{model_name}: circuit breaker is open (cooling down)."
+                )
+                continue
 
             retries = 1
             for attempt in range(retries + 1):
@@ -335,6 +431,7 @@ class ResilientFallbackLLM(CustomLLM):
                     async for chunk in stream_response:
                         if not tokens_yielded:
                             _record_llm_usage(provider, model_name)
+                            clear_circuit_breaker(provider, model_name)
                         tokens_yielded = True
                         yield chunk
                     logger.info(f"Async streaming completion succeeded with {provider}/{model_name}.")
@@ -343,6 +440,12 @@ class ResilientFallbackLLM(CustomLLM):
                     if tokens_yielded:
                         logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
                         raise e
+
+                    if is_daily_quota_exhausted(e):
+                        delay = parse_retry_delay(e)
+                        record_quota_exhaustion(provider, model_name, delay)
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
 
                     if not is_rate_limit_or_quota_error(e):
                         logger.warning(

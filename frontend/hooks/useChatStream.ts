@@ -50,7 +50,7 @@ export interface StreamedResponse {
   suggestions?: string[];
 }
 
-interface StreamCallbacks {
+export interface StreamCallbacks {
   onTextDone?: (content: string, metadata: Omit<StreamedResponse, 'content'>) => void;
   onFollowupPending?: () => void;
   onFollowupSuggestions?: (questions: string[]) => void;
@@ -152,7 +152,7 @@ async function readResponseStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let shouldStop = false;
-  let timeoutId: any = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const onDoneReceived = () => {
     if (timeoutId) clearTimeout(timeoutId);
@@ -163,7 +163,7 @@ async function readResponseStream(
       if (callbacks?.onFollowupSuggestions) {
         callbacks.onFollowupSuggestions([]);
       }
-    }, 12000);
+    }, 5000);
   };
 
   try {
@@ -239,18 +239,19 @@ export function useChatStream(): UseChatStreamResult {
       setPendingMetadata(null);
       setError(null);
 
-      let fullText = '';
-      let receivedErrorEvent = false;
-      let metadata: Omit<StreamedResponse, 'content'> = {
-        queryMode: null,
-        retrievedFiles: [],
-        latencyRetrievalMs: null,
-        latencyLlmMs: null,
-        latencyTotalMs: null,
-        llmProvider: null,
-        llmModel: null,
+      const state = {
+        fullText: '',
+        receivedErrorEvent: false,
+        metadata: {
+          queryMode: null,
+          retrievedFiles: [],
+          latencyRetrievalMs: null,
+          latencyLlmMs: null,
+          latencyTotalMs: null,
+          llmProvider: null,
+          llmModel: null,
+        } as Omit<StreamedResponse, 'content'>,
       };
-      const state = { fullText, metadata, receivedErrorEvent };
 
       try {
         const res = await fetch(`${apiBase}/api/chat/${chatId}/message/stream`, {

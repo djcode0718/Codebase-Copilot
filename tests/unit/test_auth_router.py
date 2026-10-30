@@ -17,6 +17,20 @@ def test_password_reset_complete_requires_authenticated_user_dependency():
     assert get_current_user in dependency_calls
 
 
+def test_public_auth_endpoints_do_not_require_authenticated_user_dependency():
+    public_paths = [
+        "/register/preflight",
+        "/login/preflight",
+        "/login/audit",
+        "/password-reset/audit-request",
+    ]
+    for path in public_paths:
+        route = next(r for r in auth.router.routes if getattr(r, "path", "") == path)
+        dependency_calls = [dep.call for dep in route.dependant.dependencies]
+        assert get_current_user not in dependency_calls, f"Expected {path} to not require get_current_user"
+
+
+
 def test_register_preflight_allows_new_email(client, monkeypatch):
     monkeypatch.setattr(auth_service, "normalize_email", lambda value: value.strip().lower())
     monkeypatch.setattr(auth_service, "validate_password", lambda value: None)
