@@ -230,3 +230,28 @@ async def test_async_stream_aborts_mid_stream():
     assert chunks == ["Start"]
     llm1.astream_complete.assert_called_once()
     llm2.astream_complete.assert_not_called()  # Never fallback mid-response!
+
+
+@pytest.mark.asyncio
+async def test_concurrent_last_llm_usage():
+    import asyncio
+    from app.services.llm_fallback import _record_llm_usage, get_last_llm_usage
+    
+    async def request_one():
+        _record_llm_usage("ProviderA", "ModelA")
+        await asyncio.sleep(0.1)
+        usage = get_last_llm_usage()
+        return usage
+        
+    async def request_two():
+        await asyncio.sleep(0.05)
+        _record_llm_usage("ProviderB", "ModelB")
+        await asyncio.sleep(0.1)
+        usage = get_last_llm_usage()
+        return usage
+
+    usage1, usage2 = await asyncio.gather(request_one(), request_two())
+    
+    assert usage1 == {"provider": "ProviderA", "model": "ModelA"}
+    assert usage2 == {"provider": "ProviderB", "model": "ModelB"}
+

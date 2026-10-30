@@ -318,11 +318,24 @@ def build_indexes(all_nodes: list, documents: list):
     metric("ChromaDB path",     f"data/index/{INDEX_NAME}/chroma/")
 
     # Build BM25
-    step_start("BM25Retriever", f"keyword index over {len(all_nodes)} nodes")
+    from app.config import INDEX_GIT_HISTORY
+    nodes_for_bm25 = all_nodes
+    git_count = 0
+    if INDEX_GIT_HISTORY:
+        try:
+            from app.ingestion.git_history import load_persisted_git_history
+            git_docs = load_persisted_git_history(INDEX_NAME)
+            nodes_for_bm25 = all_nodes + git_docs
+            git_count = len(git_docs)
+        except Exception as ge:
+            logger.warning(f"Failed to load git history: {ge}")
+
+    step_start("BM25Retriever", f"keyword index over {len(nodes_for_bm25)} nodes")
     from app.config import TOP_K_CHUNKS
-    bm25_retriever = build_bm25_retriever(all_nodes, top_k=TOP_K_CHUNKS)
+    bm25_retriever = build_bm25_retriever(nodes_for_bm25, top_k=TOP_K_CHUNKS)
     elapsed_bm25 = step_done("BM25Retriever")
-    metric("BM25 nodes",    len(all_nodes))
+    metric("BM25 nodes",    len(nodes_for_bm25))
+    metric("BM25 git nodes", git_count)
     metric("BM25 top_k",    TOP_K_CHUNKS)
     metric("BM25 time",     f"{elapsed_bm25:.2f}s")
 
@@ -494,16 +507,16 @@ def _retrieve_candidate_nodes(query_mode, query_text: str, vector_index, bm25_re
     return raw_nodes, t_ret, retriever_type
 
 
-def _rerank_nodes(query_text: str, raw_nodes: list, use_cross_encoder: bool, top_k_rerank: int):
+def _rerank_nodes(query_text: str, raw_nodes: list, use_reranker: bool, top_k_rerank: int):
     """Rerank nodes using Cross-Encoder or score sorting."""
     from app.config import TOP_K_RERANK
     
-    step_start("Reranking", f"Cross-Encoder={'ON' if use_cross_encoder else 'OFF'}")
+    step_start("Reranking", f"Cross-Encoder={'ON' if use_reranker else 'OFF'}")
     t_rerank_start = time.time()
 
-    if use_cross_encoder and raw_nodes:
+    if use_reranker and raw_nodes:
         from app.retrieval.reranker import rerank_with_cross_encoder
-        reranked_nodes = rerank_with_cross_encoder(query_text, raw_nodes, top_k=TOP_K_RERANK)
+        reranked_nodes = rerank_with_cross_encoder(query_text, raw_nodes, top_k=TOP_K_RERANK, index_name=INDEX_NAME)
         rerank_method = f"Cross-Encoder (BAAI/bge-reranker-base) → top {TOP_K_RERANK}"
     else:
         reranked_nodes = sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
@@ -534,7 +547,7 @@ def _generate_and_stream_response(full_prompt: str, settings_llm, query_mode):
     return full_response, t_llm
 
 
-def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_mode, turn_count: int, use_cross_encoder: bool):
+def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_mode, turn_count: int, use_reranker: bool):
     """Process a single query turn through the entire pipeline."""
     from llama_index.core import Settings
     from llama_index.core.base.llms.types import ChatMessage
@@ -553,7 +566,7 @@ def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_m
     )
 
     # Rerank
-    reranked_nodes, t_rerank, rerank_method = _rerank_nodes(raw, raw_nodes, use_cross_encoder, TOP_K_RERANK)
+    reranked_nodes, t_rerank, rerank_method = _rerank_nodes(raw, raw_nodes, use_reranker, TOP_K_RERANK)
 
     # Show retrieved chunks
     _print_retrieved_nodes(reranked_nodes)
@@ -580,7 +593,7 @@ def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_m
     return query_mode
 
 
-def chat_repl(vector_index, bm25_retriever, use_cross_encoder: bool):
+def chat_repl(vector_index, bm25_retriever, use_reranker: bool):
     """Interactive chat REPL with query routing, retrieval, and generation."""
     from llama_index.core.memory import ChatMemoryBuffer
 
@@ -606,7 +619,7 @@ def chat_repl(vector_index, bm25_retriever, use_cross_encoder: bool):
             continue
 
         turn_count += 1
-        last_mode = _process_single_query(raw, vector_index, bm25_retriever, memory, last_mode, turn_count, use_cross_encoder)
+        last_mode = _process_single_query(raw, vector_index, bm25_retriever, memory, last_mode, turn_count, use_reranker)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -618,7 +631,7 @@ def main():
     pipeline_start = time.time()
 
     # PRE-FLIGHT
-    use_cross_encoder = preflight_check()
+    use_reranker = preflight_check()
 
     # STEP 1 — LlamaIndex settings
     configure_llm()
@@ -632,6 +645,17 @@ def main():
     # STEP 4 — Parse + chunk
     all_nodes, documents = parse_and_chunk(valid_files, repo_path)
 
+    # STEP 4.5 — Git History
+    from app.config import INDEX_GIT_HISTORY
+    if INDEX_GIT_HISTORY:
+        step_start("Git History Extraction", "git log -p per file")
+        try:
+            from app.ingestion.git_history import build_and_save_full_git_history
+            build_and_save_full_git_history(valid_files, repo_path, INDEX_NAME)
+            step_done("Git History Extraction")
+        except Exception as e:
+            step_fail("Git History Extraction", str(e))
+
     # STEP 5 — Index
     vector_index, bm25_retriever = build_indexes(all_nodes, documents)
 
@@ -643,7 +667,7 @@ def main():
     )
 
     # STEP 6 — Chat REPL
-    chat_repl(vector_index, bm25_retriever, use_cross_encoder)
+    chat_repl(vector_index, bm25_retriever, use_reranker)
 
 
 if __name__ == "__main__":

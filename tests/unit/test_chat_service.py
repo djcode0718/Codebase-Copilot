@@ -52,6 +52,7 @@ import enum as _enum
 class _QueryMode(_enum.Enum):
     CODE_LOOKUP  = "code_lookup"
     ARCHITECTURAL = "architectural"
+    RELATIONSHIP = "relationship"
 
 sys.modules["app.retrieval.query_router"].QueryMode = _QueryMode
 
@@ -316,5 +317,66 @@ async def test_stream_delta_accumulation_prevents_duplication():
     # If duplication prevention works, the cumulative text chunk (chunk3)
     # should only yield the new delta part "!" instead of the full "Hello world!".
     assert tokens == ["Hello", " world", "!"]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_response_early_done_and_decoupled_suggestions():
+    # Mock prepare stream prompt
+    prep_mock = {
+        "memory": MagicMock(),
+        "resolved_query": "resolved query",
+        "query_mode": chat_service.QueryMode.RELATIONSHIP,
+        "reranked_nodes": [],
+        "retrieved_files": [],
+        "t_retrieval_ms": 10,
+        "full_prompt": "full prompt",
+    }
+
+    async def mock_prepare(*args, **kwargs):
+        return prep_mock
+
+    # Mock streaming from LLM
+    async def mock_stream_llm(*args, **kwargs):
+        yield "Hello"
+        yield " World"
+
+    # Mock followup suggestions
+    async def mock_followup(*args, **kwargs):
+        return ["suggestion 1", "suggestion 2"]
+
+    with patch("api.services.chat_service._prepare_stream_prompt", side_effect=mock_prepare), \
+         patch("api.services.chat_service._stream_llm_response_with_guard", side_effect=mock_stream_llm), \
+         patch("api.services.chat_service._persist_memory_turn") as mock_persist, \
+         patch("api.services.chat_service._generate_followup_suggestions", side_effect=mock_followup) as mock_sugg, \
+         patch("api.services.chat_service.is_general_knowledge_or_preference_query", return_value=False), \
+         patch("app.services.qa_service.validate_citations", return_value=[]) as mock_citation:
+
+        events = []
+        async for sse_data in chat_service.stream_chat_response(
+            query="Show me handle_user_query function",
+            index_name="test_index",
+            repo_id="test_repo",
+            chat_id="test_chat",
+        ):
+            events.append(sse_data)
+
+    import json
+    parsed_events = []
+    for evt in events:
+        assert evt.startswith("data: ")
+        assert evt.endswith("\n\n")
+        payload = json.loads(evt[6:-2])
+        parsed_events.append(payload)
+
+    # Verify event types in order:
+    assert parsed_events[0] == {"type": "token", "content": "Hello World"}
+    assert parsed_events[1]["type"] == "metadata"
+    assert parsed_events[2] == {"type": "done"}
+    assert parsed_events[3] == {"type": "followup_pending"}
+    assert parsed_events[4] == {"type": "followup_suggestions", "questions": ["suggestion 1", "suggestion 2"]}
+
+    # Verify passive citation validation was called
+    mock_citation.assert_called_once()
+
 
 

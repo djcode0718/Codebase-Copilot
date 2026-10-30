@@ -71,6 +71,8 @@ def test_check_superlative_intent_adjective_path():
 
 def test_check_superlative_intent_llm_fallback_path():
     # Fallback path (should trigger LLM call when has_superlative is True but adjective map fails)
+    from app.retrieval.query_router import _superlative_cache
+    _superlative_cache.cache.clear()
     with patch("app.retrieval.query_router.classify_superlative_with_llm", return_value="security_review") as mock_llm:
         res = check_superlative_intent("who is the best coder here")
         assert res is not None
@@ -78,10 +80,173 @@ def test_check_superlative_intent_llm_fallback_path():
         mock_llm.assert_called_once_with("who is the best coder here")
 
     # LLM fallback fails or returns None -> check_superlative_intent should return None
+    _superlative_cache.cache.clear()
     with patch("app.retrieval.query_router.classify_superlative_with_llm", return_value=None) as mock_llm:
         res = check_superlative_intent("who is the best coder here")
         assert res is None
 
 
+def test_check_superlative_intent_cache():
+    # Cache should prevent second LLM call for identical queries
+    from app.retrieval.query_router import _superlative_cache
+    _superlative_cache.cache.clear()  # clear cache first
+
+    with patch("app.retrieval.query_router.classify_superlative_with_llm", return_value="security_review") as mock_llm:
+        res1 = check_superlative_intent("who is the best developer here", index_name="test_index")
+        assert res1 is not None
+        assert res1["suggested_action"] == "security_review"
+        mock_llm.assert_called_once()
+        
+        # Second call with same normalized query should hit cache
+        mock_llm.reset_mock()
+        res2 = check_superlative_intent("Who is the best developer here!", index_name="test_index")
+        assert res2 is not None
+        assert res2["suggested_action"] == "security_review"
+        mock_llm.assert_not_called()
+
+
 def test_threshold_value():
     assert LOW_CONFIDENCE_SIMILARITY_THRESHOLD == 0.40
+
+
+def test_is_real_identifier():
+    import tempfile
+    import os
+    import json
+    from unittest.mock import patch
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        index_dir = os.path.join(tmp_dir, "index")
+        os.makedirs(index_dir)
+        
+        index_name = "test_repo"
+        repo_index_dir = os.path.join(index_dir, index_name)
+        os.makedirs(repo_index_dir)
+        
+        # We put a specific key 'USE_RERANKER_TIMEOUT' to test exact matches
+        graph_data = {
+            "my_function": ["app.py:my_function"],
+            "MyClass": ["app.py:MyClass"],
+            "USE_RERANKER_TIMEOUT": []
+        }
+        with open(os.path.join(repo_index_dir, "relationship_graph.json"), "w", encoding="utf-8") as f:
+            json.dump(graph_data, f)
+            
+        with patch("app.config.INDEX_DIR", index_dir):
+            from app.retrieval.query_router import is_real_identifier, _identifier_cache
+            
+            # Clear cache first
+            _identifier_cache.cache.clear()
+            
+            # Real function (exact match)
+            assert is_real_identifier("my_function", index_name) is True
+            # Real class (exact case-insensitive match)
+            assert is_real_identifier("myclass", index_name) is True
+            
+            # Substring target that is a prefix should NOT match (e.g. USE_RERANKER vs USE_RERANKER_TIMEOUT)
+            assert is_real_identifier("USE_RERANKER", index_name) is False
+            
+            # Substring target that is a suffix should NOT match (e.g. TIMEOUT vs USE_RERANKER_TIMEOUT)
+            assert is_real_identifier("TIMEOUT", index_name) is False
+            
+            # Exact match of USE_RERANKER_TIMEOUT should match
+            assert is_real_identifier("use_reranker_timeout", index_name) is True
+            
+            # Cache test: verify cache gets populated
+            cache_key = (index_name, "my_function")
+            assert _identifier_cache.get(cache_key) is True
+
+
+@patch("app.services.qa_service.Settings")
+@patch("app.services.qa_service._build_code_lookup_engine")
+@patch("app.retrieval.query_router.is_real_identifier")
+def test_relationship_query_clarification_flow(mock_is_real, mock_build_engine, mock_settings):
+    from app.services.qa_service import handle_user_query
+    from app.retrieval.query_router import QueryMode
+    
+    chat_engine = MagicMock()
+    memory = MagicMock()
+    
+    # 1. Real identifier -> should proceed to retrieval (calls LLM complete)
+    mock_is_real.return_value = True
+    mock_settings.llm.complete.return_value = "Here are the calls..."
+    
+    # "What functions call handle_user_query" is recognized as RELATIONSHIP query mode
+    res, _, _, mode = handle_user_query(
+        "What functions call handle_user_query?",
+        "test_index",
+        chat_engine,
+        memory
+    )
+    assert mode == QueryMode.RELATIONSHIP
+    assert res == "Here are the calls..."
+    mock_settings.llm.complete.assert_called_once()
+    
+    # 2. Vague identifier -> should ask for clarification
+    mock_is_real.return_value = False
+    mock_settings.llm.complete.reset_mock()
+    
+    res, _, _, mode = handle_user_query(
+        "what functions call things?",
+        "test_index",
+        chat_engine,
+        memory
+    )
+    assert mode == QueryMode.RELATIONSHIP
+    assert "Could you point me to a specific file" in res
+    mock_settings.llm.complete.assert_not_called()
+
+
+@patch("app.retrieval.query_router.is_real_identifier")
+@patch("api.services.chat_service._load_indexes")
+@patch("api.services.chat_service._get_or_create_memory")
+@patch("api.services.chat_service._resolve_query_mode")
+@patch("app.retrieval.query_router.extract_relationship_target")
+@pytest.mark.asyncio
+async def test_stream_chat_relationship_clarification_flow(
+    mock_extract_target,
+    mock_resolve_mode,
+    mock_get_memory,
+    mock_load_indexes,
+    mock_is_real
+):
+    from api.services.chat_service import _prepare_stream_prompt, QueryMode
+    
+    mock_load_indexes.return_value = (MagicMock(), MagicMock())
+    memory = MagicMock()
+    mock_get_memory.return_value = memory
+    
+    # Mock query mode resolution to RELATIONSHIP
+    mock_resolve_mode.return_value = ("what calls handle_user_query", QueryMode.RELATIONSHIP)
+    mock_extract_target.return_value = "handle_user_query"
+    
+    # Case A: target is real identifier -> should proceed to prompt creation without early response
+    mock_is_real.return_value = True
+    
+    with patch("app.config.INDEX_DIR", "mock_index_dir"), \
+         patch("app.llm.prompts.RELATIONSHIP_PROMPT", "Target: {target_symbol}, Refs: {references_list}"):
+         
+        res = await _prepare_stream_prompt(
+            query="what calls handle_user_query",
+            index_name="test_index",
+            repo_id="test_repo",
+            chat_id="test_chat",
+            memory_context=None
+        )
+        
+        assert "early_response" not in res
+        assert res["query_mode"] == QueryMode.RELATIONSHIP
+        assert "handle_user_query" in res["full_prompt"]
+
+    # Case B: target is NOT real -> should return early with clarification response
+    mock_is_real.return_value = False
+    
+    res_err = await _prepare_stream_prompt(
+        query="what calls things",
+        index_name="test_index",
+        repo_id="test_repo",
+        chat_id="test_chat",
+        memory_context=None
+    )
+    assert "early_response" in res_err
+    assert "Could you point me to a specific file" in res_err["early_response"]

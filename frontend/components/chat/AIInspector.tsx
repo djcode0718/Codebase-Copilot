@@ -36,6 +36,11 @@ const MODE_CONFIG = {
     description: 'Dense retrieval (extended top-k)',
     className: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
   },
+  relationship: {
+    label: 'RELATIONSHIP',
+    description: 'AST call & reference graph',
+    className: 'text-purple-400 bg-purple-500/10 border-purple-500/20',
+  },
 };
 
 function ScoreBar({ score }: { score: number }) {

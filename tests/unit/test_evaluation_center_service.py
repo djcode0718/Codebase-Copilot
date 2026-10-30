@@ -80,3 +80,9 @@ def test_build_comparison_payload_uses_summary_deltas():
     assert comparison["hit_rate_delta"] > 0
     assert comparison["latency_delta_ms"] < 0
     assert comparison["estimated_cost_delta_usd"] < 0
+
+
+def test_evaluation_center_service_uses_use_reranker():
+    from api.services import evaluation_center_service as service
+    assert isinstance(service.USE_RERANKER, bool)
+

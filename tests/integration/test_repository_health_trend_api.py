@@ -5,6 +5,13 @@ from api.routers import health as health_router
 
 
 def test_health_run_trend_updates_across_runs(client, fake_repo_id):
+    import os
+    if os.path.exists(health_router._TRANSIENT_STORE_PATH):
+        try:
+            os.remove(health_router._TRANSIENT_STORE_PATH)
+        except Exception:
+            pass
+    health_router._TRANSIENT_STORE_LOADED = False
     health_router._TRANSIENT_HEALTH_RUNS.clear()
     base_time = datetime(2026, 8, 11, 12, 0, 0, tzinfo=timezone.utc)
     runs: list[dict] = []
@@ -226,6 +233,13 @@ def test_health_run_trend_updates_across_runs(client, fake_repo_id):
 
 
 def test_health_run_trend_updates_in_transient_mode_when_tables_missing(client, fake_repo_id):
+    import os
+    if os.path.exists(health_router._TRANSIENT_STORE_PATH):
+        try:
+            os.remove(health_router._TRANSIENT_STORE_PATH)
+        except Exception:
+            pass
+    health_router._TRANSIENT_STORE_LOADED = False
     health_router._TRANSIENT_HEALTH_RUNS.clear()
 
     score_sequence = [85, 90, 82]

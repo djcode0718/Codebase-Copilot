@@ -182,7 +182,6 @@ class TestRerankerConfig:
     def test_use_reranker_true(self):
         cfg = reload_config({"USE_RERANKER": "true"})
         assert cfg.USE_RERANKER is True
-
     def test_use_reranker_case_insensitive(self):
         cfg = reload_config({"USE_RERANKER": "TRUE"})
         assert cfg.USE_RERANKER is True

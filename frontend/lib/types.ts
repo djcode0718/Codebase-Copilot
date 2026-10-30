@@ -127,7 +127,7 @@ export interface RetrievedFile {
   line_end?: number | null;
 }
 
-export type QueryMode = 'code_lookup' | 'architectural';
+export type QueryMode = 'code_lookup' | 'architectural' | 'relationship';
 
 export type ChatEvent =
   | { type: 'token'; content: string }
@@ -143,6 +143,8 @@ export type ChatEvent =
       // NOTE: latency_rerank_ms is NOT in this event
     }
   | { type: 'suggestions'; questions: string[] }
+  | { type: 'followup_pending' }
+  | { type: 'followup_suggestions'; questions: string[] }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
