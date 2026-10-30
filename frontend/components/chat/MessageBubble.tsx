@@ -7,19 +7,21 @@
  */
 import { motion } from 'framer-motion';
 import { Copy, Check, Cpu, ChevronDown, ChevronRight, Brain, Shield, Layers, Code2, AlertTriangle, Lightbulb, BarChart2, RefreshCcw, Pencil, ThumbsUp, ThumbsDown, GitBranch } from 'lucide-react';
-import { useState, lazy, Suspense, useRef, useCallback } from 'react';
+import { useState, lazy, Suspense, useRef, useCallback, useMemo, memo } from 'react';
 import { cn } from '@/lib/utils';
-import type { Message, QueryMode, RetrievedFile } from '@/lib/types';
+import type { Message, QueryMode } from '@/lib/types';
 
 const MermaidBlock = lazy(() => import('@/components/chat/MermaidBlock'));
 
 const MODE_LABELS: Record<QueryMode, string> = {
   code_lookup: 'CODE LOOKUP',
   architectural: 'ARCHITECTURAL',
+  relationship: 'RELATIONSHIP',
 };
 const MODE_COLORS: Record<QueryMode, string> = {
   code_lookup: 'text-brand',
   architectural: 'text-amber-400',
+  relationship: 'text-purple-400',
 };
 
 // ── Intelligence Section Definitions ─────────────────────────────────────────
@@ -139,18 +141,6 @@ interface MessageBubbleProps {
   onOpenGraph?: (symbol: string) => void;
   onSuggestion?: (query: string, displayText?: string, isCtaFollowup?: boolean) => void;
   previousUserQuery?: string;
-  onOpenEvidence?: (file: RetrievedFile) => void;
-}
-
-function evidenceAnchorLabel(file: RetrievedFile): string {
-  const fileName = file.path.split('/').pop() || file.path;
-  if (file.line_start && file.line_end && file.line_end !== file.line_start) {
-    return `${fileName}:L${file.line_start}-L${file.line_end}`;
-  }
-  if (file.line_start) {
-    return `${fileName}:L${file.line_start}`;
-  }
-  return fileName;
 }
 
 const INTELLIGENCE_PROMPTS: Record<string, string> = {
@@ -182,179 +172,6 @@ const INTELLIGENCE_LABELS: Record<string, string> = {
   tech_debt_scan: 'Run Tech Debt Scan',
   digital_twin: 'Run Digital Twin',
 };
-
-type SuggestedActionPayload = { suggested_action: string; message: string };
-
-function parseSuggestedActionPayload(content: string, isUser: boolean): SuggestedActionPayload | null {
-  if (isUser || !content.trim().startsWith('{')) return null;
-  try {
-    const parsed = JSON.parse(content.trim());
-    if (parsed && typeof parsed === 'object' && typeof parsed.suggested_action === 'string') {
-      return parsed as SuggestedActionPayload;
-    }
-  } catch {
-    // Ignore non-JSON content.
-  }
-  return null;
-}
-
-function buildSuggestedActionPrompt(
-  suggestedAction: SuggestedActionPayload,
-  previousUserQuery?: string,
-): { composedPrompt: string; shortLabel: string } {
-  const actionKey = suggestedAction.suggested_action;
-  const actionLabel = INTELLIGENCE_LABELS[actionKey] || 'Analysis';
-  const existingInstructions = INTELLIGENCE_PROMPTS[actionKey] || suggestedAction.message;
-  const shortLabel = INTELLIGENCE_LABELS[actionKey] || 'Run Action';
-
-  if (!previousUserQuery) {
-    return { composedPrompt: existingInstructions, shortLabel };
-  }
-
-  return {
-    composedPrompt:
-      `The user specifically asked: '${previousUserQuery}' As part of this ${actionLabel} analysis, ` +
-      'first explicitly identify which SINGLE file or component is the most relevant to their question, ' +
-      `with your reasoning, then provide: ${existingInstructions}`,
-    shortLabel,
-  };
-}
-
-async function copyTextSafely(text: string): Promise<boolean> {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-    if (typeof document !== 'undefined') {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.setAttribute('readonly', 'true');
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
-
-function AssistantContent({
-  message,
-  intelParsed,
-  suggestedAction,
-  graphKeys,
-  onOpenGraph,
-  onSuggestion,
-  previousUserQuery,
-  actionsDisabled,
-  onOpenEvidence,
-  onInspect,
-  isInspected,
-}: {
-  message: Message;
-  intelParsed: { plain: string; sections: { def: IntelSection; content: string }[] } | null;
-  suggestedAction: SuggestedActionPayload | null;
-  graphKeys?: Set<string>;
-  onOpenGraph?: (symbol: string) => void;
-  onSuggestion?: (query: string, displayText?: string, isCtaFollowup?: boolean) => void;
-  previousUserQuery?: string;
-  actionsDisabled: boolean;
-  onOpenEvidence?: (file: RetrievedFile) => void;
-  onInspect?: () => void;
-  isInspected?: boolean;
-}) {
-  return (
-    <div className="space-y-2 rounded-2xl border border-border bg-card/70 p-4 shadow-sm shadow-black/5">
-      {intelParsed ? (
-        <div className="space-y-2">
-          {intelParsed.plain && (
-            <div className="text-foreground">
-              <SimpleMarkdown content={intelParsed.plain} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
-            </div>
-          )}
-          {intelParsed.sections.map((s) => (
-            <IntelSectionBlock key={s.def.key} def={s.def} content={s.content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
-          ))}
-        </div>
-      ) : suggestedAction ? (
-        <div className="text-foreground">
-          <SimpleMarkdown content={suggestedAction.message} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
-          {onSuggestion && (
-            <div className="mt-3">
-              <button
-                type="button"
-                onClick={() => {
-                  const { composedPrompt, shortLabel } = buildSuggestedActionPrompt(suggestedAction, previousUserQuery);
-                  onSuggestion(composedPrompt, shortLabel, true);
-                }}
-                disabled={actionsDisabled}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-brand/30 bg-background/50 px-3 text-xs font-semibold text-brand transition-all cursor-pointer hover:bg-brand/5 hover:border-brand/50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <GitBranch size={13} />
-                {INTELLIGENCE_LABELS[suggestedAction.suggested_action] || 'Run Action'}
-              </button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="text-foreground">
-          <SimpleMarkdown content={message.content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
-        </div>
-      )}
-
-      {(message.query_mode || message.retrieved_files?.length || message.latency_ms) && (
-        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap pt-1 border-t border-border/60">
-          {message.query_mode && (
-            <span className={cn('font-mono font-semibold tracking-wide', MODE_COLORS[message.query_mode])}>
-              {MODE_LABELS[message.query_mode]}
-            </span>
-          )}
-          {message.retrieved_files && message.retrieved_files.length > 0 && (
-            <div className="inline-flex flex-wrap items-center gap-1.5">
-              <span>{message.retrieved_files.length} chunks</span>
-              {message.retrieved_files.slice(0, 3).map((file, idx) => (
-                <button
-                  key={`${file.path}-${idx}`}
-                  type="button"
-                  className="rounded-full border border-border/80 bg-background px-2 py-0.5 text-[11px] hover:border-brand/30 hover:text-brand"
-                  onClick={() => onOpenEvidence?.(file)}
-                  disabled={!onOpenEvidence}
-                  title={file.path}
-                >
-                  {evidenceAnchorLabel(file)}
-                </button>
-              ))}
-            </div>
-          )}
-          {message.latency_ms && <span>{message.latency_ms}ms</span>}
-          {onInspect && (
-            <button
-              onClick={onInspect}
-              className={cn(
-                'text-xs underline underline-offset-2 transition-colors cursor-pointer',
-                isInspected ? 'text-brand' : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              {isInspected ? 'Inspecting' : 'Inspect'}
-            </button>
-          )}
-        </div>
-      )}
-
-      {!message.query_mode && !message.retrieved_files?.length && !message.latency_ms && onInspect && (
-        <div className="text-xs text-muted-foreground">
-          Grounded response ready for inspection.
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Inline code tag with optional hover "See graph" popover ───────────────
 
@@ -419,7 +236,7 @@ function InlineCodeTag({
   );
 }
 
-function SimpleMarkdown({ content, graphKeys, onOpenGraph }: { content: string; graphKeys?: Set<string>; onOpenGraph?: (s: string) => void }) {
+function SimpleMarkdownInternal({ content, graphKeys, onOpenGraph }: { content: string; graphKeys?: Set<string>; onOpenGraph?: (s: string) => void }) {
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -570,7 +387,67 @@ function SimpleMarkdown({ content, graphKeys, onOpenGraph }: { content: string; 
     i++;
   }
 
-  return <div className="prose-dark space-y-0.5">{elements}</div>;
+  return <div className="space-y-0.5">{elements}</div>;
+}
+
+export function splitIntoBlocks(content: string): string[] {
+  const lines = content.split('\n');
+  const blocks: string[] = [];
+  let currentBlock: string[] = [];
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    if (line.startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+    }
+
+    if (line.trim() === '' && !inCodeBlock) {
+      if (currentBlock.length > 0) {
+        blocks.push(currentBlock.join('\n'));
+        currentBlock = [];
+      }
+    } else {
+      currentBlock.push(line);
+    }
+  }
+
+  if (currentBlock.length > 0) {
+    blocks.push(currentBlock.join('\n'));
+  }
+
+  return blocks;
+}
+
+export const MarkdownBlock = memo(function MarkdownBlock({
+  content,
+  graphKeys,
+  onOpenGraph
+}: {
+  content: string;
+  graphKeys?: Set<string>;
+  onOpenGraph?: (s: string) => void;
+}) {
+  return <SimpleMarkdownInternal content={content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />;
+});
+
+export function SimpleMarkdown({ content, graphKeys, onOpenGraph }: { content: string; graphKeys?: Set<string>; onOpenGraph?: (s: string) => void }) {
+  const blocks = useMemo(() => splitIntoBlocks(content), [content]);
+
+  return (
+    <div className="prose-dark space-y-2">
+      {blocks.map((block, idx) => {
+        const key = `${idx}-${block.length}`;
+        return (
+          <MarkdownBlock
+            key={key}
+            content={block}
+            graphKeys={graphKeys}
+            onOpenGraph={onOpenGraph}
+          />
+        );
+      })}
+    </div>
+  );
 }
 
 function renderInline(text: string, graphKeys?: Set<string>, onOpenGraph?: (s: string) => void): React.ReactNode {
@@ -590,18 +467,44 @@ function renderInline(text: string, graphKeys?: Set<string>, onOpenGraph?: (s: s
   });
 }
 
-export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false, graphKeys, onOpenGraph, onSuggestion, previousUserQuery, onOpenEvidence }: MessageBubbleProps) {
+export default function MessageBubble({ message, onInspect, isInspected, index, onTryAgain, onEdit, actionsDisabled = false, graphKeys, onOpenGraph, onSuggestion, previousUserQuery }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState<'up' | 'down' | null>(null);
   const isUser = message.role === 'user';
 
   const intelParsed = !isUser ? parseIntelligenceSections(message.content) : null;
-  const suggestedAction = parseSuggestedActionPayload(message.content, isUser);
+
+  // Parse suggested action early exit if message content is JSON
+  let suggestedAction: { suggested_action: string; message: string } | null = null;
+  if (!isUser && message.content.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(message.content.trim());
+      if (parsed && typeof parsed === 'object' && typeof parsed.suggested_action === 'string') {
+        suggestedAction = parsed;
+      }
+    } catch {
+      // Ignored: not a valid action suggestion JSON
+    }
+  }
 
   async function handleCopy() {
     try {
-      const copiedOk = await copyTextSafely(message.content);
-      if (!copiedOk) throw new Error('Clipboard copy failed');
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(message.content);
+      } else if (typeof document !== 'undefined') {
+        const textarea = document.createElement('textarea');
+        textarea.value = message.content;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      } else {
+        throw new Error('Clipboard not available');
+      }
+
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -631,19 +534,90 @@ export default function MessageBubble({ message, onInspect, isInspected, index, 
             {message.content}
           </div>
         ) : (
-          <AssistantContent
-            message={message}
-            intelParsed={intelParsed}
-            suggestedAction={suggestedAction}
-            graphKeys={graphKeys}
-            onOpenGraph={onOpenGraph}
-            onSuggestion={onSuggestion}
-            previousUserQuery={previousUserQuery}
-            actionsDisabled={actionsDisabled}
-            onOpenEvidence={onOpenEvidence}
-            onInspect={onInspect}
-            isInspected={isInspected}
-          />
+          <div className="space-y-2 rounded-2xl border border-border bg-card/70 p-4 shadow-sm shadow-black/5">
+            {intelParsed ? (
+              /* Intelligence structured sections */
+              <div className="space-y-2">
+                {intelParsed.plain && (
+                  <div className="text-foreground">
+                    <SimpleMarkdown content={intelParsed.plain} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
+                  </div>
+                )}
+                {intelParsed.sections.map((s) => (
+                  <IntelSectionBlock key={s.def.key} def={s.def} content={s.content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
+                ))}
+              </div>
+            ) : suggestedAction ? (
+              /* Suggested Action JSON */
+              <div className="text-foreground">
+                <SimpleMarkdown content={suggestedAction.message} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
+                {onSuggestion && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const actionKey = suggestedAction!.suggested_action;
+                        const actionLabel = INTELLIGENCE_LABELS[actionKey] || 'Analysis';
+                        const existingInstructions = INTELLIGENCE_PROMPTS[actionKey] || suggestedAction!.message;
+                        const shortLabel = INTELLIGENCE_LABELS[actionKey] || 'Run Action';
+                        
+                        let composedPrompt = existingInstructions;
+                        if (previousUserQuery) {
+                          composedPrompt = `The user specifically asked: '${previousUserQuery}' As part of this ${actionLabel} analysis, first explicitly identify which SINGLE file or component is the most relevant to their question, with your reasoning, then provide: ${existingInstructions}`;
+                        }
+                        
+                        onSuggestion(composedPrompt, shortLabel, true);
+                      }}
+                      disabled={actionsDisabled}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-brand/30 bg-background/50 px-3 text-xs font-semibold text-brand transition-all cursor-pointer hover:bg-brand/5 hover:border-brand/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <GitBranch size={13} />
+                      {INTELLIGENCE_LABELS[suggestedAction.suggested_action] || 'Run Action'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Regular markdown content */
+              <div className="text-foreground">
+                <SimpleMarkdown content={message.content} graphKeys={graphKeys} onOpenGraph={onOpenGraph} />
+              </div>
+            )}
+
+            {/* Grounding summary bar */}
+            {(message.query_mode || message.retrieved_files?.length || message.latency_ms) && (
+              <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap pt-1 border-t border-border/60">
+                {message.query_mode && (
+                  <span className={cn('font-mono font-semibold tracking-wide', MODE_COLORS[message.query_mode])}>
+                    {MODE_LABELS[message.query_mode]}
+                  </span>
+                )}
+                {message.retrieved_files && message.retrieved_files.length > 0 && (
+                  <span>{message.retrieved_files.length} chunks</span>
+                )}
+                {message.latency_ms && (
+                  <span>{message.latency_ms}ms</span>
+                )}
+                {onInspect && (
+                  <button
+                    onClick={onInspect}
+                    className={cn(
+                      'text-xs underline underline-offset-2 transition-colors cursor-pointer',
+                      isInspected ? 'text-brand' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {isInspected ? 'Inspecting' : 'Inspect'}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {!message.query_mode && !message.retrieved_files?.length && !message.latency_ms && onInspect && (
+              <div className="text-xs text-muted-foreground">
+                Grounded response ready for inspection.
+              </div>
+            )}
+          </div>
         )}
 
         {/* Actions */}

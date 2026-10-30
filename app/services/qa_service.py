@@ -23,7 +23,8 @@ retrieval — much better than naive history concatenation.
 
 import os
 import time
-from typing import Optional, Tuple
+import re
+from typing import Optional, Tuple, Set, List
 
 from llama_index.core import Settings, VectorStoreIndex
 from llama_index.core.retrievers import QueryFusionRetriever
@@ -42,6 +43,48 @@ from app.config import INDEX_DIR, REPOS_DIR, TOP_K_CHUNKS, TOP_K_RERANK
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+def extract_cited_files(text: str) -> Set[str]:
+    # Match paths like: folder/sub/file.py, file.py, folder/file.js, etc.
+    # Exclude common punctuation like quotes or brackets.
+    # Pattern: words, dashes, dots, slashes, ending with an alphanumeric extension of 2-4 chars.
+    matches = re.findall(r"\b[a-zA-Z0-9_\-\./]+\.[a-zA-Z0-9]{2,4}\b", text)
+    results = set()
+    for m in matches:
+        m_clean = m.strip("`'\".,()[]{}")
+        if m_clean.endswith((".", "/")):
+            continue
+        ext = m_clean.split(".")[-1].lower()
+        if ext in ("py", "js", "ts", "jsx", "tsx", "html", "css", "json", "yml", "yaml", "md", "sh", "go", "rs", "cpp", "c", "h"):
+            results.add(m_clean)
+    return results
+
+
+def validate_citations(
+    text: str,
+    retrieved_paths: Set[str],
+    repo_path: str
+) -> List[str]:
+    cited = extract_cited_files(text)
+    invalid = []
+    for path in cited:
+        # Check if it exists physically in the workspace
+        full_path = os.path.join(repo_path, path)
+        if os.path.exists(full_path):
+            continue
+        # Or check if it is exactly one of the retrieved paths
+        if path in retrieved_paths:
+            continue
+        # Also check relative path comparisons (in case they have different leading slashes or directories)
+        matched = False
+        for r_path in retrieved_paths:
+            if r_path.endswith(path) or path.endswith(r_path):
+                matched = True
+                break
+        if not matched:
+            invalid.append(path)
+    return sorted(invalid)
+
 
 _NO_MATCH_CODE_LOOKUP_RESPONSE = (
     "I couldn't find that in the retrieved code. "
@@ -131,6 +174,17 @@ def resolve_ambiguous_query(query: str, memory: ChatMemoryBuffer) -> str:
 _index_cache = {}
 
 
+def invalidate_index_cache(index_name: Optional[str] = None) -> None:
+    """Invalidate in-memory index cache for a specific index or all indexes."""
+    global _index_cache
+    if index_name:
+        _index_cache.pop(index_name, None)
+        logger.info("Invalidated in-memory index cache for '%s'", index_name)
+    else:
+        _index_cache.clear()
+        logger.info("Invalidated all in-memory index caches")
+
+
 def _get_indexes(index_name: str):
     """
     Load vector index from ChromaDB and rebuild BM25 retriever.
@@ -153,11 +207,16 @@ def _get_indexes(index_name: str):
 
     if os.path.exists(repo_path):
         from app.parsing.code_parser import load_documents, parse_documents
+        from app.ingestion.git_history import load_persisted_git_history
         valid_files = filter_files(repo_path)
         documents   = load_documents(valid_files, repo_path)
         nodes       = parse_documents(documents)
+        
+        git_docs = load_persisted_git_history(index_name)
+        nodes = nodes + git_docs
+        
         bm25_retriever = build_bm25_retriever(nodes, top_k=TOP_K_CHUNKS)
-        logger.info(f"BM25 rebuilt over {len(nodes)} nodes")
+        logger.info(f"BM25 rebuilt over {len(nodes)} nodes (including {len(git_docs)} git history nodes)")
     else:
         logger.warning(f"Repo path not found at {repo_path} — BM25 unavailable")
 
@@ -280,7 +339,7 @@ def _run_pre_routing_checks(
         _remember_turn(memory, query, response_str)
         return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
 
-    superlative_suggest = check_superlative_intent(query)
+    superlative_suggest = check_superlative_intent(query, index_name=index_name)
     if superlative_suggest:
         logger.info("Early exit: superlative action suggestion")
         import json
@@ -320,11 +379,15 @@ def _handle_relationship_query(
     chat_engine,
     query_mode: QueryMode,
 ) -> Tuple[str, object, ChatMemoryBuffer, QueryMode]:
-    from app.retrieval.query_router import extract_relationship_target
+    from app.retrieval.query_router import extract_relationship_target, is_real_identifier
     from app.llm.prompts import RELATIONSHIP_PROMPT
 
     target = extract_relationship_target(resolved_query)
     logger.info("Relationship query target extracted: %s", target)
+    if not is_real_identifier(target, index_name):
+        logger.info(f"Stage -1: RELATIONSHIP target '{target}' is not a real identifier. Forcing clarification.")
+        _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
+        return _CLARIFICATION_RESPONSE, chat_engine, memory, query_mode
     refs = []
     if target:
         graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
@@ -380,11 +443,21 @@ def _check_low_confidence(nodes, label: str) -> bool:
     return False
 
 
-def _execute_cross_encoder_path(query: str, resolved_query: str, query_mode: QueryMode, chat_engine, memory):
+def _execute_cross_encoder_path(
+    query: str,
+    resolved_query: str,
+    query_mode: QueryMode,
+    chat_engine,
+    memory: ChatMemoryBuffer,
+    index_name: str,
+) -> str:
+    from app.config import get_repos_dir, CITATION_VALIDATION_MODE
+    repo_path = os.path.join(get_repos_dir(), index_name)
+
     retriever = chat_engine._retriever
     raw_nodes = retriever.retrieve(resolved_query)
     logger.debug("Cross-Encoder path retrieved %s raw nodes", len(raw_nodes))
-    reranked_nodes = rerank_with_cross_encoder(resolved_query, raw_nodes, top_k=TOP_K_RERANK)
+    reranked_nodes = rerank_with_cross_encoder(resolved_query, raw_nodes, top_k=TOP_K_RERANK, index_name=index_name)
     logger.debug("Cross-Encoder reranked to %s nodes", len(reranked_nodes))
 
     if _check_low_confidence(reranked_nodes, "Cross-Encoder"):
@@ -405,11 +478,48 @@ def _execute_cross_encoder_path(query: str, resolved_query: str, query_mode: Que
         response = Settings.llm.complete(_build_review_fallback_prompt(full_prompt))
         response_str = str(response).strip()
 
+    # Citation validation check
+    retrieved_paths = {n.node.metadata.get("path") for n in reranked_nodes if n.node.metadata.get("path")}
+    invalid_citations = validate_citations(response_str, retrieved_paths, repo_path)
+    if invalid_citations:
+        if CITATION_VALIDATION_MODE == "strict":
+            for attempt in range(2):
+                logger.warning(f"Hallucination detected (attempt {attempt+1}): {invalid_citations}. Retrying...")
+                valid_paths_str = ", ".join(sorted(retrieved_paths))
+                hallucinated_str = ", ".join(invalid_citations)
+                retry_prompt = (
+                    f"{full_prompt}\n\n"
+                    f"The previous response hallucinated non-existent files: {hallucinated_str}. "
+                    f"Please generate a response using ONLY valid file paths from the retrieved context: {valid_paths_str}.\n\n"
+                    f"Answer:"
+                )
+                response = Settings.llm.complete(retry_prompt)
+                response_str = str(response).strip()
+                invalid_citations = validate_citations(response_str, retrieved_paths, repo_path)
+                if not invalid_citations:
+                    logger.info("Hallucination resolved after retry.")
+                    break
+            if invalid_citations:
+                logger.warning(f"Strict citation validation failed after 2 retries. Returning response with invalid citations: {invalid_citations}")
+        else:
+            logger.warning(f"Response cited hallucinated files: {invalid_citations}")
+
     _remember_turn(memory, query, response_str)
     return response_str
 
 
-def _execute_standard_path(query: str, resolved_query: str, query_mode: QueryMode, chat_engine, memory):
+def _execute_standard_path(
+    query: str,
+    resolved_query: str,
+    query_mode: QueryMode,
+    chat_engine,
+    memory: ChatMemoryBuffer,
+    index_name: str,
+) -> str:
+    from app.config import get_repos_dir, CITATION_VALIDATION_MODE
+    repo_path = os.path.join(get_repos_dir(), index_name)
+
+    raw_nodes = []
     try:
         retriever = chat_engine._retriever
         raw_nodes = retriever.retrieve(resolved_query)
@@ -428,7 +538,30 @@ def _execute_standard_path(query: str, resolved_query: str, query_mode: QueryMod
         logger.warning("Safety refusal detected in standard path; using fallback prompt")
         response = Settings.llm.complete(_build_review_fallback_prompt(resolved_query))
         response_str = str(response).strip()
-        _remember_turn(memory, query, response_str)
+
+    # Standard path citation check
+    retrieved_paths = {n.node.metadata.get("path") for n in raw_nodes if n.node.metadata.get("path")}
+    invalid_citations = validate_citations(response_str, retrieved_paths, repo_path)
+    if invalid_citations:
+        if CITATION_VALIDATION_MODE == "strict":
+            for attempt in range(2):
+                logger.warning(f"Hallucination detected in standard path (attempt {attempt+1}): {invalid_citations}. Retrying...")
+                valid_paths_str = ", ".join(sorted(retrieved_paths))
+                hallucinated_str = ", ".join(invalid_citations)
+                retry_prompt = (
+                    f"The previous response hallucinated non-existent files: {hallucinated_str}. "
+                    f"Please generate a response using ONLY valid file paths from the retrieved context: {valid_paths_str}."
+                )
+                response = chat_engine.chat(retry_prompt)
+                response_str = str(response).strip()
+                invalid_citations = validate_citations(response_str, retrieved_paths, repo_path)
+                if not invalid_citations:
+                    logger.info("Hallucination resolved after retry.")
+                    break
+        else:
+            logger.warning(f"Standard path response cited hallucinated files: {invalid_citations}")
+
+    _remember_turn(memory, query, response_str)
     return response_str
 
 
@@ -492,11 +625,11 @@ def handle_user_query(
     if USE_RERANKER:
         try:
             logger.debug("Executing Reranker path for query_mode=%s", query_mode.value)
-            response_str = _execute_cross_encoder_path(query, resolved_query, query_mode, chat_engine, memory)
+            response_str = _execute_cross_encoder_path(query, resolved_query, query_mode, chat_engine, memory, index_name)
             return response_str, chat_engine, memory, query_mode
         except Exception as e:
             logger.warning(f"Reranker pipeline failed: {e} — falling back to chat engine")
 
     logger.debug("Executing standard chat-engine path for query_mode=%s", query_mode.value)
-    response_str = _execute_standard_path(query, resolved_query, query_mode, chat_engine, memory)
+    response_str = _execute_standard_path(query, resolved_query, query_mode, chat_engine, memory, index_name)
     return response_str, chat_engine, memory, query_mode

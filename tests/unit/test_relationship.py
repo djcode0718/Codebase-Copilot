@@ -44,17 +44,25 @@ def test_relationship_target_extraction():
 
 def test_relationship_graph_builder():
     with tempfile.TemporaryDirectory() as tmp_dir:
-        # Create a mock python file
+        # Create a mock python file with decorators, multiline signatures, and nested classes
         py_file_content = """
 import os
 from math import sqrt
 from another_module import helper_func
 
+@some_decorator
 class TargetClass:
     def method_one(self):
         print("Hello")
 
-def main_func():
+    class NestedClass:
+        def nested_method(self):
+            pass
+
+def multiline_func(
+    arg_one,
+    arg_two
+):
     obj = TargetClass()
     obj.method_one()
     helper_func()
@@ -65,11 +73,11 @@ def main_func():
 
         # Create mock JS file
         js_file_content = """
-import { main_func } from './app.py';
+import { multiline_func } from './app.py';
 
 class ClientClass {
     run() {
-        main_func();
+        multiline_func();
     }
 }
 """
@@ -81,11 +89,15 @@ class ClientClass {
         builder = RelationshipGraphBuilder(tmp_dir)
         graph = builder.build_graph([py_file_path, js_file_path])
         
-        # TargetClass should have "app.py:main_func" as referrer
-        assert "app.py:main_func" in graph.get("TargetClass", [])
+        # TargetClass should have "app.py:multiline_func" as referrer
+        assert "app.py:multiline_func" in graph.get("TargetClass", [])
         
-        # main_func is called in client.js:ClientClass.run
-        assert "client.js:ClientClass.run" in graph.get("main_func", [])
+        # NestedClass should be defined
+        assert any("NestedClass" in loc for loc in builder.definitions.get("NestedClass", []))
+        assert any("nested_method" in loc for loc in builder.definitions.get("nested_method", []))
+        
+        # multiline_func is called in client.js:ClientClass.run
+        assert "client.js:ClientClass.run" in graph.get("multiline_func", [])
         
         # client.js imports app.py, so app.py should have client.js as referrer
         assert "client.js" in graph.get("app.py", [])

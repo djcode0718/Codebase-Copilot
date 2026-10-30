@@ -179,8 +179,9 @@ class EvalSummary:
     avg_latency_total:  float
     avg_latency_retrieval: float
     avg_latency_rerank: float
-    avg_latency_llm:    float
+    avg_latency_llm:          float
     cross_encoder_enabled:    bool
+    colbert_enabled:          bool = False
     results:            List[dict] = field(default_factory=list)
 
 
@@ -223,7 +224,7 @@ def retrieve_with_timing(query: str, index_name: str):
     # ── Reranking timing ──────────────────────────────────────────────────
     t1 = time.time()
     if USE_RERANKER:
-        final_nodes = rerank_with_cross_encoder(query, raw_nodes, top_k=TOP_K_RERANK)
+        final_nodes = rerank_with_cross_encoder(query, raw_nodes, top_k=TOP_K_RERANK, index_name=index_name)
     else:
         final_nodes = sorted(raw_nodes, key=lambda n: n.score or 0, reverse=True)[:TOP_K_RERANK]
     latency_rerank = time.time() - t1
@@ -418,6 +419,7 @@ def run_evaluation(index_name: str) -> EvalSummary:
         avg_latency_rerank    = avg_rerank,
         avg_latency_llm       = avg_llm,
         cross_encoder_enabled = USE_RERANKER,
+        colbert_enabled       = USE_RERANKER,
         results               = [asdict(r) for r in results],
     )
 
@@ -468,7 +470,7 @@ def print_report(summary: EvalSummary):
         print("     Try: check that expected_files paths match actual paths")
     if summary.mrr < 0.4:
         print("  ❌ MRR low → right chunks retrieved but ranked poorly.")
-        print("     Try: enable Reranker (USE_RERANKER=True)")
+        print("     Try: enable Cross-Encoder reranking (USE_RERANKER=True)")
     if summary.avg_faithfulness < 0.6:
         print("  ❌ Faithfulness low → LLM may be hallucinating.")
         print("     Try: tighten CODE_LOOKUP_PROMPT in prompts.py")

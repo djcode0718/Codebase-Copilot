@@ -8,7 +8,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 import type { ChatEvent, RetrievedFile, QueryMode } from '@/lib/types';
-import type { ChatContextScope } from '@/lib/chat-context';
 
 function parseSseEvents(chunk: string, flush = false): { events: ChatEvent[]; rest: string } {
   const normalized = chunk.replace(/\r\n/g, '\n');
@@ -51,6 +50,12 @@ export interface StreamedResponse {
   suggestions?: string[];
 }
 
+interface StreamCallbacks {
+  onTextDone?: (content: string, metadata: Omit<StreamedResponse, 'content'>) => void;
+  onFollowupPending?: () => void;
+  onFollowupSuggestions?: (questions: string[]) => void;
+}
+
 interface UseChatStreamResult {
   streaming: boolean;
   streamedText: string;
@@ -63,7 +68,7 @@ interface UseChatStreamResult {
     token: string,
     displayText?: string,
     isCtaFollowup?: boolean,
-    contextScope?: ChatContextScope | null,
+    callbacks?: StreamCallbacks
   ) => Promise<StreamedResponse | null>;
   cancelStream: () => void;
 }
@@ -78,6 +83,8 @@ function processStreamEvent(
   setStreamedText: React.Dispatch<React.SetStateAction<string>>,
   streamedTextRef: React.MutableRefObject<string>,
   setPendingMetadata: React.Dispatch<React.SetStateAction<Omit<StreamedResponse, 'content'> | null>>,
+  callbacks?: StreamCallbacks,
+  onDoneReceived?: () => void
 ): { shouldStop: boolean } {
   if (event.type === 'token') {
     state.fullText += event.content;
@@ -97,6 +104,18 @@ function processStreamEvent(
     setPendingMetadata(state.metadata);
   } else if (event.type === 'suggestions') {
     state.metadata.suggestions = event.questions;
+    if (callbacks?.onFollowupSuggestions) {
+      callbacks.onFollowupSuggestions(event.questions ?? []);
+    }
+  } else if (event.type === 'followup_pending') {
+    if (callbacks?.onFollowupPending) {
+      callbacks.onFollowupPending();
+    }
+  } else if (event.type === 'followup_suggestions') {
+    state.metadata.suggestions = event.questions;
+    if (callbacks?.onFollowupSuggestions) {
+      callbacks.onFollowupSuggestions(event.questions ?? []);
+    }
   } else if (event.type === 'error') {
     state.receivedErrorEvent = true;
     if (!state.fullText) {
@@ -106,7 +125,12 @@ function processStreamEvent(
     }
   } else if (event.type === 'done') {
     console.debug('[useChatStream] done received, fullText length=', state.fullText.length);
-    return { shouldStop: true };
+    if (callbacks?.onTextDone) {
+      callbacks.onTextDone(state.fullText, state.metadata);
+    }
+    if (onDoneReceived) {
+      onDoneReceived();
+    }
   }
   return { shouldStop: false };
 }
@@ -121,26 +145,63 @@ async function readResponseStream(
   setStreamedText: React.Dispatch<React.SetStateAction<string>>,
   streamedTextRef: React.MutableRefObject<string>,
   setPendingMetadata: React.Dispatch<React.SetStateAction<Omit<StreamedResponse, 'content'> | null>>,
+  callbacks?: StreamCallbacks
 ): Promise<void> {
   if (!res.body) throw new Error('No response body');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let shouldStop = false;
+  let timeoutId: any = null;
 
-  while (!shouldStop) {
-    const { done, value } = await reader.read();
-    buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+  const onDoneReceived = () => {
+    if (timeoutId) clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => {
+      console.warn('[useChatStream] Timeout waiting for followup suggestions. Aborting stream.');
+      shouldStop = true;
+      reader.cancel().catch(() => {});
+      if (callbacks?.onFollowupSuggestions) {
+        callbacks.onFollowupSuggestions([]);
+      }
+    }, 12000);
+  };
 
-    const parsed = parseSseEvents(buffer, done);
-    buffer = parsed.rest;
+  try {
+    while (!shouldStop) {
+      const { done, value } = await reader.read();
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
 
-    for (const event of parsed.events) {
-      const result = processStreamEvent(event, state, setStreamedText, streamedTextRef, setPendingMetadata);
-      if (result.shouldStop) { shouldStop = true; break; }
+      const parsed = parseSseEvents(buffer, done);
+      buffer = parsed.rest;
+
+      for (const event of parsed.events) {
+        if (event.type === 'followup_suggestions' || event.type === 'suggestions') {
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+          shouldStop = true;
+        }
+
+        const result = processStreamEvent(
+          event,
+          state,
+          setStreamedText,
+          streamedTextRef,
+          setPendingMetadata,
+          callbacks,
+          onDoneReceived
+        );
+        if (result.shouldStop) { shouldStop = true; break; }
+      }
+
+      if (done) shouldStop = true;
     }
-
-    if (done) shouldStop = true;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    reader.releaseLock();
   }
 }
 
@@ -165,7 +226,7 @@ export function useChatStream(): UseChatStreamResult {
       token: string,
       displayText?: string,
       isCtaFollowup?: boolean,
-      contextScope?: ChatContextScope | null,
+      callbacks?: StreamCallbacks
     ): Promise<StreamedResponse | null> => {
       // Cancel any in-progress stream
       abortRef.current?.abort();
@@ -198,12 +259,7 @@ export function useChatStream(): UseChatStreamResult {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            query,
-            display_text: displayText,
-            is_cta_followup: isCtaFollowup,
-            context_scope: contextScope || {},
-          }),
+          body: JSON.stringify({ query, display_text: displayText, is_cta_followup: isCtaFollowup }),
           signal: controller.signal,
         });
 
@@ -212,7 +268,7 @@ export function useChatStream(): UseChatStreamResult {
           throw new Error(err.detail ?? 'Stream request failed');
         }
 
-        await readResponseStream(res, state, setStreamedText, streamedTextRef, setPendingMetadata);
+        await readResponseStream(res, state, setStreamedText, streamedTextRef, setPendingMetadata, callbacks);
 
         setStreaming(false);
         return { content: state.fullText, ...state.metadata };

@@ -191,12 +191,12 @@ async def _retrieve_nodes(retriever, resolved_query: str):
     return await asyncio.get_event_loop().run_in_executor(None, retriever.retrieve, resolved_query)
 
 
-async def _rerank_nodes(resolved_query: str, raw_nodes):
+async def _rerank_nodes(resolved_query: str, raw_nodes, index_name: Optional[str] = None):
     if USE_RERANKER and raw_nodes:
         from app.retrieval.reranker import rerank_with_cross_encoder
 
         return await asyncio.get_event_loop().run_in_executor(
-            None, rerank_with_cross_encoder, resolved_query, raw_nodes, TOP_K_RERANK
+            None, rerank_with_cross_encoder, resolved_query, raw_nodes, TOP_K_RERANK, index_name
         )
 
     return sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
@@ -547,12 +547,12 @@ def _get_or_create_memory(repo_id: str, chat_id: str, persisted_history: Optiona
     return memory
 
 
-async def _retrieve_ranked_nodes(query_mode, vector_index, bm25_retriever, resolved_query: str):
+async def _retrieve_ranked_nodes(query_mode, vector_index, bm25_retriever, resolved_query: str, index_name: Optional[str] = None):
     t_ret_start = time.time()
     retriever = _build_retriever(query_mode, vector_index, bm25_retriever)
     raw_nodes = await _retrieve_nodes(retriever, resolved_query)
     logger.debug("Retrieved %s raw nodes for streaming query_mode=%s", len(raw_nodes), query_mode.value)
-    reranked_nodes = await _rerank_nodes(resolved_query, raw_nodes)
+    reranked_nodes = await _rerank_nodes(resolved_query, raw_nodes, index_name)
     logger.debug("Reranked nodes count=%s for streaming query", len(reranked_nodes))
     t_retrieval_ms = int((time.time() - t_ret_start) * 1000)
     logger.debug("Retrieval+rereank latency_ms=%s", t_retrieval_ms)
@@ -596,7 +596,7 @@ def _stream_prechecks(query: str, index_name: str, memory, is_cta_followup: bool
         response_str = handle_aggregation_query(query, index_name)
         return _stream_early_response_payload(memory, query, response_str)
 
-    superlative_suggest = check_superlative_intent(query)
+    superlative_suggest = check_superlative_intent(query, index_name=index_name)
     if superlative_suggest:
         logger.info("Stream early exit: superlative action suggestion")
         import json
@@ -607,12 +607,27 @@ def _stream_prechecks(query: str, index_name: str, memory, is_cta_followup: bool
 
 
 def _relationship_prompt_payload(index_name: str, memory, resolved_query: str, query_mode: QueryMode) -> dict:
-    from app.retrieval.query_router import extract_relationship_target
+    from app.retrieval.query_router import extract_relationship_target, is_real_identifier
     from app.llm.prompts import RELATIONSHIP_PROMPT
     import os
 
     target = extract_relationship_target(resolved_query)
     logger.info("Stage -1: RELATIONSHIP query detected in stream. target=%s", _redact_sensitive_text_for_log(target))
+
+    if not is_real_identifier(target, index_name):
+        logger.info("Stage -1: RELATIONSHIP target '%s' is not a real identifier. Forcing clarification.", target)
+        clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
+        return {
+            "memory": memory,
+            "resolved_query": resolved_query,
+            "query_mode": query_mode,
+            "reranked_nodes": [],
+            "retrieved_files": [],
+            "t_retrieval_ms": 0,
+            "full_prompt": "",
+            "early_response": clarification,
+        }
+
     refs = []
     if target:
         from app.config import INDEX_DIR
@@ -725,6 +740,7 @@ async def _prepare_stream_prompt(
         vector_index,
         bm25_retriever,
         resolved_query,
+        index_name,
     )
     retrieved_files = _build_retrieved_files(reranked_nodes)
     context_str = _build_context_str(reranked_nodes)
@@ -828,6 +844,7 @@ async def stream_chat_response(
     llm_provider = _state["llm_provider"]
     llm_model = _state["llm_model"]
     response_path = _state["response_path"]
+    sent_done = False
 
     def _terminal_events(
         *,
@@ -836,6 +853,7 @@ async def stream_chat_response(
         files: List[dict],
         retrieval_ms: int,
     ) -> List[str]:
+        nonlocal sent_done
         logger.debug(
             "Building terminal stream events (mode=%s, retrieval_ms=%s, files=%s, text_len=%s)",
             query_mode,
@@ -853,6 +871,7 @@ async def stream_chat_response(
             llm_provider=None,
             llm_model=None,
         )
+        sent_done = True
         return [
             to_sse_data({'type': 'token', 'content': text}),
             to_sse_data(metadata),
@@ -903,7 +922,7 @@ async def stream_chat_response(
 
         # ── Low Confidence Check (Streaming) ──────────────────────────────────
         from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
-        if top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
+        if query_mode != QueryMode.RELATIONSHIP and top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
             logger.info("Streaming low-confidence clarification path triggered")
             clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
             for evt in _terminal_events(
@@ -1039,6 +1058,21 @@ async def stream_chat_response(
         except Exception as mem_err:
             logger.warning("Memory update failed: %s", _redact_sensitive_text_for_log(mem_err))
 
+        # ── Passive Citation Validation Logging ────────────────────────────
+        try:
+            from app.services.qa_service import validate_citations
+            from app.config import get_repos_dir
+            import os
+            repo_path = os.path.join(get_repos_dir(), index_name)
+            retrieved_paths = {n.node.metadata.get("path") for n in reranked_nodes if n.node.metadata.get("path")}
+            invalid_citations = validate_citations(full_response, retrieved_paths, repo_path)
+            if invalid_citations:
+                logger.warning(
+                    f"Passive citation validation detected hallucinations in stream: {invalid_citations}"
+                )
+        except Exception as citation_err:
+            logger.warning(f"Passive citation validation failed to run: {citation_err}")
+
         t_total_ms = int((time.time() - t_start) * 1000)
 
         # ── Metadata event ─────────────────────────────────────────────────
@@ -1053,8 +1087,20 @@ async def stream_chat_response(
         )
         yield to_sse_data(metadata)
 
-        async for suggestions_event in _emit_followup_events(full_response, resolved_query):
-            yield suggestions_event
+        # ── Yield done and followup_pending immediately ────────────────────
+        yield to_sse_data({"type": "done"})
+        sent_done = True
+        yield to_sse_data({"type": "followup_pending"})
+
+        # ── Generate and yield followup suggestions asynchronously ──────────
+        try:
+            if _is_no_match_code_lookup_response(full_response):
+                followup_questions = _repo_focused_rephrase_suggestions()
+            else:
+                followup_questions = await _generate_followup_suggestions(resolved_query, full_response)
+            yield to_sse_data({"type": "followup_suggestions", "questions": followup_questions})
+        except Exception as sugg_err:
+            logger.warning(f"Failed to generate/yield followup suggestions: {sugg_err}")
 
     except Exception as e:
         safe_msg = safe_chat_error_message(e, include_rate_limit=True)
@@ -1062,7 +1108,8 @@ async def stream_chat_response(
         yield to_sse_data({'type': 'error', 'message': safe_msg})
 
     finally:
-        yield to_sse_data({'type': 'done'})
+        if not sent_done:
+            yield to_sse_data({'type': 'done'})
 
     # Return full_response and metadata for DB persistence
     # (caller can access via the returned values if needed)

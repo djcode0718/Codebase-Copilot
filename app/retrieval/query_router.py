@@ -33,82 +33,26 @@ class QueryMode(Enum):
     RELATIONSHIP   = "relationship"
 
 
-# Keywords that strongly signal a CODE_LOOKUP query
-# Used as a fast pre-check before calling the LLM classifier
-_CODE_KEYWORDS = {
-    "function", "method", "class", "def ", "import", "variable",
-    "implement", "code", "file", "module", "error", "bug", "fix",
-    "return", "parameter", "argument", "loop", "call", "usage",
-    "how does", "show me", "where is", "what does", "explain the",
-    "find", "locate"
-}
+import yaml
+import os
 
-_ARCHITECTURAL_KEYWORDS = {
-    "limitation", "limitations", "improve", "improvement", "better", "optimize",
-    "architecture", "architectural", "design", "pattern", "suggest", "recommend",
-    "weakness", "weaknesses", "problem", "issue", "missing", "add", "future",
-    "scale", "performance", "tradeoff", "tradeoffs", "trade-off", "trade-offs",
-    "compare", "overview", "summarize", "summary", "what is this", "what does this project",
-    "technical debt", "debt", "roadmap", "business impact", "severity",
-    "prioritized", "prioritised", "categorize", "category",
-    "knowledge graph", "business flow", "digital twin", "repository health",
-    "pipeline", "rag", "system"
-}
+# Load router rules from YAML configuration
+_RULES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "router_rules.yaml")
+try:
+    with open(_RULES_PATH, "r", encoding="utf-8") as _f:
+        _rules = yaml.safe_load(_f)
+except Exception as _e:
+    logger.warning(f"Failed to load router rules from {_RULES_PATH}: {_e}")
+    _rules = {}
 
-_STRONG_ARCHITECTURAL_PHRASES = {
-    "technical debt",
-    "business flow",
-    "knowledge graph",
-    "digital twin",
-    "executive summary",
-    "architecture diagram",
-    "architectural diagram",
-    "repository health",
-    "limitation",
-    "limitations",
-    "weakness",
-    "weaknesses",
-    "tradeoff",
-    "tradeoffs",
-    "trade-off",
-    "trade-offs",
-    "architecture",
-    "architectural"
-}
-
-_GENERAL_OOS_PHRASES = {
-    "share me good movies list",
-    "good movies list",
-    "movie list",
-    "movie recommendations",
-    "do you like",
-    "what do you like",
-    "what is your favorite",
-    "what's your favorite",
-    "which do you prefer",
-    "do you prefer",
-    "tell me a joke",
-    "how are you",
-    "who are you",
-    "what is the weather",
-    "what's the weather",
-}
-
-_ALWAYS_OOS_PHRASES = {
-    "tell me a joke",
-    "how are you",
-    "who are you",
-    "what is the weather",
-    "what's the weather",
-}
-
-# Keep OOS heuristics from grabbing legitimate repository questions.
-_REPO_SCOPE_HINTS = {
-    "repo", "repository", "codebase", "project", "this project", "this repo",
-    "file", "files", "function", "functions", "class", "classes", "module", "modules",
-    "method", "methods", "api", "endpoint", "service", "component", "architecture",
-    "implementation", "bug", "fix", "frontend", "backend", "pipeline", "rag", "llm",
-}
+_CODE_KEYWORDS = set(_rules.get("code_lookup", {}).get("keywords", []))
+_ARCHITECTURAL_KEYWORDS = set(_rules.get("architectural", {}).get("keywords", []))
+_STRONG_ARCHITECTURAL_PHRASES = set(_rules.get("architectural", {}).get("strong_phrases", []))
+_GENERAL_OOS_PHRASES = set(_rules.get("out_of_scope", {}).get("general", []))
+_ALWAYS_OOS_PHRASES = set(_rules.get("out_of_scope", {}).get("always", []))
+_REPO_SCOPE_HINTS = set(_rules.get("repo_scope_hints", []))
+_RELATIONSHIP_PHRASES = _rules.get("relationship", {}).get("phrases", [])
+ADJECTIVE_MAPPING = _rules.get("adjective_mapping", {})
 
 
 import re
@@ -154,33 +98,15 @@ def is_general_knowledge_or_preference_query(query: str) -> bool:
         return True
     return False
 
+_RELATIONSHIP_PATTERNS = [re.compile(p) for p in _rules.get("relationship", {}).get("regex_patterns", [])]
+
+
 def _is_relationship_query(query: str) -> bool:
     q = query.lower()
-    patterns = [
-        # Match "what functions/modules/code call/calls/import/imports/use/uses/reference/references/instantiate/instantiates/create/creates X"
-        r"\b(?:what|who|which)\s+(?:functions|modules|files|classes|methods|code|packages|elements)?\s*(?:call|calls|import|imports|use|uses|depend|depends|reference|references|instantiate|instantiates|create|creates)\b",
-        # Match "where/how is X called/imported/used/referenced/instantiated/created"
-        r"\b(?:where|how)\s+is\s+.*\s+(?:called|imported|used|referenced|instantiated|created)\b",
-        # Match "what breaks/is affected if I delete/deleted/remove/removed X"
-        r"\bwhat\s+(?:would\s+)?(?:break|be\s+affected)\s+if\s+.*\s+(?:delete|deleted|remove|removed)\b",
-        # Match "who depends on X" or "who imports X"
-        r"\bwho\s+depends\s+on\b",
-        # Match "dependencies/dependents/imports/callers of X"
-        r"\b(?:dependencies|dependents|imports|callers)\s+of\b",
-        # Additional pattern for "which modules depend on X"
-        r"\bwhich\s+modules?\s+depend(?:s)?\s+on\b",
-    ]
-    for pat in patterns:
-        if re.search(pat, q):
+    for pat in _RELATIONSHIP_PATTERNS:
+        if pat.search(q):
             return True
-    
-    phrases = [
-        "what calls ", "who calls ", "where is called", "what imports ",
-        "who imports ", "what depends on ", "who uses ", "what breaks if",
-        "what would break if", "what is affected if", "which modules depend on",
-        "who instantiates", "what instantiates", "who creates", "what creates",
-    ]
-    if any(phrase in q for phrase in phrases):
+    if any(phrase in q for phrase in _RELATIONSHIP_PHRASES):
         return True
     return False
 
@@ -281,12 +207,7 @@ def classify_query(query: str) -> QueryMode:
 # This threshold should be empirically tuned as retrieval configuration and query patterns evolve.
 LOW_CONFIDENCE_SIMILARITY_THRESHOLD = 0.40
 
-ADJECTIVE_MAPPING = {
-    "security_review": ["secure", "vulnerable", "safety", "threat", "leak", "secret"],
-    "tech_debt_scan": ["complex", "messy", "debt", "quality", "cleanliness", "smell"],
-    "test_intelligence": ["tested", "covered", "test", "coverage", "testing"],
-    "dependency_graph": ["coupled", "dependent", "dependency", "dependencies", "depend"],
-}
+
 
 ACTION_DISPLAY_NAMES = {
     "security_review": "Security Review",
@@ -395,7 +316,39 @@ def classify_superlative_with_llm(query: str) -> Optional[str]:
         
     return None
 
-def check_superlative_intent(query: str) -> Optional[dict]:
+from collections import OrderedDict
+import threading
+
+class LRUCache:
+    def __init__(self, capacity: int = 200):
+        self.capacity = capacity
+        self.cache = OrderedDict()
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        with self.lock:
+            if key not in self.cache:
+                return None
+            self.cache.move_to_end(key)
+            return self.cache[key]
+
+    def put(self, key, value):
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            self.cache[key] = value
+            if len(self.cache) > self.capacity:
+                self.cache.popitem(last=False)
+
+_superlative_cache = LRUCache(200)
+
+def _normalize_query(query: str) -> str:
+    q = query.lower().strip()
+    q = re.sub(r'[^\w\s]', '', q)
+    return " ".join(q.split())
+
+
+def check_superlative_intent(query: str, index_name: Optional[str] = None) -> Optional[dict]:
     """
     Check if the query is a judgment/superlative query that should route to
     a repository intelligence action.
@@ -408,7 +361,24 @@ def check_superlative_intent(query: str) -> Optional[dict]:
     action_key = match_adjective_action(query)
     
     if not action_key:
-        action_key = classify_superlative_with_llm(query)
+        norm_query = _normalize_query(query)
+        cache_key = (index_name or "", norm_query)
+        
+        cached_result = _superlative_cache.get(cache_key)
+        if cached_result is not None:
+            # We use a special marker for negative cache hit so we can return None
+            # without confusing with a cache miss
+            if cached_result == "NONE_ACTION":
+                action_key = None
+            else:
+                action_key = cached_result
+        else:
+            action_key = classify_superlative_with_llm(query)
+            # Populate cache
+            if action_key is None:
+                _superlative_cache.put(cache_key, "NONE_ACTION")
+            else:
+                _superlative_cache.put(cache_key, action_key)
         
     if action_key:
         display_name = ACTION_DISPLAY_NAMES.get(action_key, action_key.replace("_", " ").title())
@@ -418,3 +388,43 @@ def check_superlative_intent(query: str) -> Optional[dict]:
         }
         
     return None
+
+
+_identifier_cache = LRUCache(200)
+
+def is_real_identifier(target: Optional[str], index_name: Optional[str]) -> bool:
+    """
+    Checks if the target is a real identifier (class, function, method, constant, config parameter)
+    defined or present in the indexed codebase. Exact case-insensitive matching is used on the keys.
+    Results are cached using thread-safe LRUCache.
+    """
+    if not target or not index_name:
+        return False
+
+    norm_target = target.strip().lower()
+    cache_key = (index_name, norm_target)
+    
+    cached_result = _identifier_cache.get(cache_key)
+    if cached_result is not None:
+        return cached_result
+
+    from app.config import INDEX_DIR
+    import json
+    
+    graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
+    if not os.path.exists(graph_path):
+        _identifier_cache.put(cache_key, False)
+        return False
+
+    try:
+        with open(graph_path, "r", encoding="utf-8") as gf:
+            graph = json.load(gf)
+    except Exception as ex:
+        logger.warning(f"Failed to load relationship graph: {ex}")
+        _identifier_cache.put(cache_key, False)
+        return False
+
+    # Exact case-insensitive matching on graph keys
+    res = any(k.lower() == norm_target for k in graph.keys())
+    _identifier_cache.put(cache_key, res)
+    return res

@@ -494,6 +494,49 @@ def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
     repo_path = load_repository(source)
     index_name = os.path.basename(os.path.normpath(repo_path))
 
+    # Check if manifest exists and run incremental indexing
+    from app.indexing.incremental import run_incremental_indexing
+    try:
+        if run_incremental_indexing(repo_path, index_name):
+            emit("graph", "Updating relationship graph…", 80)
+            from app.parsing.relationship_graph import RelationshipGraphBuilder
+            import json
+            from app.config import INDEX_DIR
+            valid_files = filter_files(repo_path)
+            graph_builder = RelationshipGraphBuilder(repo_path)
+            graph = graph_builder.build_graph(valid_files)
+            graph_dir = os.path.join(INDEX_DIR, index_name)
+            os.makedirs(graph_dir, exist_ok=True)
+            graph_path = os.path.join(graph_dir, "relationship_graph.json")
+            with open(graph_path, "w", encoding="utf-8") as gf:
+                json.dump(graph, gf, indent=2)
+
+            # Invalidate cached retrievers so subsequent queries use updated contents
+            from app.services.qa_service import invalidate_index_cache
+            invalidate_index_cache(index_name)
+
+            # Determine file and node counts from updated manifest
+            from app.indexing.incremental import load_manifest
+            manifest = load_manifest(index_name)
+            file_count = len(manifest) if manifest else len(valid_files)
+            node_count = sum(len(v.get("chunk_ids", [])) for v in manifest.values()) if manifest else 0
+
+            emit(
+                "done",
+                "Incremental re-indexing complete!",
+                100,
+                index_name=index_name,
+                file_count=file_count,
+                node_count=node_count,
+            )
+            return {
+                "index_name": index_name,
+                "file_count": file_count,
+                "node_count": node_count,
+            }
+    except Exception as ie:
+        logger.warning(f"Incremental indexing failed/skipped: {ie}; falling back to full indexing.")
+
     # Step 2 - Filter
     emit("filtering", "Filtering source files…", 20)
     valid_files = filter_files(repo_path)
@@ -523,6 +566,21 @@ def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
     # Step 4 - Embed
     emit("embedding", f"Building embeddings for {len(nodes)} chunks…", 65)
     build_vector_index(nodes, index_name)
+
+    # Build initial manifest
+    from app.indexing.incremental import build_initial_manifest
+    try:
+        build_initial_manifest(nodes, repo_path, index_name)
+    except Exception as me:
+        logger.warning(f"Failed to build initial manifest: {me}")
+
+    # Step 4.5 - Git History Indexing
+    emit("history", "Extracting git log history…", 75)
+    try:
+        from app.ingestion.git_history import build_and_save_full_git_history
+        build_and_save_full_git_history(valid_files, repo_path, index_name)
+    except Exception as ge:
+        logger.warning(f"Failed to build git history: {ge}", exc_info=True)
 
     # Step 5 - Relationship Graph
     emit("graph", "Building call and reference graph…", 80)
