@@ -19,7 +19,7 @@ def test_rerank_fallback_rrf():
         NodeWithScore(node=TextNode(text="second"), score=0.8),
     ]
     with patch("app.config.USE_RERANKER", False):
-        result = reranker.rerank_with_colbert("query", nodes, top_k=2)
+        result = reranker.rerank_with_cross_encoder("query", nodes, top_k=2)
         assert len(result) == 2
         assert result[0].node.get_content() == "second"
         assert result[0].score == 0.8
@@ -39,7 +39,7 @@ def test_rerank_cross_encoder():
 
     with patch("app.config.USE_RERANKER", True), \
          patch("app.retrieval.reranker._load_cross_encoder", return_value=mock_encoder):
-        result = reranker.rerank_with_colbert("query", nodes, top_k=2)
+        result = reranker.rerank_with_cross_encoder("query", nodes, top_k=2)
         assert len(result) == 2
         # Ranking order is unchanged: "first" still outranks "second"
         assert result[0].node.get_content() == "first"

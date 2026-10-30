@@ -17,6 +17,7 @@ def test_build_history_points_includes_efficiency_metrics():
             "avg_latency_rerank": 100.0,
             "avg_latency_llm": 750.0,
             "colbert_enabled": False,
+            "cross_encoder_enabled": False,
             "result_json": {
                 "total_queries": 10,
                 "efficiency": {
@@ -51,6 +52,7 @@ def test_build_comparison_payload_uses_summary_deltas():
         "avg_latency_rerank": 90.0,
         "avg_latency_llm": 660.0,
         "colbert_enabled": False,
+        "cross_encoder_enabled": False,
         "result_json": {"efficiency": {"estimated_cost_usd": 0.02}},
     }
     baseline = {
@@ -67,6 +69,7 @@ def test_build_comparison_payload_uses_summary_deltas():
         "avg_latency_rerank": 120.0,
         "avg_latency_llm": 820.0,
         "colbert_enabled": False,
+        "cross_encoder_enabled": False,
         "result_json": {"efficiency": {"estimated_cost_usd": 0.03}},
     }
 

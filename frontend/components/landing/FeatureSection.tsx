@@ -20,7 +20,7 @@ const features = [
   },
   {
     title: 'Hybrid RAG Pipeline',
-    description: 'Dense + BM25 + RRF retrieval with ColBERT reranking and dual-mode query routing for maximum relevance.',
+    description: 'Dense + BM25 + RRF retrieval with Cross-Encoder reranking and dual-mode query routing for maximum relevance.',
     icon: Brain,
     accent: 'text-violet-500 border-violet-500/20 bg-violet-500/10',
   },

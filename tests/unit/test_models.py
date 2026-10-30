@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_models.py
 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Tests for Pydantic request/response models.
@@ -49,6 +49,7 @@ def _build_eval_summary(**overrides):
         "avg_latency_rerank": 100.0,
         "avg_latency_llm": 800.0,
         "colbert_enabled": False,
+        "cross_encoder_enabled": False,
         "total_queries": 10,
     }
     payload.update(overrides)
@@ -353,6 +354,7 @@ class TestEvalSummaryResponse:
         r = _build_eval_summary()
         assert r.hit_rate == 0.9
         assert r.colbert_enabled is False
+        assert r.cross_encoder_enabled is False
         assert r.total_queries == 10
 
     def test_optional_id_and_created_at(self):

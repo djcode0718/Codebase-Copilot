@@ -9,7 +9,7 @@
 ║    3. Parse + chunk documents                                                ║
 ║    4. Build embeddings (Ollama / Groq)                                       ║
 ║    5. Build BM25 keyword index                                               ║
-║    6. Interactive chat REPL with dual-mode routing + ColBERT reranking       ║
+║    6. Interactive chat REPL with dual-mode routing + Cross-Encoder reranking ║
 ║                                                                              ║
 ║  Usage:                                                                      ║
 ║    conda run -n ai-copilot-env python3 tests/pipeline_runner.py              ║
@@ -494,17 +494,17 @@ def _retrieve_candidate_nodes(query_mode, query_text: str, vector_index, bm25_re
     return raw_nodes, t_ret, retriever_type
 
 
-def _rerank_nodes(query_text: str, raw_nodes: list, use_colbert: bool, top_k_rerank: int):
-    """Rerank nodes using ColBERT or score sorting."""
+def _rerank_nodes(query_text: str, raw_nodes: list, use_cross_encoder: bool, top_k_rerank: int):
+    """Rerank nodes using Cross-Encoder or score sorting."""
     from app.config import TOP_K_RERANK
     
-    step_start("Reranking", f"ColBERT={'ON' if use_colbert else 'OFF'}")
+    step_start("Reranking", f"Cross-Encoder={'ON' if use_cross_encoder else 'OFF'}")
     t_rerank_start = time.time()
 
-    if use_colbert and raw_nodes:
-        from app.retrieval.reranker import rerank_with_colbert
-        reranked_nodes = rerank_with_colbert(query_text, raw_nodes, top_k=TOP_K_RERANK)
-        rerank_method = f"ColBERT (colbertv2.0) → top {TOP_K_RERANK}"
+    if use_cross_encoder and raw_nodes:
+        from app.retrieval.reranker import rerank_with_cross_encoder
+        reranked_nodes = rerank_with_cross_encoder(query_text, raw_nodes, top_k=TOP_K_RERANK)
+        rerank_method = f"Cross-Encoder (BAAI/bge-reranker-base) → top {TOP_K_RERANK}"
     else:
         reranked_nodes = sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]
         rerank_method = f"RRF score sort → top {TOP_K_RERANK}"
@@ -534,7 +534,7 @@ def _generate_and_stream_response(full_prompt: str, settings_llm, query_mode):
     return full_response, t_llm
 
 
-def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_mode, turn_count: int, use_colbert: bool):
+def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_mode, turn_count: int, use_cross_encoder: bool):
     """Process a single query turn through the entire pipeline."""
     from llama_index.core import Settings
     from llama_index.core.base.llms.types import ChatMessage
@@ -553,7 +553,7 @@ def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_m
     )
 
     # Rerank
-    reranked_nodes, t_rerank, rerank_method = _rerank_nodes(raw, raw_nodes, use_colbert, TOP_K_RERANK)
+    reranked_nodes, t_rerank, rerank_method = _rerank_nodes(raw, raw_nodes, use_cross_encoder, TOP_K_RERANK)
 
     # Show retrieved chunks
     _print_retrieved_nodes(reranked_nodes)
@@ -580,7 +580,7 @@ def _process_single_query(raw: str, vector_index, bm25_retriever, memory, last_m
     return query_mode
 
 
-def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
+def chat_repl(vector_index, bm25_retriever, use_cross_encoder: bool):
     """Interactive chat REPL with query routing, retrieval, and generation."""
     from llama_index.core.memory import ChatMemoryBuffer
 
@@ -606,7 +606,7 @@ def chat_repl(vector_index, bm25_retriever, use_colbert: bool):
             continue
 
         turn_count += 1
-        last_mode = _process_single_query(raw, vector_index, bm25_retriever, memory, last_mode, turn_count, use_colbert)
+        last_mode = _process_single_query(raw, vector_index, bm25_retriever, memory, last_mode, turn_count, use_cross_encoder)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -618,7 +618,7 @@ def main():
     pipeline_start = time.time()
 
     # PRE-FLIGHT
-    use_colbert = preflight_check()
+    use_cross_encoder = preflight_check()
 
     # STEP 1 — LlamaIndex settings
     configure_llm()
@@ -643,7 +643,7 @@ def main():
     )
 
     # STEP 6 — Chat REPL
-    chat_repl(vector_index, bm25_retriever, use_colbert)
+    chat_repl(vector_index, bm25_retriever, use_cross_encoder)
 
 
 if __name__ == "__main__":

@@ -1095,7 +1095,7 @@ def save_evaluation(
         "avg_latency_retrieval": summary.get("avg_latency_retrieval", 0.0),
         "avg_latency_rerank":    summary.get("avg_latency_rerank", 0.0),
         "avg_latency_llm":       summary.get("avg_latency_llm", 0.0),
-        "colbert_enabled":       summary.get("colbert_enabled", False),
+        "colbert_enabled":       summary.get("cross_encoder_enabled", summary.get("colbert_enabled", False)),
         "result_json":           summary,
     }
     result = supabase.table("evaluations").insert(record).execute()

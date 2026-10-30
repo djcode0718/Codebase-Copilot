@@ -34,7 +34,7 @@ from llama_index.retrievers.bm25 import BM25Retriever
 
 from app.indexing.index_builder import load_vector_index, build_bm25_retriever
 from app.retrieval.query_router import classify_query, QueryMode, is_general_knowledge_or_preference_query
-from app.retrieval.reranker import rerank_with_colbert
+from app.retrieval.reranker import rerank_with_cross_encoder
 from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
 from app.ingestion.file_filter import filter_files
 from app.llm.llm_client import configure_llamaindex_settings
@@ -173,7 +173,7 @@ def _build_code_lookup_engine(
     """
     CODE_LOOKUP mode engine:
     - BM25 + Dense hybrid retrieval (RRF fusion)
-    - ColBERT reranking applied after fusion
+    - Cross-Encoder reranking applied after fusion
     - Strict system prompt
     """
     dense_retriever = vector_index.as_retriever(similarity_top_k=TOP_K_CHUNKS)
@@ -197,7 +197,7 @@ def _build_code_lookup_engine(
         llm=Settings.llm,
         system_prompt=CODE_LOOKUP_PROMPT,
         node_postprocessors=[
-            SimilarityPostprocessor(similarity_cutoff=0.0)  # keep all, ColBERT handles filtering
+            SimilarityPostprocessor(similarity_cutoff=0.0)  # keep all, Cross-Encoder handles filtering
         ],
         verbose=False,
     )
@@ -380,14 +380,14 @@ def _check_low_confidence(nodes, label: str) -> bool:
     return False
 
 
-def _execute_colbert_path(query: str, resolved_query: str, query_mode: QueryMode, chat_engine, memory):
+def _execute_cross_encoder_path(query: str, resolved_query: str, query_mode: QueryMode, chat_engine, memory):
     retriever = chat_engine._retriever
     raw_nodes = retriever.retrieve(resolved_query)
-    logger.debug("ColBERT path retrieved %s raw nodes", len(raw_nodes))
-    reranked_nodes = rerank_with_colbert(resolved_query, raw_nodes, top_k=TOP_K_RERANK)
-    logger.debug("ColBERT reranked to %s nodes", len(reranked_nodes))
+    logger.debug("Cross-Encoder path retrieved %s raw nodes", len(raw_nodes))
+    reranked_nodes = rerank_with_cross_encoder(resolved_query, raw_nodes, top_k=TOP_K_RERANK)
+    logger.debug("Cross-Encoder reranked to %s nodes", len(reranked_nodes))
 
-    if _check_low_confidence(reranked_nodes, "ColBERT"):
+    if _check_low_confidence(reranked_nodes, "Cross-Encoder"):
         _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
         return _CLARIFICATION_RESPONSE
 
@@ -401,7 +401,7 @@ def _execute_colbert_path(query: str, resolved_query: str, query_mode: QueryMode
     response_str = str(response).strip()
 
     if _has_refusal(response_str):
-        logger.warning("Safety refusal detected in ColBERT path; using fallback prompt")
+        logger.warning("Safety refusal detected in Cross-Encoder path; using fallback prompt")
         response = Settings.llm.complete(_build_review_fallback_prompt(full_prompt))
         response_str = str(response).strip()
 
@@ -492,7 +492,7 @@ def handle_user_query(
     if USE_RERANKER:
         try:
             logger.debug("Executing Reranker path for query_mode=%s", query_mode.value)
-            response_str = _execute_colbert_path(query, resolved_query, query_mode, chat_engine, memory)
+            response_str = _execute_cross_encoder_path(query, resolved_query, query_mode, chat_engine, memory)
             return response_str, chat_engine, memory, query_mode
         except Exception as e:
             logger.warning(f"Reranker pipeline failed: {e} — falling back to chat engine")

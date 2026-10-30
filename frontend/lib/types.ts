@@ -242,7 +242,8 @@ export interface EvalSummary {
   avg_latency_retrieval: number;  // ms
   avg_latency_rerank: number;     // ms
   avg_latency_llm: number;        // ms
-  colbert_enabled: boolean;
+  colbert_enabled: boolean; // Deprecated. Use cross_encoder_enabled instead.
+  cross_encoder_enabled: boolean;
   // From result_json (read via: eval_record.get("result_json", {}).get("total_queries", 0))
   total_queries?: number;
   mode?: 'quick' | 'standard' | 'deep' | 'benchmark';

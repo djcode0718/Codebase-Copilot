@@ -265,7 +265,7 @@ Per-file LLM summaries were making 1 LLM API call per file at index time,
 causing indexing to take 30+ minutes for medium repos.
 The context document still captures full file structure, tech stack,
 and all function/class names — which is sufficient for architectural retrieval.
-BM25 + ColBERT reranking handles the rest.
+BM25 + Cross-Encoder reranking handles the rest.
 """
 
 import os
@@ -406,7 +406,7 @@ def build_codebase_context(
     # Previously set to 15, meaning up to 15 sequential LLM API calls at index time.
     # Combined with build_summary_index (also removed), this caused 30+ min indexing.
     # All files now get a plain text preview + extracted symbols only.
-    # Retrieval quality is not affected — BM25 + ColBERT handles file-level retrieval.
+    # Retrieval quality is not affected — BM25 + Cross-Encoder handles file-level retrieval.
     LLM_SUMMARY_LIMIT = 0
 
     for i, file_path in enumerate(sorted_files):

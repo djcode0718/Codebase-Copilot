@@ -100,8 +100,8 @@ function EvalBadges({ evalData }: { evalData: EvalSummary }) {
         {evalData.total_queries ?? '—'} test queries
       </span>
       <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
-        <Zap size={12} className={evalData.colbert_enabled ? 'text-brand' : 'text-muted-foreground'} />
-        ColBERT reranking: {evalData.colbert_enabled ? 'enabled' : 'disabled'}
+        <Zap size={12} className={(evalData.cross_encoder_enabled ?? evalData.colbert_enabled) ? 'text-brand' : 'text-muted-foreground'} />
+        Cross-Encoder reranking: {(evalData.cross_encoder_enabled ?? evalData.colbert_enabled) ? 'enabled' : 'disabled'}
       </span>
       <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1">
         <Clock3 size={12} />

@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_supabase_service.py
 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Unit tests for api/services/supabase_service.py.
@@ -578,6 +578,7 @@ class TestSaveEvaluation:
             "avg_latency_rerank": 100.0,
             "avg_latency_llm": 800.0,
             "colbert_enabled": False,
+            "cross_encoder_enabled": False,
         }
         expected = {"id": "eval-1", **summary}
         mock = make_supabase_mock(return_data=[expected])

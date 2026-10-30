@@ -15,7 +15,7 @@ Measures:
   SYSTEM PERFORMANCE
     - End-to-end latency
     - Retrieval latency
-    - Reranking latency (ColBERT overhead)
+    - Reranking latency (Cross-Encoder overhead)
     - LLM latency
     - Query routing accuracy
 
@@ -180,7 +180,7 @@ class EvalSummary:
     avg_latency_retrieval: float
     avg_latency_rerank: float
     avg_latency_llm:    float
-    colbert_enabled:    bool
+    cross_encoder_enabled:    bool
     results:            List[dict] = field(default_factory=list)
 
 
@@ -195,7 +195,7 @@ def retrieve_with_timing(query: str, index_name: str):
     Returns (nodes, retrieved_files, latency_retrieval, latency_rerank)
     """
     from app.config import USE_RERANKER, TOP_K_CHUNKS, TOP_K_RERANK
-    from app.retrieval.reranker import rerank_with_colbert
+    from app.retrieval.reranker import rerank_with_cross_encoder
 
     vector_index, bm25_retriever = _get_indexes(index_name)
 
@@ -223,7 +223,7 @@ def retrieve_with_timing(query: str, index_name: str):
     # ── Reranking timing ──────────────────────────────────────────────────
     t1 = time.time()
     if USE_RERANKER:
-        final_nodes = rerank_with_colbert(query, raw_nodes, top_k=TOP_K_RERANK)
+        final_nodes = rerank_with_cross_encoder(query, raw_nodes, top_k=TOP_K_RERANK)
     else:
         final_nodes = sorted(raw_nodes, key=lambda n: n.score or 0, reverse=True)[:TOP_K_RERANK]
     latency_rerank = time.time() - t1
@@ -417,7 +417,7 @@ def run_evaluation(index_name: str) -> EvalSummary:
         avg_latency_retrieval = avg_retrieval,
         avg_latency_rerank    = avg_rerank,
         avg_latency_llm       = avg_llm,
-        colbert_enabled       = USE_RERANKER,
+        cross_encoder_enabled = USE_RERANKER,
         results               = [asdict(r) for r in results],
     )
 
@@ -459,7 +459,7 @@ def print_report(summary: EvalSummary):
     print(f"  Retrieval  {summary.avg_latency_retrieval:.2f}s  ({100*summary.avg_latency_retrieval/summary.avg_latency_total:.0f}%)")
     print(f"  Reranking  {summary.avg_latency_rerank:.2f}s  ({100*summary.avg_latency_rerank/summary.avg_latency_total:.0f}%)")
     print(f"  LLM        {summary.avg_latency_llm:.2f}s  ({100*summary.avg_latency_llm/summary.avg_latency_total:.0f}%)")
-    print(f"  ColBERT:   {'ON' if summary.colbert_enabled else 'OFF'}")
+    print(f"  Cross-Encoder:   {'ON' if summary.cross_encoder_enabled else 'OFF'}")
 
     print(f"\n  DIAGNOSIS")
     if summary.hit_rate < 0.6:
@@ -481,7 +481,7 @@ def print_report(summary: EvalSummary):
         print("     Try: add more keywords to _ARCHITECTURAL_KEYWORDS / _CODE_KEYWORDS")
         print("     in query_router.py for the query types that are misrouted")
     if summary.avg_latency_rerank > 5.0:
-        print("  ⚠️  ColBERT reranking slow (>5s avg).")
+        print("  ⚠️  Cross-Encoder reranking slow (>5s avg).")
         print("     Consider: USE_RERANKER=False for faster responses")
 
     if all([

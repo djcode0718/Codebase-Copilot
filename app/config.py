@@ -79,7 +79,7 @@ CHUNK_MAX_CHARS    = 1500  # hard char cap per chunk
 # When True:  Reranker rescores the top TOP_K_CHUNKS results (~2-3s extra/query).
 #
 # TO DISABLE RERANKER: set USE_RERANKER=false in .env
-USE_RERANKER = os.getenv("USE_RERANKER", os.getenv("USE_COLBERT", "true")).lower() == "true"
+USE_RERANKER = os.getenv("USE_RERANKER", os.getenv("USE_CROSS_ENCODER", os.getenv("USE_COLBERT", "true"))).lower() == "true"
 
 # ─── LLM Fallback Configuration ──────────────────────────────────────────────
 # Maximum retry-after delay (in seconds) that we will wait for before falling back to the next model.

@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_router_eval.py
 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Tests for evaluation router endpoints:
@@ -29,6 +29,7 @@ class TestGetLatestEvaluation:
             "avg_latency_rerank": 100.0,
             "avg_latency_llm": 800.0,
             "colbert_enabled": False,
+            "cross_encoder_enabled": False,
             "result_json": {"total_queries": 10},
             "created_at": "2025-01-01T00:00:00+00:00",
         }
@@ -53,6 +54,7 @@ class TestGetLatestEvaluation:
         assert body["hit_rate"] == 0.9
         assert body["total_queries"] == 10
         assert body["colbert_enabled"] is False
+        assert body["cross_encoder_enabled"] is False
         assert body["mode"] == "standard"
 
     def test_returns_none_if_no_eval(self, client, mock_supabase, fake_repo, fake_repo_id):
@@ -114,6 +116,7 @@ class TestEvaluationHistoryAndCompare:
             "avg_latency_rerank": 120.0,
             "avg_latency_llm": 730.0,
             "colbert_enabled": False,
+            "cross_encoder_enabled": False,
             "result_json": {
                 "total_queries": 10,
                 "efficiency": {"cache_hit_rate": 0.4, "estimated_cost_usd": 0.012},
@@ -156,6 +159,7 @@ class TestEvaluationHistoryAndCompare:
             "avg_latency_rerank": 100.0,
             "avg_latency_llm": 700.0,
             "colbert_enabled": False,
+            "cross_encoder_enabled": False,
             "result_json": {"total_queries": 10, "efficiency": {"estimated_cost_usd": 0.02}},
             "created_at": "2025-01-02T00:00:00+00:00",
         }
@@ -172,6 +176,7 @@ class TestEvaluationHistoryAndCompare:
             "avg_latency_rerank": 120.0,
             "avg_latency_llm": 820.0,
             "colbert_enabled": False,
+            "cross_encoder_enabled": False,
             "result_json": {"total_queries": 10, "efficiency": {"estimated_cost_usd": 0.03}},
             "created_at": "2025-01-01T00:00:00+00:00",
         }

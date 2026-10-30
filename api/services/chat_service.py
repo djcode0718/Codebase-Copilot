@@ -193,10 +193,10 @@ async def _retrieve_nodes(retriever, resolved_query: str):
 
 async def _rerank_nodes(resolved_query: str, raw_nodes):
     if USE_RERANKER and raw_nodes:
-        from app.retrieval.reranker import rerank_with_colbert
+        from app.retrieval.reranker import rerank_with_cross_encoder
 
         return await asyncio.get_event_loop().run_in_executor(
-            None, rerank_with_colbert, resolved_query, raw_nodes, TOP_K_RERANK
+            None, rerank_with_cross_encoder, resolved_query, raw_nodes, TOP_K_RERANK
         )
 
     return sorted(raw_nodes, key=lambda n: n.score or 0.0, reverse=True)[:TOP_K_RERANK]

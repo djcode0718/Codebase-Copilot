@@ -1,11 +1,9 @@
 """
 reranker.py
 ───────────
-ColBERT reranking via LlamaIndex's native ColbertRerank postprocessor.
-No RAGatouille dependency — uses the official LlamaIndex integration
-which is stable and actively maintained.
+Cross-Encoder reranking via sentence-transformers.
 
-Model: colbert-ir/colbertv2.0 (~440MB, CPU inference, runs well on M4)
+Model: BAAI/bge-reranker-base (CPU inference, runs well on M4)
 Latency: ~2-3s per query for 10 chunks on M4 16GB
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -62,7 +60,7 @@ def _load_cross_encoder():
         return None
 
 
-def rerank_with_colbert(
+def rerank_with_cross_encoder(
     query: str,
     nodes: List[NodeWithScore],
     top_k: int = 5,

@@ -309,7 +309,7 @@ Frontend-focused regression checks now also include a lightweight Vitest harness
           └────────────┬─────────────┘
                        ▼
              ┌──────────────────┐
-             │  ColBERT Rerank  │
+             │  Cross-Encoder   │
              └────────┬─────────┘
                       ▼
              ┌──────────────────┐
@@ -334,7 +334,7 @@ Frontend-focused regression checks now also include a lightweight Vitest harness
 
 | Layer            | Technologies                                                              |
 | ----------------- | -------------------------------------------------------------------------- |
-| **AI / Retrieval**| LlamaIndex, BM25, ChromaDB, ColBERT, Hybrid Retrieval, Reciprocal Rank Fusion |
+| **AI / Retrieval**| LlamaIndex, BM25, ChromaDB, Cross-Encoder, Hybrid Retrieval, Reciprocal Rank Fusion |
 | **LLMs**          | Ollama, Groq, Gemini                                                      |
 | **Parsing**       | tree-sitter, tree-sitter-language-pack                                   |
 | **Backend API**   | FastAPI, Uvicorn, Pydantic, Server-Sent Events (SSE)                      |
@@ -458,7 +458,7 @@ The FastAPI backend is served at `http://localhost:8000` and exposes the followi
 
 | Method | Endpoint       | Description                                                 |
 | ------ | -------------- | ------------------------------------------------------------ |
-| `GET`  | `/api/health`  | Returns LLM provider, ColBERT status, and embed model info    |
+| `GET`  | `/api/health`  | Returns LLM provider, Cross-Encoder status, and embed model info    |
 
 ### Repository — `/api/repo`
 
@@ -622,7 +622,7 @@ Combines semantic, keyword, and file-level retrieval using `QueryFusionRetriever
 
 ### 5️⃣ Reranking
 
-Optional ColBERT reranking improves ranking quality, retrieval precision, and Mean Reciprocal Rank (MRR).
+Optional Cross-Encoder reranking improves ranking quality, retrieval precision, and Mean Reciprocal Rank (MRR).
 
 ### 6️⃣ Query Routing
 
@@ -677,7 +677,7 @@ The project ships with a dedicated `tests/` suite built on **pytest** and **pyte
 
 | Test File                     | Focus                                                                  |
 | ------------------------------- | -------------------------------------------------------------------------- |
-| `test_app_config.py`           | LLM provider config, fast-LLM toggle, API keys, directories, ColBERT flag |
+| `test_app_config.py`           | LLM provider config, fast-LLM toggle, API keys, directories, Cross-Encoder flag |
 | `test_app_file_filter.py`      | Valid extensions, ignored directories, recursive traversal                |
 | `test_app_utils.py`            | Logger behavior, file extension parsing, directory cleanup                |
 | `test_app_query_router.py`     | Query mode classification, keyword routing, LLM fallback, text chunking   |

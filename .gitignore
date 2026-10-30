@@ -16,6 +16,7 @@ env/
 # Data & indexes
 data/repos/
 data/index/
+data/health_transient_runs.json
 
 # Logs
 *.log

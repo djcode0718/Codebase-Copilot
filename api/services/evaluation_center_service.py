@@ -363,16 +363,21 @@ def _build_efficiency(
 
 
 def _cache_key(payload: Dict[str, Any]) -> str:
+    raw_settings = payload.get("retrieval_settings") or {}
+    reranker_enabled = raw_settings.get("cross_encoder_enabled", raw_settings.get("colbert_enabled", USE_RERANKER))
+    
+    settings = {
+        "top_k_chunks": raw_settings.get("top_k_chunks", TOP_K_CHUNKS),
+        "top_k_rerank": raw_settings.get("top_k_rerank", TOP_K_RERANK),
+        "colbert_enabled": reranker_enabled,
+        "cross_encoder_enabled": reranker_enabled,
+    }
     normalized = {
         "repo_id": payload.get("repo_id"),
         "branch": payload.get("branch") or "unknown",
         "commit_sha": payload.get("commit_sha") or "unknown",
         "embedding_version": payload.get("embedding_version") or OLLAMA_EMBED_MODEL,
-        "retrieval_settings": payload.get("retrieval_settings") or {
-            "top_k_chunks": TOP_K_CHUNKS,
-            "top_k_rerank": TOP_K_RERANK,
-            "colbert_enabled": USE_RERANKER,
-        },
+        "retrieval_settings": settings,
         "prompt_version": payload.get("prompt_version") or PROMPT_VERSION_DEFAULT,
         "mode": payload.get("mode") or "standard",
     }
@@ -396,8 +401,14 @@ def _to_summary_dict(eval_record: Dict[str, Any]) -> Dict[str, Any]:
         "avg_latency_rerank": eval_record.get("avg_latency_rerank", 0.0),
         "avg_latency_llm": eval_record.get("avg_latency_llm", 0.0),
         "colbert_enabled": eval_record.get("colbert_enabled", False),
+        "cross_encoder_enabled": eval_record.get("colbert_enabled", False),
     }
     payload.update(dict(eval_record.get("result_json") or {}))
+
+    # Ensure both colbert_enabled and cross_encoder_enabled reflect the same value
+    reranker_val = payload.get("cross_encoder_enabled", payload.get("colbert_enabled", False))
+    payload["colbert_enabled"] = reranker_val
+    payload["cross_encoder_enabled"] = reranker_val
 
     payload.setdefault("id", eval_record.get("id"))
     payload.setdefault("repo_id", eval_record.get("repo_id"))
@@ -576,6 +587,7 @@ async def run_evaluation_center(
             "avg_latency_rerank": 80.0,
             "avg_latency_llm": 0.0,
             "colbert_enabled": USE_RERANKER,
+            "cross_encoder_enabled": USE_RERANKER,
             "total_queries": 0,
             "results": [],
         }
@@ -591,7 +603,8 @@ async def run_evaluation_center(
             "avg_latency_retrieval": float(base.get("avg_latency_retrieval", 230.0)),
             "avg_latency_rerank": float(base.get("avg_latency_rerank", 80.0)),
             "avg_latency_llm": 0.0,
-            "colbert_enabled": bool(base.get("colbert_enabled", USE_RERANKER)),
+            "colbert_enabled": bool(base.get("cross_encoder_enabled", base.get("colbert_enabled", USE_RERANKER))),
+            "cross_encoder_enabled": bool(base.get("cross_encoder_enabled", base.get("colbert_enabled", USE_RERANKER))),
             "total_queries": int(base.get("total_queries", 0)),
             "results": [],
         }
@@ -623,6 +636,7 @@ async def run_evaluation_center(
             "top_k_chunks": TOP_K_CHUNKS,
             "top_k_rerank": TOP_K_RERANK,
             "colbert_enabled": USE_RERANKER,
+            "cross_encoder_enabled": USE_RERANKER,
         },
         "prompt_version": prompt_version or PROMPT_VERSION_DEFAULT,
         "cache_key": cache_key,

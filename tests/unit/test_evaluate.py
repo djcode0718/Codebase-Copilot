@@ -161,7 +161,7 @@ def test_eval_summary_instantiation(ev):
         avg_latency_retrieval=0.5,
         avg_latency_rerank=0.3,
         avg_latency_llm=1.2,
-        colbert_enabled=False,
+        cross_encoder_enabled=False,
     )
     assert summary.total_queries == 10
     assert summary.hit_rate == 0.8
@@ -189,7 +189,7 @@ def test_keyword_hit_rate_none_found():
 
 
 def test_keyword_hit_rate_partial():
-    rate = _keyword_hit_rate("Uses chunk and embed but not vector-store", ["chunk", "embed", "colbert"])
+    rate = _keyword_hit_rate("Uses chunk and embed but not vector-store", ["chunk", "embed", "cross-encoder"])
     assert rate == pytest.approx(2 / 3)
 
 

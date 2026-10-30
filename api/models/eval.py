@@ -87,7 +87,8 @@ class EvalSummaryResponse(BaseModel):
     avg_latency_retrieval: float
     avg_latency_rerank: float
     avg_latency_llm: float
-    colbert_enabled: bool
+    colbert_enabled: bool = Field(default=False, description="Deprecated. Use cross_encoder_enabled instead.")
+    cross_encoder_enabled: bool = Field(default=False, description="Whether Cross-Encoder reranking was used.")
     total_queries: int
     mode: EvalMode = "standard"
     cache_key: Optional[str] = None

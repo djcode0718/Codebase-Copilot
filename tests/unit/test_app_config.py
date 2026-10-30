@@ -127,12 +127,22 @@ class TestDirectories:
         assert isinstance(cfg.INDEX_DIR, str)
 
     def test_repos_dir_under_data(self):
-        import app.config as cfg
-        assert cfg.REPOS_DIR.startswith(cfg.DATA_DIR)
+        old_repos = os.environ.pop("REPOS_DIR", None)
+        try:
+            cfg = reload_config({})
+            assert cfg.REPOS_DIR.startswith(cfg.DATA_DIR)
+        finally:
+            if old_repos is not None:
+                os.environ["REPOS_DIR"] = old_repos
 
     def test_index_dir_under_data(self):
-        import app.config as cfg
-        assert cfg.INDEX_DIR.startswith(cfg.DATA_DIR)
+        old_index = os.environ.pop("INDEX_DIR", None)
+        try:
+            cfg = reload_config({})
+            assert cfg.INDEX_DIR.startswith(cfg.DATA_DIR)
+        finally:
+            if old_index is not None:
+                os.environ["INDEX_DIR"] = old_index
 
     def test_dirs_are_created(self):
         import app.config as cfg
@@ -177,9 +187,16 @@ class TestRerankerConfig:
         cfg = reload_config({"USE_RERANKER": "TRUE"})
         assert cfg.USE_RERANKER is True
 
-    def test_use_reranker_fallback_to_colbert(self):
+    def test_use_reranker_fallback_to_cross_encoder_and_colbert(self):
         old_val = os.environ.pop("USE_RERANKER", None)
+        old_cross = os.environ.pop("USE_CROSS_ENCODER", None)
+        old_colbert = os.environ.pop("USE_COLBERT", None)
         try:
+            cfg = reload_config({"USE_CROSS_ENCODER": "false"})
+            assert cfg.USE_RERANKER is False
+            cfg = reload_config({"USE_CROSS_ENCODER": "true"})
+            assert cfg.USE_RERANKER is True
+
             cfg = reload_config({"USE_COLBERT": "false"})
             assert cfg.USE_RERANKER is False
             cfg = reload_config({"USE_COLBERT": "true"})
@@ -187,5 +204,9 @@ class TestRerankerConfig:
         finally:
             if old_val is not None:
                 os.environ["USE_RERANKER"] = old_val
+            if old_cross is not None:
+                os.environ["USE_CROSS_ENCODER"] = old_cross
+            if old_colbert is not None:
+                os.environ["USE_COLBERT"] = old_colbert
 
 
