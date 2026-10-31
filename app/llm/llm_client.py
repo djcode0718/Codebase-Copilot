@@ -48,6 +48,18 @@ def get_llm():
     return _cached_resilient_llm
 
 
+def reset_llm_client() -> None:
+    """Reset cached resilient LLM and embed model instances for test isolation.
+
+    NOTE: Intended solely for unit/integration test fixtures. The application
+    architecture relies on static process startup configuration and does not
+    support dynamic runtime provider switching.
+    """
+    global _cached_resilient_llm, _cached_embed_model
+    _cached_resilient_llm = None
+    _cached_embed_model = None
+
+
 def get_embed_model():
     """
     Returns OllamaEmbedding with nomic-embed-text.

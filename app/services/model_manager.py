@@ -86,41 +86,61 @@ def _dedupe_specs(specs: List[ModelSpec]) -> List[ModelSpec]:
 
 
 def _build_primary_spec() -> ModelSpec:
-    provider = "groq" if USE_FAST_LLM else _normalize_provider(LLM_PROVIDER)
-    if provider not in _SUPPORTED_PROVIDERS:
-        logger.warning("Unsupported LLM_PROVIDER '%s'. Falling back to first available provider.", provider)
-        for candidate in ("gemini", "groq", "ollama"):
-            if is_provider_available(candidate):
-                provider = candidate
-                break
+    raw = _normalize_provider(LLM_PROVIDER)
+    if raw not in _SUPPORTED_PROVIDERS:
+        raise ValueError(f"Invalid LLM_PROVIDER '{LLM_PROVIDER}'. Must be one of: {sorted(_SUPPORTED_PROVIDERS)}")
 
-    return ModelSpec(
-        provider=provider,
-        model_name=_default_model_for_provider(provider, use_fast_choice=USE_FAST_LLM),
-    )
+    # Offline mode takes strict precedence: USE_FAST_LLM cannot override offline operation
+    if raw == "ollama":
+        provider = "ollama"
+        model_name = "llama3.1:8b"
+    elif USE_FAST_LLM:
+        provider = "groq"
+        model_name = _default_model_for_provider("groq", use_fast_choice=True)
+    else:
+        provider = raw
+        model_name = _default_model_for_provider(provider, use_fast_choice=False)
+
+    return ModelSpec(provider=provider, model_name=model_name)
 
 
 def get_available_model_specs() -> List[ModelSpec]:
-    ordered: List[ModelSpec] = []
-
     primary = _build_primary_spec()
-    ordered.append(primary)
-    ordered.extend(_parse_fallback_chain())
 
-    # Ensure each known provider still gets a default attempt if available.
-    ordered.extend([
-        ModelSpec(provider="gemini", model_name=_default_model_for_provider("gemini")),
-        ModelSpec(provider="groq", model_name=_default_model_for_provider("groq")),
-        ModelSpec(provider="ollama", model_name=_default_model_for_provider("ollama")),
-    ])
+    # OFFLINE MODE: strictly Ollama llama3.1:8b; ZERO cloud fallbacks
+    if primary.provider == "ollama":
+        if not is_provider_available("ollama"):
+            raise RuntimeError("Ollama provider is not available.")
+        return [ModelSpec(provider="ollama", model_name="llama3.1:8b")]
 
-    deduped = _dedupe_specs(ordered)
+    # CLOUD MODE: only cloud providers (Gemini, Groq); ZERO Ollama fallbacks
+    specs: List[ModelSpec] = [primary]
+    for s in _parse_fallback_chain():
+        if s.provider in ("gemini", "groq"):
+            specs.append(s)
+
+    # Ensure each known cloud provider gets a default attempt if available
+    for p in ("gemini", "groq"):
+        if is_provider_available(p):
+            specs.append(ModelSpec(provider=p, model_name=_default_model_for_provider(p)))
+
+    deduped = _dedupe_specs(specs)
     available = [spec for spec in deduped if is_provider_available(spec.provider)]
 
     if not available:
-        logger.error("No LLM providers are available after configuration filtering.")
+        raise RuntimeError("No cloud LLM providers are available with configured API keys.")
 
     return available
+
+
+def reset_client_cache() -> None:
+    """Clear cached LLM client instances for test isolation.
+
+    NOTE: Intended solely for unit/integration test fixtures. The application
+    architecture relies on static process startup configuration and does not
+    support dynamic runtime provider switching.
+    """
+    _client_cache.clear()
 
 
 def create_llm_client(spec: ModelSpec) -> Any:
@@ -141,11 +161,31 @@ def create_llm_client(spec: ModelSpec) -> Any:
 
         if not GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY is not configured.")
-        client = Groq(model=spec.model_name, api_key=GROQ_API_KEY)
+
+        model_lower = spec.model_name.lower()
+        if "70b" in model_lower or "8b-instant" in model_lower:
+            ctx = 131072
+        elif "qwen" in model_lower:
+            ctx = 32768
+        else:
+            ctx = 32768
+
+        client = Groq(
+            model=spec.model_name,
+            api_key=GROQ_API_KEY,
+            context_window=ctx,
+            max_tokens=4096,
+        )
     elif provider == "ollama":
         from llama_index.llms.ollama import Ollama
 
-        client = Ollama(model=spec.model_name, base_url=OLLAMA_BASE_URL, request_timeout=120.0)
+        client = Ollama(
+            model=spec.model_name,
+            base_url=OLLAMA_BASE_URL,
+            request_timeout=120.0,
+            context_window=16384,
+            additional_kwargs={"options": {"num_ctx": 16384}},
+        )
     else:
         raise ValueError(f"Unsupported provider: {spec.provider}")
 

@@ -92,6 +92,11 @@ REVIEW_PAYLOAD_PROMPT = (
     "id, severity(low|medium|high|critical), file, code_area, finding, recommendation, "
     "suggested_fix, risk_level(low|medium|high), impact, complexity, estimated_effort, expected_benefit. "
     "Be concise and evidence-based.\n\n"
+    "IMPORTANT TRUNCATION RULES:\n"
+    "- If a file snippet contains a truncation sentinel (e.g. '[TRUNCATED FOR REVIEW]'), it indicates incomplete source.\n"
+    "- Never interpret an incomplete expression, unclosed bracket/block, or trailing cutoff as a confirmed source-code defect or syntax error.\n"
+    "- Do not report syntax errors based solely on content immediately preceding or following a truncation boundary.\n"
+    "- Clearly disclose in the finding description when a finding is limited by incomplete source context.\n\n"
     "REVIEW_INPUT_JSON:\n{review_input_json}"
 )
 

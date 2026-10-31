@@ -8,8 +8,12 @@ load_dotenv(override="pytest" not in sys.modules)
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 # ─── LLM Provider ────────────────────────────────────────────────────────────
-# Options: "ollama" | "gemini" | "groq"
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
+# Options: "gemini" | "groq" | "ollama"
+VALID_LLM_PROVIDERS = {"gemini", "groq", "ollama"}
+_RAW_LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower().strip()
+if _RAW_LLM_PROVIDER not in VALID_LLM_PROVIDERS:
+    raise ValueError(f"Invalid LLM_PROVIDER '{_RAW_LLM_PROVIDER}'. Must be one of: {sorted(VALID_LLM_PROVIDERS)}")
+LLM_PROVIDER = _RAW_LLM_PROVIDER
 
 # ─── Fast LLM Toggle ─────────────────────────────────────────────────────────
 # Set USE_FAST_LLM=true in .env to switch the entire project to Groq cloud LLM.
@@ -42,7 +46,7 @@ GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "qwen/qwen3.8-27b")
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_LLM_MODEL   = (os.getenv("OLLAMA_LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b")
+OLLAMA_LLM_MODEL   = (os.getenv("OLLAMA_LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.1:8b")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
 # ─── Directories ─────────────────────────────────────────────────────────────
@@ -91,8 +95,7 @@ LLM_FALLBACK_CHAIN_STR = os.getenv(
     "gemini:models/gemini-3.5-flash,"
     "gemini:models/gemini-3.5-flash-lite,"
     "gemini:models/gemini-3.1-flash-lite,"
-    "groq:qwen/qwen3.8-27b,"
-    "ollama:llama3.2:3b"
+    "groq:qwen/qwen3.8-27b"
 )
 
 # ─── Streaming Guard Configuration ───────────────────────────────────────────

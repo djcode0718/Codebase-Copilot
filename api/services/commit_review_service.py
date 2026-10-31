@@ -41,11 +41,17 @@ def _commit_diff(repo_root: str, commit_hash: str) -> str:
     return _run_git(repo_root, ["show", "--unified=2", commit_hash])
 
 
-async def review_commit(*, repo: Dict[str, Any], commit_hash: str, prompt: Optional[str] = None) -> Dict[str, Any]:
+async def review_commit(
+    *,
+    repo: Dict[str, Any],
+    commit_hash: str,
+    prompt: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Dict[str, Any]:
     repo_root = _repo_root(repo)
     changed_files = _list_changed_files(repo_root, commit_hash)
     scoped = changed_files[:20]
-    files_review = await review_files(repo=repo, file_paths=scoped, prompt=prompt)
+    files_review = await review_files(repo=repo, file_paths=scoped, prompt=prompt, provider=provider)
     return {
         "summary": f"Commit review completed for {commit_hash[:12]}. {files_review['summary']}",
         "findings": files_review["findings"],

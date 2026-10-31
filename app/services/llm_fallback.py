@@ -497,6 +497,17 @@ def get_resilient_llm() -> ResilientFallbackLLM:
         logger.info(f"Fallback chain initialized with {len(chain)} model(s).")
     return _resilient_llm_instance
 
+
+def reset_resilient_llm() -> None:
+    """Reset the singleton ResilientFallbackLLM instance for test isolation.
+
+    NOTE: Intended solely for unit/integration test fixtures. The application
+    architecture relies on static process startup configuration and does not
+    support dynamic runtime provider switching.
+    """
+    global _resilient_llm_instance
+    _resilient_llm_instance = None
+
 async def generate_with_fallback(prompt: str, **kwargs: Any) -> str:
     """Exposes a clean async function interface to perform LLM generation with fallbacks."""
     logger.info("generate_with_fallback started.")
