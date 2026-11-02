@@ -2,12 +2,14 @@
 
 import { useRef, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Command, Home, LayoutDashboard, LogOut, Menu, Plus, Search, Settings, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Breadcrumbs from '@/components/layout/Breadcrumbs';
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
 import { createClient } from '@/lib/supabase/client';
 import { auditLogout } from '@/lib/auth-api';
+import { clearAccountStorage } from '@/lib/auth-storage';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -23,6 +25,7 @@ function openCommandPalette() {
 
 export default function Topbar({ userEmail, repoCount = 0, onToggleSidebar }: TopbarProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const supabase = useMemo(() => createClient(), []);
   const initials = userEmail?.[0]?.toUpperCase() ?? 'G';
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -47,6 +50,8 @@ export default function Topbar({ userEmail, repoCount = 0, onToggleSidebar }: To
       sessionId: session?.access_token?.slice(-16),
     }).catch(() => undefined);
 
+    queryClient.clear();
+    clearAccountStorage();
     await supabase.auth.signOut();
     setUserMenuOpen(false);
     router.push('/auth/sign-in');

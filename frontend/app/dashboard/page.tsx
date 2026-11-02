@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import RepoCard from '@/components/repo/RepoCard';
 import { indexRepo, listRepos, deleteRepo } from '@/lib/api';
 import { createClient } from '@/lib/supabase/client';
+import { clearAccountStorage } from '@/lib/auth-storage';
 import { toast } from 'sonner';
 import type { Repo } from '@/lib/types';
 
@@ -290,6 +291,7 @@ export default function DashboardPage() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [url, setUrl] = useState('');
+  const [userId, setUserId] = useState('');
   const [isGuest, setIsGuest] = useState(false);
   const [greetingName, setGreetingName] = useState<string | undefined>(undefined);
 
@@ -302,6 +304,8 @@ export default function DashboardPage() {
         data: { user },
       } = await supabase.auth.getUser();
       if (user?.is_anonymous) {
+        queryClient.clear();
+        clearAccountStorage();
         await supabase.auth.signOut();
       }
     } catch {
@@ -311,31 +315,49 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    void (async () => {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    let mounted = true;
+    const supabase = createClient();
+
+    const applyUser = (user: { id?: string; email?: string; is_anonymous?: boolean; user_metadata?: Record<string, unknown> } | null | undefined) => {
+      if (!mounted) return;
       setIsGuest(Boolean(user?.is_anonymous));
+      setUserId(user?.id ?? '');
       const fallbackName = user?.email?.split('@')[0] ?? undefined;
-      const metadataName = typeof user?.user_metadata?.full_name === 'string'
-        ? user.user_metadata.full_name
-        : typeof user?.user_metadata?.name === 'string'
-          ? user.user_metadata.name
-          : undefined;
+      const metadataName =
+        typeof user?.user_metadata?.full_name === 'string'
+          ? user.user_metadata.full_name
+          : typeof user?.user_metadata?.name === 'string'
+            ? user.user_metadata.name
+            : undefined;
       setGreetingName(metadataName ?? fallbackName);
-    })();
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      applyUser(data.session?.user);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      applyUser(session?.user);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const { data: repos = [], isLoading } = useQuery<Repo[]>({
-    queryKey: ['repos'],
+    queryKey: ['repos', userId],
     queryFn: async () => {
       const token = await getToken();
       return listRepos(token);
     },
     staleTime: 20_000,
     placeholderData: (prev) => prev,
-    initialData: () => queryClient.getQueryData<Repo[]>(['repos']),
+    initialData: () => (userId ? queryClient.getQueryData<Repo[]>(['repos', userId]) : undefined),
+    enabled: Boolean(userId),
   });
 
   const indexMutation = useMutation({
@@ -345,7 +367,7 @@ export default function DashboardPage() {
     },
     onSuccess: (data) => {
       toast.success(`Indexing started for "${data.index_name}"`);
-      queryClient.invalidateQueries({ queryKey: ['repos'] });
+      queryClient.invalidateQueries({ queryKey: ['repos', userId] });
       router.push(`/repo/${data.repo_id}/indexing`);
     },
     onError: (err: Error) => toast.error(err.message),
@@ -357,7 +379,7 @@ export default function DashboardPage() {
       return deleteRepo(token, repoId);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['repos'] });
+      queryClient.invalidateQueries({ queryKey: ['repos', userId] });
       toast.success('Repository deleted');
     },
     onError: (err: Error) => toast.error(err.message),

@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   CommandDialog,
   CommandEmpty,
@@ -14,6 +15,7 @@ import {
 } from '@/components/ui/command';
 import { listRepos } from '@/lib/api';
 import { auditLogout } from '@/lib/auth-api';
+import { clearAccountStorage } from '@/lib/auth-storage';
 import { createClient } from '@/lib/supabase/client';
 import { getRepoWorkspaceHref } from '@/lib/repo-routing';
 import type { Repo } from '@/lib/types';
@@ -27,7 +29,20 @@ export function CommandPalette() {
   const [reposLoaded, setReposLoaded] = React.useState(false);
   const [reposLoading, setReposLoading] = React.useState(false);
   const router = useRouter();
+  const queryClient = useQueryClient();
   const supabase = React.useMemo(() => createClient(), []);
+
+  // Reset command palette repository state whenever authentication identity changes
+  React.useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      setRepos([]);
+      setReposLoaded(false);
+      setReposLoading(false);
+    });
+    return () => subscription.unsubscribe();
+  }, [supabase]);
 
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -53,25 +68,46 @@ export function CommandPalette() {
       return;
     }
 
+    let cancelled = false;
+
     const fetchRepos = async () => {
       setReposLoading(true);
       try {
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        if (session?.access_token) {
-          const data = await listRepos(session.access_token);
-          setRepos(Array.isArray(data) ? data : []);
+        const requestUserId = session?.user?.id;
+        if (!session?.access_token || !requestUserId) {
+          if (!cancelled) setRepos([]);
+          return;
         }
+
+        const data = await listRepos(session.access_token);
+        if (cancelled) return;
+
+        // Verify the user has not changed while the request was in-flight
+        const {
+          data: { session: currentSession },
+        } = await supabase.auth.getSession();
+        if (currentSession?.user?.id !== requestUserId) {
+          return;
+        }
+
+        setRepos(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error('Failed to fetch repos for command palette', error);
       } finally {
-        setReposLoaded(true);
-        setReposLoading(false);
+        if (!cancelled) {
+          setReposLoaded(true);
+          setReposLoading(false);
+        }
       }
     };
 
     fetchRepos();
+    return () => {
+      cancelled = true;
+    };
   }, [open, reposLoaded, reposLoading, supabase]);
 
   const runCommand = React.useCallback((command: () => unknown) => {
@@ -88,6 +124,11 @@ export function CommandPalette() {
       email: session?.user?.email,
       sessionId: session?.access_token?.slice(-16),
     }).catch(() => undefined);
+
+    queryClient.clear();
+    clearAccountStorage();
+    setRepos([]);
+    setReposLoaded(false);
 
     await supabase.auth.signOut();
     runCommand(() => {
