@@ -21,9 +21,9 @@ def reload_config(env_overrides: dict):
 
 
 class TestLLMProviderConfig:
-    def test_default_llm_provider_is_ollama(self):
-        cfg = reload_config({"LLM_PROVIDER": "ollama"})
-        assert cfg.LLM_PROVIDER == "ollama"
+    def test_default_llm_provider(self):
+        cfg = reload_config({"LLM_PROVIDER": "gemini"})
+        assert cfg.LLM_PROVIDER == "gemini"
 
     def test_llm_provider_groq(self):
         cfg = reload_config({"LLM_PROVIDER": "GROQ"})
@@ -32,6 +32,10 @@ class TestLLMProviderConfig:
     def test_llm_provider_gemini(self):
         cfg = reload_config({"LLM_PROVIDER": "Gemini"})
         assert cfg.LLM_PROVIDER == "gemini"
+
+    def test_llm_provider_ollama(self):
+        cfg = reload_config({"LLM_PROVIDER": "Ollama"})
+        assert cfg.LLM_PROVIDER == "ollama"
 
 class TestFastLLMToggle:
     def test_use_fast_llm_false_by_default(self):
@@ -95,8 +99,12 @@ class TestOllamaConfig:
         assert cfg.OLLAMA_EMBED_MODEL == "nomic-embed-text"
 
     def test_custom_llm_model(self):
-        cfg = reload_config({"OLLAMA_LLM_MODEL": "mistral"})
-        assert cfg.OLLAMA_LLM_MODEL == "mistral"
+        cfg = reload_config({"OLLAMA_LLM_MODEL": "llama3.1:8b"})
+        assert cfg.OLLAMA_LLM_MODEL == "llama3.1:8b"
+
+    def test_legacy_mistral_sanitized_to_llama31(self):
+        cfg = reload_config({"OLLAMA_MODEL": "mistral", "OLLAMA_LLM_MODEL": ""})
+        assert cfg.OLLAMA_LLM_MODEL == "llama3.1:8b"
 
     def test_ollama_model_alias(self):
         cfg = reload_config({"OLLAMA_MODEL": "llama3:8b", "OLLAMA_LLM_MODEL": ""})

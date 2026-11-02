@@ -8,8 +8,12 @@ load_dotenv(override="pytest" not in sys.modules)
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 # ─── LLM Provider ────────────────────────────────────────────────────────────
-# Options: "ollama" | "gemini" | "groq"
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
+# Options: "gemini" | "groq" | "ollama"
+VALID_LLM_PROVIDERS = {"gemini", "groq", "ollama"}
+_RAW_LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower().strip()
+if _RAW_LLM_PROVIDER not in VALID_LLM_PROVIDERS:
+    raise ValueError(f"Invalid LLM_PROVIDER '{_RAW_LLM_PROVIDER}'. Must be one of: {sorted(VALID_LLM_PROVIDERS)}")
+LLM_PROVIDER = _RAW_LLM_PROVIDER
 
 # ─── Fast LLM Toggle ─────────────────────────────────────────────────────────
 # Set USE_FAST_LLM=true in .env to switch the entire project to Groq cloud LLM.
@@ -27,22 +31,20 @@ USE_FAST_LLM = os.getenv("USE_FAST_LLM", "false").lower() == "true"
 
 # ─── Groq Fast Model ─────────────────────────────────────────────────────────
 # Used only when USE_FAST_LLM=true.
-# Swap between these two in .env to compare speed vs quality:
-#   "llama-3.3-70b-versatile"  → better quality,  ~2-3s latency  (recommended for evals)
-#   "llama-3.1-8b-instant"   → faster,          ~0.5-1s latency (good for quick demos)
-GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "llama-3.3-70b-versatile")
+GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "qwen/qwen3.8-27b")
 
 # ─── API Keys ────────────────────────────────────────────────────────────────
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 
 # ─── Provider Models ─────────────────────────────────────────────────────────
-GEMINI_LLM_MODEL = os.getenv("GEMINI_LLM_MODEL", "models/gemini-flash-latest")
-GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+GEMINI_LLM_MODEL = os.getenv("GEMINI_LLM_MODEL", "gemini-3.8-flash")
+GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_LLM_MODEL   = (os.getenv("OLLAMA_LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b")
+_raw_ollama_model = os.getenv("OLLAMA_LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.1:8b"
+OLLAMA_LLM_MODEL   = "llama3.1:8b" if _raw_ollama_model.lower() in ("mistral", "llama3.2:3b", "") else _raw_ollama_model
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
 # ─── Directories ─────────────────────────────────────────────────────────────
@@ -88,12 +90,13 @@ LLM_FALLBACK_RETRY_THRESHOLD = int(os.getenv("LLM_FALLBACK_RETRY_THRESHOLD", "10
 # Configured fallback chain of model definitions (comma-separated "provider:model_name").
 LLM_FALLBACK_CHAIN_STR = os.getenv(
     "LLM_FALLBACK_CHAIN",
-    "gemini:models/gemini-3.6-flash,"
-    "gemini:models/gemini-3.1-flash-lite,"
-    "gemini:models/gemini-2.0-flash,"
-    "gemini:models/gemini-2.0-flash-lite,"
-    "gemini:models/gemini-flash-latest,"
-    "groq:llama-3.3-70b-versatile"
+    "gemini:gemini-3.8-flash,"
+    "gemini:gemini-3.5-flash-lite,"
+    "gemini:gemini-3.6-flash,"
+    "groq:openai/gpt-oss-120b,"
+    "groq:qwen/qwen3.8-27b,"
+    "groq:minimaxai/minimax-m2.7,"
+    "ollama:llama3.1:8b"
 )
 
 # ─── Streaming Guard Configuration ───────────────────────────────────────────

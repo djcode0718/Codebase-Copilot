@@ -25,20 +25,34 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_cached_resilient_llm = None
+_cached_embed_model = None
+
+
 def get_llm():
     """
     Returns a resilient LLM that automatically falls back across all
     available configured providers/models.
     """
-    from app.services.llm_fallback import get_resilient_llm
+    global _cached_resilient_llm
+    if _cached_resilient_llm is None:
+        from app.services.llm_fallback import get_resilient_llm
 
-    logger.info(
-        "Loading resilient LLM manager (provider=%s, fast_mode=%s, fast_model=%s)",
-        LLM_PROVIDER,
-        USE_FAST_LLM,
-        GROQ_FAST_MODEL,
-    )
-    return get_resilient_llm()
+        logger.info(
+            "Loading resilient LLM manager (provider=%s, fast_mode=%s, fast_model=%s)",
+            LLM_PROVIDER,
+            USE_FAST_LLM,
+            GROQ_FAST_MODEL,
+        )
+        _cached_resilient_llm = get_resilient_llm()
+    return _cached_resilient_llm
+
+
+def reset_llm_client():
+    """Reset cached LLM client instances for test isolation."""
+    global _cached_resilient_llm, _cached_embed_model
+    _cached_resilient_llm = None
+    _cached_embed_model = None
 
 
 def get_embed_model():

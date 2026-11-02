@@ -18,6 +18,8 @@ from app.services.llm_fallback import (
 def create_mock_llm(model_name: str, provider: str = "MockProvider"):
     mock_llm = MagicMock()
     mock_llm.__class__.__name__ = provider
+    mock_llm._cb_provider = provider
+    mock_llm._cb_model_name = model_name
     mock_llm.model = model_name
     mock_llm.complete = MagicMock()
     mock_llm.stream_complete = MagicMock()
@@ -254,4 +256,180 @@ async def test_concurrent_last_llm_usage():
     
     assert usage1 == {"provider": "ProviderA", "model": "ModelA"}
     assert usage2 == {"provider": "ProviderB", "model": "ModelB"}
+
+
+# ─── Seven-Model Fallback Chain Verification Tests ────────────────────────────
+
+from app.services.llm_fallback import reset_circuit_breakers, is_circuit_open
+
+
+@pytest.fixture(autouse=True)
+def clean_circuits():
+    reset_circuit_breakers()
+    yield
+    reset_circuit_breakers()
+
+
+def test_gemini_model_specific_error_advances_to_next_gemini_model():
+    """Gemini 3.8 Flash model-specific error (404/not found) must advance to Gemini 3.7 Flash."""
+    m1 = create_mock_llm("gemini-3.8-flash", provider="gemini")
+    m2 = create_mock_llm("gemini-3.7-flash", provider="gemini")
+    m3 = create_mock_llm("gemini-3.6-flash", provider="gemini")
+    groq1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+
+    # M1 fails with 404 Not Found (model-specific)
+    m1.complete.side_effect = Exception("404 NotFound: models/gemini-3.8-flash is not found")
+    # M2 succeeds
+    m2.complete.return_value = make_completion_response("Gemini 3.7 Success")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[m1, m2, m3, groq1])
+    res = pipeline.complete("test prompt")
+
+    assert res.text == "Gemini 3.7 Success"
+    m1.complete.assert_called_once()
+    m2.complete.assert_called_once()
+    m3.complete.assert_not_called()
+    groq1.complete.assert_not_called()
+
+
+def test_gemini_quota_exhaustion_skips_remaining_gemini_models_to_groq():
+    """Gemini quota exhaustion (429 / ResourceExhausted) must skip remaining Gemini models and move directly to Groq."""
+    m1 = create_mock_llm("gemini-3.8-flash", provider="gemini")
+    m2 = create_mock_llm("gemini-3.7-flash", provider="gemini")
+    m3 = create_mock_llm("gemini-3.6-flash", provider="gemini")
+    groq1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+    groq2 = create_mock_llm("qwen/qwen3.8-27b", provider="groq")
+
+    # M1 fails with daily quota exhaustion
+    m1.complete.side_effect = Exception(
+        "ResourceExhausted: 429 Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests"
+    )
+    # Groq 1 succeeds
+    groq1.complete.return_value = make_completion_response("Groq GPT-OSS 120B Success")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[m1, m2, m3, groq1, groq2])
+    res = pipeline.complete("test prompt")
+
+    assert res.text == "Groq GPT-OSS 120B Success"
+    m1.complete.assert_called_once()
+    # M2 and M3 must be SKIPPED completely!
+    m2.complete.assert_not_called()
+    m3.complete.assert_not_called()
+    groq1.complete.assert_called_once()
+    groq2.complete.assert_not_called()
+
+
+def test_groq_model_specific_error_advances_to_next_groq_model():
+    """Groq GPT-OSS 120B model-specific error advances to Groq Qwen 3.8 27B."""
+    groq1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+    groq2 = create_mock_llm("qwen/qwen3.8-27b", provider="groq")
+    groq3 = create_mock_llm("llama-3.3-70b-versatile", provider="groq")
+
+    groq1.complete.side_effect = Exception("404 NotFound: Model openai/gpt-oss-120b does not exist")
+    groq2.complete.return_value = make_completion_response("Qwen 27B Success")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[groq1, groq2, groq3])
+    res = pipeline.complete("test prompt")
+
+    assert res.text == "Qwen 27B Success"
+    groq1.complete.assert_called_once()
+    groq2.complete.assert_called_once()
+    groq3.complete.assert_not_called()
+
+
+def test_groq_quota_exhaustion_skips_remaining_groq_models_to_ollama():
+    """Groq quota exhaustion (429) must skip remaining Groq models and move directly to Ollama."""
+    groq1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+    groq2 = create_mock_llm("qwen/qwen3.8-27b", provider="groq")
+    groq3 = create_mock_llm("llama-3.3-70b-versatile", provider="groq")
+    ollama = create_mock_llm("llama3.1:8b", provider="ollama")
+
+    groq1.complete.side_effect = Exception("429 rate limit reached for tokens per day on groq")
+    ollama.complete.return_value = make_completion_response("Ollama Llama 3.1 8B Success")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[groq1, groq2, groq3, ollama])
+    res = pipeline.complete("test prompt")
+
+    assert res.text == "Ollama Llama 3.1 8B Success"
+    groq1.complete.assert_called_once()
+    groq2.complete.assert_not_called()
+    groq3.complete.assert_not_called()
+    ollama.complete.assert_called_once()
+
+
+def test_seven_model_chain_reaches_ollama_final_fallback():
+    """Full 7-model chain: Gemini quota skips to Groq, Groq quota skips to Ollama."""
+    g1 = create_mock_llm("gemini-3.8-flash", provider="gemini")
+    g2 = create_mock_llm("gemini-3.7-flash", provider="gemini")
+    g3 = create_mock_llm("gemini-3.6-flash", provider="gemini")
+    q1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+    q2 = create_mock_llm("qwen/qwen3.8-27b", provider="groq")
+    q3 = create_mock_llm("llama-3.3-70b-versatile", provider="groq")
+    ol = create_mock_llm("llama3.1:8b", provider="ollama")
+
+    # Gemini hits quota exhaustion on G1
+    g1.complete.side_effect = Exception("ResourceExhausted: 429 Quota exceeded (per day)")
+    # Groq hits quota exhaustion on Q1
+    q1.complete.side_effect = Exception("429 Rate limit exceeded: requests per day limit reached")
+    # Ollama succeeds
+    ol.complete.return_value = make_completion_response("Offline Llama 3.1 Success")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[g1, g2, g3, q1, q2, q3, ol])
+    res = pipeline.complete("test prompt")
+
+    assert res.text == "Offline Llama 3.1 Success"
+    g1.complete.assert_called_once()
+    g2.complete.assert_not_called()
+    g3.complete.assert_not_called()
+    q1.complete.assert_called_once()
+    q2.complete.assert_not_called()
+    q3.complete.assert_not_called()
+    ol.complete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_seven_model_chain_async_streaming_quota_skipping():
+    """Async streaming properly skips quota-exhausted providers across the 7-model chain."""
+    g1 = create_mock_llm("gemini-3.8-flash", provider="gemini")
+    g2 = create_mock_llm("gemini-3.7-flash", provider="gemini")
+    g3 = create_mock_llm("gemini-3.6-flash", provider="gemini")
+    q1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+
+    g1.stream_complete.side_effect = Exception("429 ResourceExhausted: daily quota exceeded")
+    q1.astream_complete.return_value = mock_async_stream_generator(["Groq", " Stream", " Token"])
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[g1, g2, g3, q1])
+
+    chunks = []
+    async for chunk in pipeline.astream_complete("test streaming prompt"):
+        chunks.append(chunk.text)
+
+    assert chunks == ["Groq", " Stream", " Token"]
+    g1.stream_complete.assert_called_once()
+    g2.stream_complete.assert_not_called()
+    g3.stream_complete.assert_not_called()
+    q1.astream_complete.assert_called_once()
+
+
+def test_circuit_breaker_trips_and_skips_provider_on_subsequent_requests():
+    """Tripped circuit breaker skips provider immediately (<1ms) on subsequent requests."""
+    g1 = create_mock_llm("gemini-3.8-flash", provider="gemini")
+    q1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+    q1.complete.return_value = make_completion_response("Groq Answer")
+
+    # First call: g1 hits daily quota exhaustion
+    g1.complete.side_effect = Exception("429 ResourceExhausted: Quota exceeded for metric: per day")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[g1, q1])
+    res1 = pipeline.complete("prompt 1")
+    assert res1.text == "Groq Answer"
+    assert g1.complete.call_count == 1
+    assert is_circuit_open("gemini") is True
+
+    # Second call: circuit breaker is open! g1 must NOT be called at all!
+    res2 = pipeline.complete("prompt 2")
+    assert res2.text == "Groq Answer"
+    assert g1.complete.call_count == 1  # Still 1! Never invoked again!
+    assert q1.complete.call_count == 2
+
 

@@ -6,7 +6,7 @@ import threading
 import inspect
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, List, Optional, AsyncGenerator
+from typing import Any, Dict, List, Optional, Set, AsyncGenerator
 from pydantic import Field
 
 from llama_index.core.llms import CustomLLM, CompletionResponse, CompletionResponseGen, LLMMetadata
@@ -39,6 +39,128 @@ def get_last_llm_usage() -> dict:
 
 def reset_last_llm_usage() -> None:
     _last_llm_usage_var.set({"provider": None, "model": None})
+
+
+# ─── Circuit Breaker & Quota Handling ─────────────────────────────────────────
+
+_CIRCUIT_BREAKER_STATE: Dict[str, float] = {}  # provider -> cooldown_until timestamp
+_cb_lock = threading.Lock()
+
+
+def record_quota_exhaustion(provider: str, delay: Optional[int] = None) -> None:
+    """Trip circuit breaker for a provider whose quota is exhausted."""
+    provider_norm = (provider or "").strip().lower()
+    cooldown = min(max(float(delay), 10.0), 3600.0) if (delay is not None and delay > 0) else 60.0
+    with _cb_lock:
+        _CIRCUIT_BREAKER_STATE[provider_norm] = time.time() + cooldown
+    logger.warning(
+        f"Circuit breaker tripped for provider '{provider_norm}': quota exhausted. Cooling down for {cooldown:.1f}s."
+    )
+
+
+def is_circuit_open(provider: str) -> bool:
+    """Return True if provider circuit breaker is open (cooling down from previous quota exhaustion)."""
+    provider_norm = (provider or "").strip().lower()
+    with _cb_lock:
+        cooldown_until = _CIRCUIT_BREAKER_STATE.get(provider_norm)
+        if cooldown_until is None:
+            return False
+        if time.time() < cooldown_until:
+            return True
+        del _CIRCUIT_BREAKER_STATE[provider_norm]
+        logger.info(f"Circuit breaker reset for provider '{provider_norm}' (cooldown period expired).")
+        return False
+
+
+def clear_circuit_breaker(provider: str) -> None:
+    """Clear open circuit upon confirmed provider success."""
+    provider_norm = (provider or "").strip().lower()
+    with _cb_lock:
+        _CIRCUIT_BREAKER_STATE.pop(provider_norm, None)
+
+
+def reset_circuit_breakers() -> None:
+    """Reset all circuit breakers (for test fixtures)."""
+    with _cb_lock:
+        _CIRCUIT_BREAKER_STATE.clear()
+
+
+def is_daily_quota_exhausted(err: Exception) -> bool:
+    """Check if the exception indicates daily or long-duration quota exhaustion."""
+    msg = str(err).lower()
+    if (
+        "per day" in msg
+        or "requests per day" in msg
+        or "free_tier_requests" in msg
+        or "generate_content_free_tier" in msg
+        or "limit: 20" in msg
+        or "exceeded your current quota" in msg
+    ):
+        return True
+    delay = parse_retry_delay(err)
+    if delay is not None and delay > 600:
+        return True
+    return False
+
+
+def is_provider_quota_exhausted(err: Exception) -> bool:
+    """Check if the exception indicates a genuine project-level / provider-level quota exhaustion."""
+    msg = str(err).lower()
+    err_type = type(err).__name__.lower()
+
+    if "resourceexhausted" in err_type and (
+        "quota" in msg or "exhausted" in msg or "free_tier" in msg or "limit" in msg
+    ):
+        return True
+
+    quota_indicators = (
+        "quota exceeded",
+        "quota_exceeded",
+        "resource exhausted",
+        "resource_exhausted",
+        "daily quota",
+        "daily limit",
+        "per day",
+        "requests per day",
+        "tokens per day",
+        "free_tier_requests",
+        "generate_content_free_tier",
+        "exceeded your current quota",
+    )
+    return any(ind in msg for ind in quota_indicators)
+
+
+def is_non_retryable_error(err: Exception) -> bool:
+    """Check if the exception is permanent/non-retryable for the current model."""
+    msg = str(err).lower()
+    err_type = type(err).__name__.lower()
+
+    if (
+        "notfound" in err_type
+        or "not_found" in msg
+        or "404" in msg
+        or "is not found" in msg
+        or "does not exist" in msg
+        or "unsupported model" in msg
+    ):
+        return True
+    if (
+        "unauthenticated" in err_type
+        or "permissiondenied" in err_type
+        or "invalid_api_key" in msg
+        or "api key not valid" in msg
+        or "401" in msg
+        or "403" in msg
+    ):
+        return True
+    if "invalidargument" in err_type or "bad request" in msg or "400" in msg:
+        return True
+    return False
+
+
+def is_rate_limit_or_quota_error(err: Exception) -> bool:
+    """Backward compatibility check for rate limit or quota exceeded error."""
+    return is_provider_quota_exhausted(err)
 
 
 def _sleep_safe(seconds: float) -> None:
@@ -157,10 +279,26 @@ class ResilientFallbackLLM(CustomLLM):
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
         logger.info("Fallback complete() started.")
         errors = {}
+        skipped_providers: Set[str] = set()
+
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
-            
-            # Allow up to 1 retry attempt if retry-after delay is small
+            provider_norm = provider.lower()
+
+            # 1. Skip if provider exhausted quota earlier in this request
+            if provider_norm in skipped_providers:
+                logger.info(
+                    f"Skipping {provider}/{model_name}: provider '{provider}' quota exhausted for this request."
+                )
+                continue
+
+            # 2. Skip if circuit breaker is open (cooldown from prior quota exhaustion)
+            if is_circuit_open(provider_norm):
+                logger.info(
+                    f"Skipping {provider}/{model_name}: circuit breaker open for '{provider}' (cooling down)."
+                )
+                continue
+
             retries = 1
             for attempt in range(retries + 1):
                 try:
@@ -170,31 +308,53 @@ class ResilientFallbackLLM(CustomLLM):
                     )
                     response = llm.complete(prompt, **kwargs)
                     _record_llm_usage(provider, model_name)
+                    clear_circuit_breaker(provider_norm)
                     logger.info(f"Completion succeeded with {provider}/{model_name}.")
                     return response
                 except Exception as e:
-                    if not is_rate_limit_or_quota_error(e):
+                    # Check provider-level quota exhaustion (429 / ResourceExhausted)
+                    if is_provider_quota_exhausted(e):
+                        delay = parse_retry_delay(e)
+                        is_daily = is_daily_quota_exhausted(e)
+                        if not is_daily and delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
+                            logger.warning(
+                                f"Model {provider}/{model_name} short rate limit ({delay}s). Retrying once."
+                            )
+                            _sleep_safe(delay)
+                            continue
+
                         logger.warning(
-                            f"Non-rate-limit error on {provider}/{model_name}. Trying next fallback model: {e}"
+                            f"Provider '{provider}' quota exhausted on {model_name}: {e}. "
+                            f"Skipping remaining models for provider '{provider}'."
+                        )
+                        skipped_providers.add(provider_norm)
+                        record_quota_exhaustion(provider_norm, delay)
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
+
+                    # Check permanent model-specific error (404, invalid argument, auth)
+                    if is_non_retryable_error(e):
+                        logger.warning(
+                            f"Model-specific error on {provider}/{model_name}: {e}. Trying next fallback model."
                         )
                         errors[f"{provider}/{model_name}"] = str(e)
                         break
-                    
+
+                    # Other transient errors
                     delay = parse_retry_delay(e)
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                         logger.warning(
-                            f"Model {provider}/{model_name} rate limited. "
-                            f"Short retry delay={delay}s. Retrying."
+                            f"Model {provider}/{model_name} transient error ({delay}s). Retrying."
                         )
                         _sleep_safe(delay)
                         continue
-                    
+
                     logger.warning(
-                        f"Model {provider}/{model_name} rate limited. Moving to fallback."
+                        f"Model {provider}/{model_name} failed: {e}. Trying next fallback model."
                     )
                     errors[f"{provider}/{model_name}"] = str(e)
                     break
-        
+
         raise AllModelsExhaustedError(
             "All LLM models in the fallback chain were exhausted.",
             errors=errors
@@ -204,9 +364,24 @@ class ResilientFallbackLLM(CustomLLM):
         logger.info("Fallback stream_complete() started.")
         def gen():
             errors = {}
+            skipped_providers: Set[str] = set()
+
             for llm in self.fallback_chain:
                 provider, model_name = _provider_and_model(llm)
-                
+                provider_norm = provider.lower()
+
+                if provider_norm in skipped_providers:
+                    logger.info(
+                        f"Skipping {provider}/{model_name}: provider '{provider}' quota exhausted for this request."
+                    )
+                    continue
+
+                if is_circuit_open(provider_norm):
+                    logger.info(
+                        f"Skipping {provider}/{model_name}: circuit breaker open for '{provider}' (cooling down)."
+                    )
+                    continue
+
                 retries = 1
                 for attempt in range(retries + 1):
                     tokens_yielded = False
@@ -219,6 +394,7 @@ class ResilientFallbackLLM(CustomLLM):
                         for chunk in stream_response:
                             if not tokens_yielded:
                                 _record_llm_usage(provider, model_name)
+                                clear_circuit_breaker(provider_norm)
                             tokens_yielded = True
                             yield chunk
                         logger.info(f"Streaming completion succeeded with {provider}/{model_name}.")
@@ -228,29 +404,47 @@ class ResilientFallbackLLM(CustomLLM):
                             logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
                             raise e
 
-                        if not is_rate_limit_or_quota_error(e):
+                        if is_provider_quota_exhausted(e):
+                            delay = parse_retry_delay(e)
+                            is_daily = is_daily_quota_exhausted(e)
+                            if not is_daily and delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
+                                logger.warning(
+                                    f"Model {provider}/{model_name} short rate limit ({delay}s). Retrying once."
+                                )
+                                _sleep_safe(delay)
+                                continue
+
                             logger.warning(
-                                f"Stream startup error on {provider}/{model_name}. "
-                                f"Trying next fallback model: {e}"
+                                f"Provider '{provider}' quota exhausted on {model_name}: {e}. "
+                                f"Skipping remaining models for provider '{provider}'."
+                            )
+                            skipped_providers.add(provider_norm)
+                            record_quota_exhaustion(provider_norm, delay)
+                            errors[f"{provider}/{model_name}"] = str(e)
+                            break
+
+                        if is_non_retryable_error(e):
+                            logger.warning(
+                                f"Stream startup model-specific error on {provider}/{model_name}: {e}. "
+                                f"Trying next fallback model."
                             )
                             errors[f"{provider}/{model_name}"] = str(e)
                             break
-                        
+
                         delay = parse_retry_delay(e)
                         if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                             logger.warning(
-                                f"Model {provider}/{model_name} rate limited. "
-                                f"Short retry delay={delay}s. Retrying."
+                                f"Model {provider}/{model_name} rate limited ({delay}s). Retrying."
                             )
                             _sleep_safe(delay)
                             continue
-                        
+
                         logger.warning(
-                            f"Model {provider}/{model_name} rate limited. Moving to fallback."
+                            f"Model {provider}/{model_name} stream error: {e}. Moving to fallback."
                         )
                         errors[f"{provider}/{model_name}"] = str(e)
                         break
-            
+
             raise AllModelsExhaustedError(
                 "All LLM models in the fallback chain were exhausted.",
                 errors=errors
@@ -261,9 +455,24 @@ class ResilientFallbackLLM(CustomLLM):
     async def acomplete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
         logger.info("Fallback acomplete() started.")
         errors = {}
+        skipped_providers: Set[str] = set()
+
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
-            
+            provider_norm = provider.lower()
+
+            if provider_norm in skipped_providers:
+                logger.info(
+                    f"Skipping {provider}/{model_name}: provider '{provider}' quota exhausted for this request."
+                )
+                continue
+
+            if is_circuit_open(provider_norm):
+                logger.info(
+                    f"Skipping {provider}/{model_name}: circuit breaker open for '{provider}' (cooling down)."
+                )
+                continue
+
             retries = 1
             for attempt in range(retries + 1):
                 try:
@@ -273,31 +482,50 @@ class ResilientFallbackLLM(CustomLLM):
                     )
                     response = await llm.acomplete(prompt, **kwargs)
                     _record_llm_usage(provider, model_name)
+                    clear_circuit_breaker(provider_norm)
                     logger.info(f"Async completion succeeded with {provider}/{model_name}.")
                     return response
                 except Exception as e:
-                    if not is_rate_limit_or_quota_error(e):
+                    if is_provider_quota_exhausted(e):
+                        delay = parse_retry_delay(e)
+                        is_daily = is_daily_quota_exhausted(e)
+                        if not is_daily and delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
+                            logger.warning(
+                                f"Model {provider}/{model_name} short rate limit ({delay}s). Retrying once."
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+
                         logger.warning(
-                            f"Non-rate-limit error on {provider}/{model_name}. Trying next fallback model: {e}"
+                            f"Provider '{provider}' quota exhausted on {model_name}: {e}. "
+                            f"Skipping remaining models for provider '{provider}'."
+                        )
+                        skipped_providers.add(provider_norm)
+                        record_quota_exhaustion(provider_norm, delay)
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
+
+                    if is_non_retryable_error(e):
+                        logger.warning(
+                            f"Model-specific error on {provider}/{model_name}: {e}. Trying next fallback model."
                         )
                         errors[f"{provider}/{model_name}"] = str(e)
                         break
-                    
+
                     delay = parse_retry_delay(e)
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                         logger.warning(
-                            f"Model {provider}/{model_name} rate limited. "
-                            f"Short retry delay={delay}s. Retrying."
+                            f"Model {provider}/{model_name} transient error ({delay}s). Retrying."
                         )
                         await asyncio.sleep(delay)
                         continue
-                    
+
                     logger.warning(
-                        f"Model {provider}/{model_name} rate limited. Moving to fallback."
+                        f"Model {provider}/{model_name} async error: {e}. Moving to fallback."
                     )
                     errors[f"{provider}/{model_name}"] = str(e)
                     break
-        
+
         raise AllModelsExhaustedError(
             "All LLM models in the fallback chain were exhausted.",
             errors=errors
@@ -306,8 +534,23 @@ class ResilientFallbackLLM(CustomLLM):
     async def astream_complete(self, prompt: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
         logger.info("Fallback astream_complete() started.")
         errors = {}
+        skipped_providers: Set[str] = set()
+
         for llm in self.fallback_chain:
             provider, model_name = _provider_and_model(llm)
+            provider_norm = provider.lower()
+
+            if provider_norm in skipped_providers:
+                logger.info(
+                    f"Skipping {provider}/{model_name}: provider '{provider}' quota exhausted for this request."
+                )
+                continue
+
+            if is_circuit_open(provider_norm):
+                logger.info(
+                    f"Skipping {provider}/{model_name}: circuit breaker open for '{provider}' (cooling down)."
+                )
+                continue
 
             retries = 1
             for attempt in range(retries + 1):
@@ -317,7 +560,7 @@ class ResilientFallbackLLM(CustomLLM):
                         f"Attempting async streaming completion with {provider}/{model_name} "
                         f"(attempt {attempt + 1})."
                     )
-                    if provider.lower() == "gemini":
+                    if provider_norm == "gemini":
                         # Gemini async stream path can emit a startup validation error
                         # (LLMCompletionEndEvent expecting CompletionResponse). Use
                         # sync streaming bridged via executor for reliability.
@@ -335,6 +578,7 @@ class ResilientFallbackLLM(CustomLLM):
                     async for chunk in stream_response:
                         if not tokens_yielded:
                             _record_llm_usage(provider, model_name)
+                            clear_circuit_breaker(provider_norm)
                         tokens_yielded = True
                         yield chunk
                     logger.info(f"Async streaming completion succeeded with {provider}/{model_name}.")
@@ -344,10 +588,29 @@ class ResilientFallbackLLM(CustomLLM):
                         logger.error(f"Error on {provider}/{model_name} (bypass fallback): {e}")
                         raise e
 
-                    if not is_rate_limit_or_quota_error(e):
+                    if is_provider_quota_exhausted(e):
+                        delay = parse_retry_delay(e)
+                        is_daily = is_daily_quota_exhausted(e)
+                        if not is_daily and delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
+                            logger.warning(
+                                f"Model {provider}/{model_name} short rate limit ({delay}s). Retrying once."
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+
                         logger.warning(
-                            f"Async stream startup error on {provider}/{model_name}. "
-                            f"Trying next fallback model: {e}"
+                            f"Provider '{provider}' quota exhausted on {model_name}: {e}. "
+                            f"Skipping remaining models for provider '{provider}'."
+                        )
+                        skipped_providers.add(provider_norm)
+                        record_quota_exhaustion(provider_norm, delay)
+                        errors[f"{provider}/{model_name}"] = str(e)
+                        break
+
+                    if is_non_retryable_error(e):
+                        logger.warning(
+                            f"Async stream startup model-specific error on {provider}/{model_name}: {e}. "
+                            f"Trying next fallback model."
                         )
                         errors[f"{provider}/{model_name}"] = str(e)
                         break
@@ -355,14 +618,13 @@ class ResilientFallbackLLM(CustomLLM):
                     delay = parse_retry_delay(e)
                     if delay is not None and delay <= LLM_FALLBACK_RETRY_THRESHOLD and attempt == 0:
                         logger.warning(
-                            f"Model {provider}/{model_name} rate limited. "
-                            f"Short retry delay={delay}s. Retrying."
+                            f"Model {provider}/{model_name} rate limited ({delay}s). Retrying."
                         )
                         await asyncio.sleep(delay)
                         continue
 
                     logger.warning(
-                        f"Model {provider}/{model_name} rate limited. Moving to fallback."
+                        f"Model {provider}/{model_name} async stream error: {e}. Moving to fallback."
                     )
                     errors[f"{provider}/{model_name}"] = str(e)
                     break
@@ -372,7 +634,9 @@ class ResilientFallbackLLM(CustomLLM):
             errors=errors
         )
 
+
 _resilient_llm_instance = None
+
 
 def get_resilient_llm() -> ResilientFallbackLLM:
     """Build or retrieve singleton ResilientFallbackLLM instance."""
@@ -387,12 +651,19 @@ def get_resilient_llm() -> ResilientFallbackLLM:
                 logger.info(f"Added fallback model: {spec.provider}/{spec.model_name}")
             except Exception as e:
                 logger.warning(f"Could not pre-initialize {spec.provider}/{spec.model_name}: {e}")
-        
+
         if not chain:
             raise RuntimeError("No fallback LLM clients could be initialized.")
         _resilient_llm_instance = ResilientFallbackLLM(fallback_chain=chain)
         logger.info(f"Fallback chain initialized with {len(chain)} model(s).")
     return _resilient_llm_instance
+
+
+def reset_resilient_llm() -> None:
+    """Reset singleton ResilientFallbackLLM instance and circuit breakers for test isolation."""
+    global _resilient_llm_instance
+    _resilient_llm_instance = None
+    reset_circuit_breakers()
 
 async def generate_with_fallback(prompt: str, **kwargs: Any) -> str:
     """Exposes a clean async function interface to perform LLM generation with fallbacks."""
