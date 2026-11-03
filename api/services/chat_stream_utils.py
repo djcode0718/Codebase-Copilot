@@ -39,6 +39,9 @@ def safe_chat_error_message(err: Exception, *, include_rate_limit: bool = True) 
     if include_rate_limit and is_rate_limit_error(err):
         return "The model provider is rate-limited right now. Please retry in a moment."
 
+    if "undergoing" in msg_l or "indexrefreshingerror" in msg_l or "being refreshed" in msg_l or "being updated" in msg_l:
+        return "The repository index is currently being updated. Please retry in a moment."
+
     if any(token in msg_l for token in _MEMORY_SCHEMA_ERROR_TOKENS):
         return (
             "I hit a temporary repository memory issue. "

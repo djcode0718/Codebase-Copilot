@@ -38,6 +38,7 @@ _STUBS = [
     "app.services.qa_service",
 ]
 _orig_modules = {m: sys.modules.get(m) for m in _STUBS}
+_orig_query_mode = getattr(_orig_modules.get("app.retrieval.query_router"), "QueryMode", None)
 for _m in _STUBS:
     sys.modules[_m] = MagicMock()
 
@@ -65,6 +66,11 @@ for _m, _val in _orig_modules.items():
         sys.modules.pop(_m, None)
     else:
         sys.modules[_m] = _val
+
+from app.retrieval.query_router import QueryMode as _canonical_query_mode
+chat_service.QueryMode = _canonical_query_mode
+if "app.retrieval.query_router" in sys.modules:
+    sys.modules["app.retrieval.query_router"].QueryMode = _canonical_query_mode
 
 
 # ─── Session cache helpers ────────────────────────────────────────────────────
@@ -377,6 +383,48 @@ async def test_stream_chat_response_early_done_and_decoupled_suggestions():
 
     # Verify passive citation validation was called
     mock_citation.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_prepare_stream_prompt_passes_target_repo_id_to_orchestrator():
+    """Verify _prepare_stream_prompt propagates repo_id as target_repo_id to orchestrator."""
+    from app.retrieval.orchestrator import RetrievalDecision, RetrievalTier
+    from app.retrieval.query_router import QueryMode
+
+    repo_uuid = "verified-repo-uuid-555"
+    idx_name = "test_index"
+
+    mock_decision = RetrievalDecision(
+        query="test query",
+        resolved_query="test query",
+        query_mode=QueryMode.CODE_LOOKUP,
+        selected_tier=RetrievalTier.TIER3_HYBRID_CODE,
+        nodes=[],
+        retrieved_files=[],
+        confidence_score=0.9,
+        should_abstain=False,
+    )
+
+    mock_orch = MagicMock()
+    mock_orch.orchestrate.return_value = mock_decision
+
+    with patch("api.services.chat_service._stream_prechecks", return_value=None), \
+         patch("api.services.chat_service._load_indexes", AsyncMock(return_value=(MagicMock(), MagicMock()))), \
+         patch("app.retrieval.orchestrator.get_retrieval_orchestrator", return_value=mock_orch), \
+         patch("api.services.chat_service._build_full_prompt", return_value="assembled prompt"):
+
+        res = await chat_service._prepare_stream_prompt(
+            query="test query",
+            index_name=idx_name,
+            repo_id=repo_uuid,
+            chat_id="test_chat",
+            memory_context=None,
+        )
+
+        mock_orch.orchestrate.assert_called_once()
+        _, kwargs = mock_orch.orchestrate.call_args
+        assert kwargs.get("target_repo_id") == repo_uuid
+
 
 
 

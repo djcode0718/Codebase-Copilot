@@ -69,9 +69,13 @@ def get_index_dir() -> str:
     return INDEX_DIR
 
 # ─── Retrieval ────────────────────────────────────────────────────────────────
-TOP_K_FILES   = 3    # files returned by DocumentSummaryIndex coarse pass
-TOP_K_CHUNKS  = 10   # chunks returned by hybrid retriever before rerank
-TOP_K_RERANK  = 5    # final chunks passed to LLM prompt
+TOP_K_FILES         = 3    # files returned by DocumentSummaryIndex coarse pass
+DENSE_TOP_K         = int(os.getenv("DENSE_TOP_K", "30"))            # Dense retrieval candidate limit
+BM25_TOP_K          = int(os.getenv("BM25_TOP_K", "30"))             # BM25 retrieval candidate limit
+RRF_OUTPUT_CUTOFF   = int(os.getenv("RRF_OUTPUT_CUTOFF", "20"))      # RRF fusion output cutoff
+CROSS_ENCODER_DEPTH = int(os.getenv("CROSS_ENCODER_DEPTH", "15"))    # CrossEncoder candidate scoring depth
+TOP_K_RERANK        = int(os.getenv("TOP_K_RERANK", "5"))            # Final context chunks passed to LLM
+TOP_K_CHUNKS        = DENSE_TOP_K                                    # Legacy alias for backward compatibility
 
 # ─── Chunking ─────────────────────────────────────────────────────────────────
 CHUNK_LINES        = 50    # lines per chunk for CodeSplitter

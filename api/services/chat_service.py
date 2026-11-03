@@ -733,25 +733,45 @@ async def _prepare_stream_prompt(
     if precheck is not None:
         return precheck
 
-    vector_index, bm25_retriever = await _load_indexes(index_name)
-    logger.debug("Loaded stream indexes (bm25_available=%s)", bm25_retriever is not None)
+    from app.indexing.incremental import acquire_index_read
+    from app.retrieval.orchestrator import get_retrieval_orchestrator, RetrievalTier
 
-    resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
-    logger.info("Resolved stream query mode=%s", query_mode.value)
+    async with acquire_index_read(index_name):
+        vector_index, bm25_retriever = await _load_indexes(index_name)
+        logger.debug("Loaded stream indexes (bm25_available=%s)", bm25_retriever is not None)
 
-    if query_mode == QueryMode.RELATIONSHIP:
-        return _relationship_prompt_payload(index_name, memory, resolved_query, query_mode)
+        decision = get_retrieval_orchestrator().orchestrate(
+            query=query,
+            index_name=index_name,
+            vector_index=vector_index,
+            bm25_retriever=bm25_retriever,
+            memory=memory,
+            is_cta_followup=is_cta_followup,
+            target_repo_id=repo_id,
+        )
 
-    reranked_nodes, t_retrieval_ms = await _retrieve_ranked_nodes(
-        query_mode,
-        vector_index,
-        bm25_retriever,
-        resolved_query,
-        index_name,
-    )
-    retrieved_files = _build_retrieved_files(reranked_nodes)
-    context_str = _build_context_str(reranked_nodes)
-    context_str = _inject_arch_context_if_missing(query_mode, index_name, reranked_nodes, context_str)
+        resolved_query = decision.resolved_query
+        query_mode = decision.query_mode
+
+        if decision.selected_tier == RetrievalTier.RELATIONSHIP or query_mode == QueryMode.RELATIONSHIP:
+            return _relationship_prompt_payload(index_name, memory, resolved_query, query_mode)
+
+        if decision.should_abstain:
+            return {
+                "memory": memory,
+                "resolved_query": resolved_query,
+                "query_mode": query_mode,
+                "reranked_nodes": [],
+                "retrieved_files": [],
+                "t_retrieval_ms": decision.t_retrieval_ms,
+                "full_prompt": "",
+                "early_response": decision.abstention_message,
+            }
+
+        reranked_nodes = decision.nodes
+        retrieved_files = decision.retrieved_files
+        context_str = decision.context_str
+        t_retrieval_ms = decision.t_retrieval_ms
 
     history_str = _build_history_str(memory)
 
@@ -1149,7 +1169,7 @@ async def get_full_response_for_persistence(
     t_start = time.time()
     response_str, new_engine, new_memory, query_mode = await asyncio.get_event_loop().run_in_executor(
         None,
-        partial(handle_user_query, is_cta_followup=is_cta_followup),
+        partial(handle_user_query, is_cta_followup=is_cta_followup, target_repo_id=repo_id),
         query,
         index_name,
         chat_engine,

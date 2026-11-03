@@ -14,6 +14,7 @@ TO DISABLE RERANKER:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+import asyncio
 from typing import List, Optional
 import math
 from collections import OrderedDict
@@ -145,8 +146,30 @@ def rerank_with_cross_encoder(
 
                 start = time.time()
 
-                # Prepare pairs of (query, document text) for the cross-encoder
-                pairs = [[query, node.node.get_content()] for node in nodes]
+                # Prepare sanitized pairs of (query, document text) for the cross-encoder
+                clean_query = (query or " ").replace("\x00", "").strip()[:1000]
+                pairs = []
+                for node in nodes:
+                    txt = (node.node.get_content() or " ").replace("\x00", "").strip()
+                    meta = getattr(node.node, "metadata", {}) or {}
+                    path = meta.get("path") or meta.get("file_name") or meta.get("file_path") or ""
+                    symbol = meta.get("symbol_name") or meta.get("function_name") or meta.get("class_name") or meta.get("name") or ""
+
+                    header_parts = []
+                    if path and not txt.startswith("File:") and not txt.startswith(f"[{path}]"):
+                        header_parts.append(f"File: {path}")
+                    if symbol and f"Symbol: {symbol}" not in txt:
+                        header_parts.append(f"Symbol: {symbol}")
+
+                    if header_parts:
+                        header = "\n".join(header_parts)
+                        doc_text = f"{header}\n\nContent:\n{txt}"
+                    else:
+                        doc_text = txt
+
+                    # Cap to 4000 chars to avoid memory/tokenizer crashes
+                    pairs.append([clean_query, doc_text[:4000] if doc_text else " "])
+
                 scores = reranker.predict(pairs)
 
                 # Assign scores to the nodes (sigmoid normalization to [0, 1])
@@ -168,6 +191,8 @@ def rerank_with_cross_encoder(
                 )
                 return reranked[:top_k]
 
+            except (asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit):
+                raise
             except Exception as e:
                 logger.warning(f"CrossEncoder reranking failed: {e}; using RRF scores")
 

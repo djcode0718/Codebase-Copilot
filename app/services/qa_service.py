@@ -313,43 +313,47 @@ def invalidate_index_cache(index_name: Optional[str] = None) -> None:
         logger.info("Invalidated all in-memory index caches")
 
 
-def _get_indexes(index_name: str):
+def _get_indexes(index_name: str, wait_timeout: float = 5.0):
     """
     Load vector index from ChromaDB and rebuild BM25 retriever.
     Results cached for the session to avoid reloading on every query.
+    Enforces read safety during active incremental refresh to prevent
+    queries from observing partially mutated Chroma vectors.
     """
     index_name = (index_name or "").strip()
     if not index_name:
         raise ValueError("index_name cannot be empty when loading indexes")
 
-    if index_name in _index_cache:
-        return _index_cache[index_name]
+    from app.indexing.incremental import acquire_index_read
+    with acquire_index_read(index_name, timeout=wait_timeout):
+        if index_name in _index_cache:
+            return _index_cache[index_name]
 
-    logger.info(f"Loading indexes for '{index_name}'...")
+        logger.info(f"Loading indexes for '{index_name}'...")
 
-    vector_index = load_vector_index(index_name)
+        vector_index = load_vector_index(index_name)
 
-    # BM25 is rebuilt from disk — fast, no embeddings needed
-    repo_path = os.path.join(REPOS_DIR, index_name)
-    bm25_retriever = None
+        # BM25 is rebuilt from disk — fast, no embeddings needed
+        repo_path = os.path.join(REPOS_DIR, index_name)
+        bm25_retriever = None
 
-    if os.path.exists(repo_path):
-        from app.parsing.code_parser import load_documents, parse_documents
-        from app.ingestion.git_history import load_persisted_git_history
-        valid_files = filter_files(repo_path)
-        documents   = load_documents(valid_files, repo_path)
-        nodes       = parse_documents(documents)
-        
-        git_docs = load_persisted_git_history(index_name)
-        nodes = nodes + git_docs
-        
-        bm25_retriever = build_bm25_retriever(nodes, top_k=TOP_K_CHUNKS)
-        logger.info(f"BM25 rebuilt over {len(nodes)} nodes (including {len(git_docs)} git history nodes)")
-    else:
-        logger.warning(f"Repo path not found at {repo_path} — BM25 unavailable")
+        if os.path.exists(repo_path):
+            from app.parsing.code_parser import load_documents, parse_documents
+            from app.ingestion.git_history import load_persisted_git_history
+            valid_files = filter_files(repo_path)
+            documents   = load_documents(valid_files, repo_path)
+            nodes       = parse_documents(documents)
+            
+            git_docs = load_persisted_git_history(index_name)
+            nodes = nodes + git_docs
+            
+            bm25_retriever = build_bm25_retriever(nodes, top_k=TOP_K_CHUNKS)
+            logger.info(f"BM25 rebuilt over {len(nodes)} nodes (including {len(git_docs)} git history nodes)")
+        else:
+            logger.warning(f"Repo path not found at {repo_path} — BM25 unavailable")
 
-    _index_cache[index_name] = (vector_index, bm25_retriever)
-    return vector_index, bm25_retriever
+        _index_cache[index_name] = (vector_index, bm25_retriever)
+        return vector_index, bm25_retriever
 
 
 def _build_code_lookup_engine(
@@ -504,23 +508,7 @@ def _resolve_query_mode(query: str, memory: ChatMemoryBuffer) -> Tuple[str, Quer
     return resolved_query, query_mode
 
 
-def _handle_relationship_query(
-    query: str,
-    resolved_query: str,
-    index_name: str,
-    memory: ChatMemoryBuffer,
-    chat_engine,
-    query_mode: QueryMode,
-) -> Tuple[str, object, ChatMemoryBuffer, QueryMode]:
-    from app.retrieval.query_router import extract_relationship_target, is_real_identifier
-    from app.llm.prompts import RELATIONSHIP_PROMPT
-
-    target = extract_relationship_target(resolved_query)
-    logger.info("Relationship query target extracted: %s", target)
-    if not is_real_identifier(target, index_name):
-        logger.info(f"Stage -1: RELATIONSHIP target '{target}' is not a real identifier. Forcing clarification.")
-        _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
-        return _CLARIFICATION_RESPONSE, chat_engine, memory, query_mode
+def _get_relationship_refs(index_name: str, target: Optional[str]) -> List[str]:
     refs = []
     if target:
         graph_path = os.path.join(INDEX_DIR, index_name, "relationship_graph.json")
@@ -543,6 +531,34 @@ def _handle_relationship_query(
             logger.warning(f"Relationship graph file not found at {graph_path}")
     else:
         logger.info("Relationship target extraction returned None")
+    return refs
+
+
+def _handle_relationship_query(
+    query: str,
+    resolved_query: str,
+    index_name: str,
+    memory: ChatMemoryBuffer,
+    chat_engine,
+    query_mode: QueryMode,
+    target: Optional[str] = None,
+    refs: Optional[List[str]] = None,
+) -> Tuple[str, object, ChatMemoryBuffer, QueryMode]:
+    from app.retrieval.query_router import extract_relationship_target, is_real_identifier
+    from app.llm.prompts import RELATIONSHIP_PROMPT
+
+    if target is None:
+        target = extract_relationship_target(resolved_query)
+        logger.info("Relationship query target extracted: %s", target)
+        if not is_real_identifier(target, index_name):
+            logger.info(f"Stage -1: RELATIONSHIP target '{target}' is not a real identifier. Forcing clarification.")
+            _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
+            return _CLARIFICATION_RESPONSE, chat_engine, memory, query_mode
+
+    if refs is None:
+        from app.indexing.incremental import acquire_index_read
+        with acquire_index_read(index_name):
+            refs = _get_relationship_refs(index_name, target)
 
     ref_list_str = "\n".join([f"- {r}" for r in refs]) if refs else "No references found."
     full_prompt = RELATIONSHIP_PROMPT.format(
@@ -608,15 +624,17 @@ def _execute_cross_encoder_path(
     chat_engine,
     memory: ChatMemoryBuffer,
     index_name: str,
+    reranked_nodes: Optional[List] = None,
 ) -> str:
     from app.config import get_repos_dir, CITATION_VALIDATION_MODE
     repo_path = os.path.join(get_repos_dir(), index_name)
 
-    retriever = chat_engine._retriever
-    raw_nodes = retriever.retrieve(resolved_query)
-    logger.debug("Cross-Encoder path retrieved %s raw nodes", len(raw_nodes))
-    reranked_nodes = rerank_with_cross_encoder(resolved_query, raw_nodes, top_k=TOP_K_RERANK, index_name=index_name)
-    logger.debug("Cross-Encoder reranked to %s nodes", len(reranked_nodes))
+    if reranked_nodes is None:
+        retriever = chat_engine._retriever
+        raw_nodes = retriever.retrieve(resolved_query)
+        logger.debug("Cross-Encoder path retrieved %s raw nodes", len(raw_nodes))
+        reranked_nodes = rerank_with_cross_encoder(resolved_query, raw_nodes, top_k=TOP_K_RERANK, index_name=index_name)
+        logger.debug("Cross-Encoder reranked to %s nodes", len(reranked_nodes))
 
     if _check_low_confidence(reranked_nodes, "Cross-Encoder", query_mode=query_mode):
         _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
@@ -676,24 +694,45 @@ def _execute_standard_path(
     chat_engine,
     memory: ChatMemoryBuffer,
     index_name: str,
+    raw_nodes: Optional[List] = None,
 ) -> str:
     from app.config import get_repos_dir, CITATION_VALIDATION_MODE
     repo_path = os.path.join(get_repos_dir(), index_name)
 
-    raw_nodes = []
-    try:
-        retriever = chat_engine._retriever
-        raw_nodes = retriever.retrieve(resolved_query)
-        logger.debug("Standard path retrieved %s raw nodes", len(raw_nodes))
+    if raw_nodes is None:
+        try:
+            retriever = chat_engine._retriever
+            raw_nodes = retriever.retrieve(resolved_query)
+            logger.debug("Standard path retrieved %s raw nodes", len(raw_nodes))
+            if _check_low_confidence(raw_nodes, "RAG", query_mode=query_mode):
+                _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
+                return _CLARIFICATION_RESPONSE
+        except Exception as e:
+            logger.warning(f"Failed to check low confidence threshold: {e}")
+    else:
         if _check_low_confidence(raw_nodes, "RAG", query_mode=query_mode):
             _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
             return _CLARIFICATION_RESPONSE
-    except Exception as e:
-        logger.warning(f"Failed to check low confidence threshold: {e}")
 
     start = time.time()
-    response = chat_engine.chat(resolved_query)
-    response_str = str(response).strip()
+    if hasattr(chat_engine, "_get_response_synthesizer") and raw_nodes is not None:
+        try:
+            chat_history = memory.get(input=resolved_query) if memory else []
+            synthesizer = chat_engine._get_response_synthesizer(chat_history)
+            response = synthesizer.synthesize(resolved_query, raw_nodes)
+            response_str = str(response).strip()
+            if hasattr(chat_engine, "_memory") and chat_engine._memory is not None:
+                from llama_index.core.llms import ChatMessage, MessageRole
+                chat_engine._memory.put(ChatMessage(content=resolved_query, role=MessageRole.USER))
+                chat_engine._memory.put(ChatMessage(content=response_str, role=MessageRole.ASSISTANT))
+        except Exception as ex:
+            logger.warning(f"Direct synthesis failed; falling back to chat_engine.chat: {ex}")
+            response = chat_engine.chat(resolved_query)
+            response_str = str(response).strip()
+    else:
+        response = chat_engine.chat(resolved_query)
+        response_str = str(response).strip()
+
     logger.debug("Standard chat engine call completed in %.2fs", time.time() - start)
     if _has_refusal(response_str):
         logger.warning("Safety refusal detected in standard path; using fallback prompt")
@@ -701,7 +740,7 @@ def _execute_standard_path(
         response_str = str(response).strip()
 
     # Standard path citation check
-    retrieved_paths = {n.node.metadata.get("path") for n in raw_nodes if n.node.metadata.get("path")}
+    retrieved_paths = {n.node.metadata.get("path") for n in (raw_nodes or []) if n.node.metadata.get("path")}
     invalid_citations = validate_citations(response_str, retrieved_paths, repo_path)
     if invalid_citations:
         if CITATION_VALIDATION_MODE == "strict":
@@ -738,6 +777,7 @@ def handle_user_query(
     memory: Optional[ChatMemoryBuffer] = None,
     last_mode: Optional[QueryMode] = None,
     is_cta_followup: bool = False,
+    target_repo_id: Optional[str] = None,
 ) -> Tuple[str, object, ChatMemoryBuffer, QueryMode]:
     """
     Main query entrypoint.
@@ -754,48 +794,99 @@ def handle_user_query(
     configure_llamaindex_settings()
     logger.debug("LlamaIndex settings configured")
 
-    vector_index, bm25_retriever = _get_indexes(index_name)
-    logger.debug("Indexes loaded for index=%s (bm25_available=%s)", index_name, bm25_retriever is not None)
-
     if memory is None:
         memory = ChatMemoryBuffer.from_defaults(token_limit=4096)
         logger.debug("Initialized new chat memory buffer")
 
-    if not is_cta_followup:
-        precheck_result = _run_pre_routing_checks(query, index_name, memory, chat_engine)
-        if precheck_result is not None:
-            return precheck_result
+    from app.indexing.incremental import acquire_index_read, IndexRefreshingError
+    try:
+        if not is_cta_followup:
+            precheck_result = _run_pre_routing_checks(query, index_name, memory, chat_engine)
+            if precheck_result is not None:
+                return precheck_result
 
-    resolved_query, query_mode = _resolve_query_mode(query, memory)
-    if query_mode == QueryMode.CODE_LOOKUP and (
-        is_general_knowledge_or_preference_query(query)
-        or is_general_knowledge_or_preference_query(resolved_query)
-    ):
-        _remember_turn(memory, query, _NO_MATCH_CODE_LOOKUP_RESPONSE)
-        return _NO_MATCH_CODE_LOOKUP_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
+        resolved_query, query_mode = _resolve_query_mode(query, memory)
+        if query_mode == QueryMode.CODE_LOOKUP and (
+            is_general_knowledge_or_preference_query(query)
+            or is_general_knowledge_or_preference_query(resolved_query)
+        ):
+            _remember_turn(memory, query, _NO_MATCH_CODE_LOOKUP_RESPONSE)
+            return _NO_MATCH_CODE_LOOKUP_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
 
-    if query_mode == QueryMode.RELATIONSHIP:
-        return _handle_relationship_query(query, resolved_query, index_name, memory, chat_engine, query_mode)
+        if query_mode == QueryMode.RELATIONSHIP:
+            from app.retrieval.query_router import extract_relationship_target, is_real_identifier
+            target = extract_relationship_target(resolved_query)
+            logger.info("Relationship query target extracted: %s", target)
+            if not is_real_identifier(target, index_name):
+                logger.info(f"Stage -1: RELATIONSHIP target '{target}' is not a real identifier. Forcing clarification.")
+                _remember_turn(memory, query, _CLARIFICATION_RESPONSE)
+                return _CLARIFICATION_RESPONSE, chat_engine, memory, query_mode
+            with acquire_index_read(index_name):
+                refs = _get_relationship_refs(index_name, target)
+            return _handle_relationship_query(
+                query, resolved_query, index_name, memory, chat_engine, query_mode, target=target, refs=refs
+            )
 
-    chat_engine = _ensure_engine_for_mode(
-        chat_engine,
-        query_mode,
-        last_mode,
-        vector_index,
-        bm25_retriever,
-        memory,
-    )
+        retrieved_nodes = None
+        should_abstain = False
+        abstention_message = None
 
-    from app.config import USE_RERANKER
+        with acquire_index_read(index_name):
+            vector_index, bm25_retriever = _get_indexes(index_name)
+            logger.debug("Indexes loaded for index=%s (bm25_available=%s)", index_name, bm25_retriever is not None)
 
-    if USE_RERANKER:
-        try:
-            logger.debug("Executing Reranker path for query_mode=%s", query_mode.value)
-            response_str = _execute_cross_encoder_path(query, resolved_query, query_mode, chat_engine, memory, index_name)
-            return response_str, chat_engine, memory, query_mode
-        except Exception as e:
-            logger.warning(f"Reranker pipeline failed: {e} — falling back to chat engine")
+            chat_engine = _ensure_engine_for_mode(
+                chat_engine,
+                query_mode,
+                last_mode,
+                vector_index,
+                bm25_retriever,
+                memory,
+            )
 
-    logger.debug("Executing standard chat-engine path for query_mode=%s", query_mode.value)
-    response_str = _execute_standard_path(query, resolved_query, query_mode, chat_engine, memory, index_name)
-    return response_str, chat_engine, memory, query_mode
+            from app.retrieval.orchestrator import get_retrieval_orchestrator, RetrievalTier
+            retriever_source = getattr(chat_engine, "_retriever", None) or vector_index
+            decision = get_retrieval_orchestrator().orchestrate(
+                query=query,
+                index_name=index_name,
+                vector_index=retriever_source,
+                bm25_retriever=bm25_retriever,
+                memory=memory,
+                last_mode=last_mode,
+                is_cta_followup=is_cta_followup,
+                query_mode=query_mode,
+                resolved_query=resolved_query,
+                rerank_fn=rerank_with_cross_encoder,
+                target_repo_id=target_repo_id,
+            )
+            retrieved_nodes = decision.nodes
+            should_abstain = decision.should_abstain
+            abstention_message = decision.abstention_message
+
+        # Read lock is released! LLM network inference and synthesis run outside read lock:
+        if should_abstain:
+            abstention_resp = abstention_message or _CLARIFICATION_RESPONSE
+            _remember_turn(memory, query, abstention_resp)
+            return abstention_resp, chat_engine, memory, query_mode
+        from app.config import USE_RERANKER
+        if USE_RERANKER:
+            try:
+                logger.debug("Executing Reranker path for query_mode=%s", query_mode.value)
+                response_str = _execute_cross_encoder_path(
+                    query, resolved_query, query_mode, chat_engine, memory, index_name, reranked_nodes=retrieved_nodes
+                )
+                return response_str, chat_engine, memory, query_mode
+            except Exception as e:
+                logger.warning(f"Reranker pipeline failed: {e} — falling back to chat engine")
+
+        logger.debug("Executing standard chat-engine path for query_mode=%s", query_mode.value)
+        response_str = _execute_standard_path(
+            query, resolved_query, query_mode, chat_engine, memory, index_name, raw_nodes=retrieved_nodes
+        )
+        return response_str, chat_engine, memory, query_mode
+
+    except IndexRefreshingError as e:
+        logger.warning("Query rejected during active refresh: %s", e)
+        retry_msg = "The repository index is currently being updated. Please retry in a moment."
+        _remember_turn(memory, query, retry_msg)
+        return retry_msg, chat_engine, memory, QueryMode.CODE_LOOKUP
