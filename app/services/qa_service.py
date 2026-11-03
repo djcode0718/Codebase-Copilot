@@ -454,36 +454,17 @@ def _run_pre_routing_checks(
     memory: ChatMemoryBuffer,
     chat_engine,
 ) -> Optional[Tuple[str, object, ChatMemoryBuffer, QueryMode]]:
-    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent, detect_greeting, GREETING_RESPONSE
+    from app.retrieval.query_router import run_query_prechecks
 
-    if detect_greeting(query):
-        logger.info("Early exit: greeting detected")
-        _remember_turn(memory, query, GREETING_RESPONSE)
-        return GREETING_RESPONSE, chat_engine, memory, QueryMode.CODE_LOOKUP
-
-    excluded_folder = detect_excluded_folder(query)
-    if excluded_folder:
-        logger.info("Early exit: excluded folder reference detected")
-        err_msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
-        _remember_turn(memory, query, err_msg)
-        return err_msg, chat_engine, memory, QueryMode.CODE_LOOKUP
-
-    if detect_aggregation(query):
-        logger.info("Early exit: aggregation query")
-        from app.services.repo_stats_service import handle_aggregation_query
-
-        response_str = handle_aggregation_query(query, index_name)
-        _remember_turn(memory, query, response_str)
-        return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
-
-    superlative_suggest = check_superlative_intent(query, index_name=index_name)
-    if superlative_suggest:
-        logger.info("Early exit: superlative action suggestion")
-        import json
-
-        response_str = json.dumps(superlative_suggest)
-        _remember_turn(memory, query, response_str)
-        return response_str, chat_engine, memory, QueryMode.CODE_LOOKUP
+    precheck = run_query_prechecks(query, index_name)
+    if precheck.handled:
+        logger.info(
+            "Early exit handled via run_query_prechecks (greeting=%s, folder=%s, agg=%s, superlative=%s)",
+            precheck.is_greeting, precheck.is_excluded_folder, precheck.is_aggregation, precheck.is_superlative,
+        )
+        resp_text = precheck.response_text or ""
+        _remember_turn(memory, query, resp_text)
+        return resp_text, chat_engine, memory, precheck.query_mode or QueryMode.CODE_LOOKUP
 
     return None
 

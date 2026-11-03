@@ -418,7 +418,14 @@ class SharedRetrievalOrchestrator:
             )
 
         # 1. Ambiguity & Query Mode Resolution
-        if query_mode is None or resolved_query is None:
+        if query_mode is not None and resolved_query is not None:
+            logger.debug(
+                "Orchestrator received pre-resolved query mode=%s, query_length=%d",
+                query_mode.value,
+                len(resolved_query),
+            )
+        else:
+            logger.debug("Orchestrator resolving query mode internally (fallback path)")
             if _is_relationship_query(query):
                 resolved_query = resolved_query or query
                 query_mode = QueryMode.RELATIONSHIP

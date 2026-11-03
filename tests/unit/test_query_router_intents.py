@@ -305,3 +305,78 @@ def test_specific_code_queries_remain_code_lookup():
         mode = classify_query(q)
         assert mode == QueryMode.CODE_LOOKUP, f"Specific query '{q}' should be CODE_LOOKUP, got {mode}"
 
+
+# ─── Precheck Decoupling & Single Classification Tests (Phase 1B) ────────────
+
+from app.retrieval.query_router import run_query_prechecks, PrecheckResult, GREETING_RESPONSE, QueryMode
+
+
+def test_run_query_prechecks_greeting():
+    res = run_query_prechecks("hello there", "test_idx")
+    assert res.handled is True
+    assert res.is_greeting is True
+    assert res.response_text == GREETING_RESPONSE
+    assert res.query_mode == QueryMode.CODE_LOOKUP
+
+
+def test_run_query_prechecks_excluded_folder():
+    res = run_query_prechecks("tell me about node_modules/react", "test_idx")
+    assert res.handled is True
+    assert res.is_excluded_folder is True
+    assert "excluded from indexing" in res.response_text
+
+
+def test_run_query_prechecks_aggregation():
+    with patch("app.services.repo_stats_service.handle_aggregation_query", return_value="Total files: 42"):
+        res = run_query_prechecks("how many files are there", "test_idx")
+        assert res.handled is True
+        assert res.is_aggregation is True
+        assert res.response_text == "Total files: 42"
+
+
+def test_run_query_prechecks_superlative():
+    res = run_query_prechecks("most vulnerable file in repo", "test_idx")
+    assert res.handled is True
+    assert res.is_superlative is True
+    assert res.action_suggestion is not None
+    assert res.action_suggestion["suggested_action"] == "security_review"
+
+
+def test_run_query_prechecks_pass_through():
+    res = run_query_prechecks("how does auth work?", "test_idx")
+    assert res.handled is False
+    assert res.response_text is None
+
+
+def test_run_query_prechecks_cta_followup_bypass():
+    res = run_query_prechecks("hello", "test_idx", is_cta_followup=True)
+    assert res.handled is False
+
+
+def test_single_classification_pre_resolved_mode_orchestrator():
+    """Verify that passing pre-resolved query_mode and resolved_query to orchestrate() skips re-classification."""
+    from app.retrieval.orchestrator import SharedRetrievalOrchestrator, RetrievalTier
+    from unittest.mock import MagicMock
+
+    orch = SharedRetrievalOrchestrator()
+    mock_vector_index = MagicMock()
+    mock_vector_index.retrieve.return_value = []
+
+    with patch("app.retrieval.orchestrator.classify_query") as mock_classify, \
+         patch("app.retrieval.repository_isolation.enforce_chunk_isolation", side_effect=lambda nodes, **kwargs: nodes), \
+         patch("app.retrieval.repository_isolation.resolve_repository_id", return_value="mock_repo"):
+
+        decision = orch.orchestrate(
+            query="how does payment work?",
+            index_name="test_index",
+            vector_index=mock_vector_index,
+            query_mode=QueryMode.ARCHITECTURAL,
+            resolved_query="how does payment work?",
+            target_repo_id="mock_repo",
+        )
+
+        # classify_query MUST NOT be called because query_mode was provided!
+        mock_classify.assert_not_called()
+        assert decision.query_mode == QueryMode.ARCHITECTURAL
+
+

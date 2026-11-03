@@ -583,31 +583,15 @@ def _stream_prechecks(query: str, index_name: str, memory, is_cta_followup: bool
     if is_cta_followup:
         return None
 
-    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent, detect_greeting, GREETING_RESPONSE
+    from app.retrieval.query_router import run_query_prechecks
 
-    if detect_greeting(query):
-        logger.info("Stream early exit: greeting detected")
-        return _stream_early_response_payload(memory, query, GREETING_RESPONSE)
-
-    excluded_folder = detect_excluded_folder(query)
-    if excluded_folder:
-        logger.info("Stream early exit: excluded folder referenced")
-        err_msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
-        return _stream_early_response_payload(memory, query, err_msg)
-
-    if detect_aggregation(query):
-        logger.info("Stream early exit: aggregation query")
-        from app.services.repo_stats_service import handle_aggregation_query
-
-        response_str = handle_aggregation_query(query, index_name)
-        return _stream_early_response_payload(memory, query, response_str)
-
-    superlative_suggest = check_superlative_intent(query, index_name=index_name)
-    if superlative_suggest:
-        logger.info("Stream early exit: superlative action suggestion")
-        import json
-
-        return _stream_early_response_payload(memory, query, json.dumps(superlative_suggest))
+    precheck = run_query_prechecks(query, index_name, is_cta_followup=is_cta_followup)
+    if precheck.handled:
+        logger.info(
+            "Stream early exit: precheck handled (greeting=%s, folder=%s, agg=%s, superlative=%s)",
+            precheck.is_greeting, precheck.is_excluded_folder, precheck.is_aggregation, precheck.is_superlative
+        )
+        return _stream_early_response_payload(memory, query, precheck.response_text or "")
 
     return None
 
@@ -733,6 +717,9 @@ async def _prepare_stream_prompt(
     if precheck is not None:
         return precheck
 
+    resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
+    logger.info("Resolved stream query mode=%s", query_mode.value)
+
     from app.indexing.incremental import acquire_index_read
     from app.retrieval.orchestrator import get_retrieval_orchestrator, RetrievalTier
 
@@ -747,11 +734,10 @@ async def _prepare_stream_prompt(
             bm25_retriever=bm25_retriever,
             memory=memory,
             is_cta_followup=is_cta_followup,
+            query_mode=query_mode,
+            resolved_query=resolved_query,
             target_repo_id=repo_id,
         )
-
-        resolved_query = decision.resolved_query
-        query_mode = decision.query_mode
 
         if decision.selected_tier == RetrievalTier.RELATIONSHIP or query_mode == QueryMode.RELATIONSHIP:
             return _relationship_prompt_payload(index_name, memory, resolved_query, query_mode)
