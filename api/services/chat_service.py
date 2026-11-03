@@ -36,7 +36,11 @@ from app.config import (
 )
 from app.utils.logger import get_logger
 from app.llm.prompts import CHAT_FOLLOWUP_SUGGESTION_PROMPT
-from api.services.chat_stream_utils import to_sse_data, safe_chat_error_message
+from api.services.chat_stream_utils import (
+    to_sse_data,
+    safe_chat_error_message,
+    format_interruption_disclaimer,
+)
 
 logger = get_logger(__name__)
 
@@ -1037,6 +1041,12 @@ async def stream_chat_response(
             llm_provider = usage.get("provider")
             llm_model = usage.get("model")
         except StreamFirstTokenTimeoutError as timeout_err:
+            if full_response.strip():
+                logger.warning(
+                    "LLM stream timeout mid-stream after tokens yielded: %s",
+                    _redact_sensitive_text_for_log(timeout_err),
+                )
+                raise
             logger.warning(
                 "LLM stream startup timeout; attempting non-stream recovery: %s",
                 _redact_sensitive_text_for_log(timeout_err),
@@ -1044,8 +1054,14 @@ async def stream_chat_response(
             full_response, response_path = await _recover_from_stream_failure(full_prompt, timeout_err)
             yield to_sse_data({'type': 'token', 'content': full_response})
         except Exception as llm_err:
+            if full_response.strip():
+                logger.warning(
+                    "LLM streaming failed mid-stream after tokens yielded: %s",
+                    _redact_sensitive_text_for_log(llm_err),
+                )
+                raise
             logger.warning(
-                "LLM streaming failed; attempting non-stream recovery: %s",
+                "LLM streaming failed before first token; attempting non-stream recovery: %s",
                 _redact_sensitive_text_for_log(llm_err),
             )
             full_response, response_path = await _recover_from_stream_failure(full_prompt, llm_err)
@@ -1121,6 +1137,10 @@ async def stream_chat_response(
     except Exception as e:
         safe_msg = safe_chat_error_message(e, include_rate_limit=True)
         logger.error(f"Streaming chat error: {safe_msg}", exc_info=True)
+        if full_response.strip():
+            interruption_disclaimer = format_interruption_disclaimer(safe_msg)
+            yield to_sse_data({'type': 'token', 'content': interruption_disclaimer})
+            full_response += interruption_disclaimer
         yield to_sse_data({'type': 'error', 'message': safe_msg})
 
     finally:

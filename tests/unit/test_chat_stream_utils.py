@@ -19,6 +19,7 @@ from api.services.chat_stream_utils import (
     safe_chat_error_message,
     to_sse_data,
     parse_sse_data_line,
+    format_interruption_disclaimer,
 )
 
 
@@ -149,3 +150,19 @@ class TestParseSseDataLine:
 
     def test_data_only_prefix_returns_none(self):
         assert parse_sse_data_line("data:") is None
+
+
+# ─── format_interruption_disclaimer ─────────────────────────────────────────
+
+class TestFormatInterruptionDisclaimer:
+    def test_interruption_disclaimer_format(self):
+        msg = "The model provider is rate-limited right now. Please retry in a moment."
+        disclaimer = format_interruption_disclaimer(msg)
+        assert disclaimer.startswith("\n\n[Response interrupted:")
+        assert msg in disclaimer
+        assert disclaimer.endswith("]")
+
+    def test_interruption_disclaimer_preserves_error_details(self):
+        msg = "Rate limit reached"
+        assert format_interruption_disclaimer(msg) == "\n\n[Response interrupted: Rate limit reached]"
+

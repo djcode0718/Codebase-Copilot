@@ -72,3 +72,9 @@ def parse_sse_data_line(sse_line: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+
+def format_interruption_disclaimer(safe_msg: str) -> str:
+    """Format a clear interruption disclaimer token emitted on mid-stream failure."""
+    return f"\n\n[Response interrupted: {safe_msg}]"
+
+

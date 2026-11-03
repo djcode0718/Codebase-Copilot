@@ -84,9 +84,10 @@ def load_documents(file_paths: List[str], repo_path: str) -> List[Document]:
                                 "line_start": 1,
                                 "line_end": cell.line_count,
                                 "file_size": len(cell.clean_code),
+                                "is_truncated": False,
                             },
-                            excluded_embed_metadata_keys=["file_size"],
-                            excluded_llm_metadata_keys=["file_size"],
+                            excluded_embed_metadata_keys=["file_size", "is_truncated"],
+                            excluded_llm_metadata_keys=["file_size", "is_truncated"],
                         )
                         documents.append(doc)
                     elif cell.cell_type == "markdown":
@@ -104,9 +105,10 @@ def load_documents(file_paths: List[str], repo_path: str) -> List[Document]:
                                 "line_start": 1,
                                 "line_end": cell.line_count,
                                 "file_size": len(cell.source),
+                                "is_truncated": False,
                             },
-                            excluded_embed_metadata_keys=["file_size"],
-                            excluded_llm_metadata_keys=["file_size"],
+                            excluded_embed_metadata_keys=["file_size", "is_truncated"],
+                            excluded_llm_metadata_keys=["file_size", "is_truncated"],
                         )
                         documents.append(doc)
             except Exception as e:
@@ -172,15 +174,25 @@ def load_documents(file_paths: List[str], repo_path: str) -> List[Document]:
             else:
                 format_type = "config"
 
-        # Hard cap — protects memory on massive generated files
-        content = content[:20000]
+        # Character-based sizing and content cap (characters from decoded UTF-8 text)
+        original_file_size = len(content)
+        is_truncated = original_file_size > 20000
+
+        if is_truncated:
+            logger.warning(
+                "File truncated during parsing: path='%s' original_size=%d chars retained_size=20000 chars is_truncated=True",
+                relative_path,
+                original_file_size,
+            )
+            content = content[:20000]
 
         meta = {
             "file_name": file_name,
             "path": relative_path,
             "extension": ext,
             "format": format_type,
-            "file_size": len(content),
+            "file_size": original_file_size,
+            "is_truncated": is_truncated,
         }
         meta.update(extra_meta)
 
@@ -188,8 +200,8 @@ def load_documents(file_paths: List[str], repo_path: str) -> List[Document]:
             text=content,
             metadata=meta,
             # Exclude heavy fields from embedding to keep vectors clean
-            excluded_embed_metadata_keys=["file_size", "top_keys", "headers"],
-            excluded_llm_metadata_keys=["file_size", "extension", "top_keys", "headers"],
+            excluded_embed_metadata_keys=["file_size", "is_truncated", "top_keys", "headers"],
+            excluded_llm_metadata_keys=["file_size", "is_truncated", "extension", "top_keys", "headers"],
         )
         documents.append(doc)
 
