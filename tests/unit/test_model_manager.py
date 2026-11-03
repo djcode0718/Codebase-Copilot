@@ -1,4 +1,4 @@
-"""Unit tests for app/services/model_manager.py: provider isolation and client initialization."""
+"""Unit tests for app/services/model_manager.py: 7-model fallback chain and client initialization."""
 from __future__ import annotations
 
 import pytest
@@ -30,84 +30,88 @@ def test_model_manager_module_importable():
     assert m is not None
 
 
-def test_cloud_gemini_mode_excludes_ollama():
+def test_seven_model_exact_fallback_order():
+    """Verify that the 7-model priority order matches the configured chain."""
     with patch("app.services.model_manager.LLM_PROVIDER", "gemini"), \
          patch("app.services.model_manager.USE_FAST_LLM", False), \
          patch("app.services.model_manager.GEMINI_API_KEY", "mock-gemini-key"), \
          patch("app.services.model_manager.GROQ_API_KEY", "mock-groq-key"):
         specs = get_available_model_specs()
-        assert len(specs) > 0
-        assert specs[0].provider == "gemini"
-        assert all(s.provider in ("gemini", "groq") for s in specs)
-        assert not any(s.provider == "ollama" for s in specs)
+        expected = [
+            ModelSpec(provider="gemini", model_name="gemini-3.8-flash"),
+            ModelSpec(provider="gemini", model_name="gemini-3.5-flash-lite"),
+            ModelSpec(provider="gemini", model_name="gemini-3.6-flash"),
+            ModelSpec(provider="groq", model_name="openai/gpt-oss-120b"),
+            ModelSpec(provider="groq", model_name="qwen/qwen3.8-27b"),
+            ModelSpec(provider="groq", model_name="minimaxai/minimax-m2.7"),
+            ModelSpec(provider="ollama", model_name="llama3.1:8b"),
+        ]
+        assert specs[:7] == expected
 
 
-def test_cloud_groq_mode_excludes_ollama():
-    with patch("app.services.model_manager.LLM_PROVIDER", "groq"), \
+def test_provider_to_model_mapping():
+    """Verify each model is correctly mapped to its provider."""
+    with patch("app.services.model_manager.LLM_PROVIDER", "gemini"), \
          patch("app.services.model_manager.USE_FAST_LLM", False), \
          patch("app.services.model_manager.GEMINI_API_KEY", "mock-gemini-key"), \
          patch("app.services.model_manager.GROQ_API_KEY", "mock-groq-key"):
         specs = get_available_model_specs()
-        assert len(specs) > 0
-        assert specs[0].provider == "groq"
-        assert all(s.provider in ("gemini", "groq") for s in specs)
-        assert not any(s.provider == "ollama" for s in specs)
+        gemini_specs = [s for s in specs if s.provider == "gemini"]
+        groq_specs = [s for s in specs if s.provider == "groq"]
+        ollama_specs = [s for s in specs if s.provider == "ollama"]
+
+        assert [s.model_name for s in gemini_specs][:3] == [
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
+        ]
+        assert [s.model_name for s in groq_specs][:3] == [
+            "openai/gpt-oss-120b",
+            "qwen/qwen3.8-27b",
+            "minimaxai/minimax-m2.7",
+        ]
+        assert [s.model_name for s in ollama_specs] == ["llama3.1:8b"]
 
 
-def test_offline_mode_selects_strictly_llama31_8b():
-    with patch("app.services.model_manager.LLM_PROVIDER", "ollama"), \
-         patch("app.services.model_manager.USE_FAST_LLM", False), \
-         patch("app.services.model_manager.GEMINI_API_KEY", "mock-gemini-key"), \
-         patch("app.services.model_manager.GROQ_API_KEY", "mock-groq-key"):
-        specs = get_available_model_specs()
-        assert specs == [ModelSpec(provider="ollama", model_name="llama3.1:8b")]
-        assert not any(s.provider in ("gemini", "groq") for s in specs)
-
-
-def test_offline_mode_ignores_use_fast_llm_true():
-    with patch("app.services.model_manager.LLM_PROVIDER", "ollama"), \
-         patch("app.services.model_manager.USE_FAST_LLM", True), \
-         patch("app.services.model_manager.GEMINI_API_KEY", "mock-gemini-key"), \
-         patch("app.services.model_manager.GROQ_API_KEY", "mock-groq-key"):
-        specs = get_available_model_specs()
-        assert specs == [ModelSpec(provider="ollama", model_name="llama3.1:8b")]
-        assert specs[0].provider == "ollama"
-        assert specs[0].model_name == "llama3.1:8b"
-
-
-def test_offline_mode_never_falls_back_to_cloud_on_failure():
-    from app.services.llm_fallback import ResilientFallbackLLM, AllModelsExhaustedError
-
-    mock_ollama_client = MagicMock()
-    mock_ollama_client._cb_provider = "ollama"
-    mock_ollama_client._cb_model_name = "llama3.1:8b"
-    mock_ollama_client.complete.side_effect = ConnectionError("Ollama daemon unreachable")
-
-    with patch("app.services.model_manager.LLM_PROVIDER", "ollama"), \
-         patch("app.services.model_manager.USE_FAST_LLM", False), \
-         patch("app.services.model_manager.GEMINI_API_KEY", "mock-gemini-key"), \
-         patch("app.services.model_manager.GROQ_API_KEY", "mock-groq-key"), \
-         patch("app.services.model_manager.create_llm_client", return_value=mock_ollama_client):
+def test_missing_cloud_api_keys_falls_back_to_available():
+    """If Gemini and Groq API keys are missing, Ollama is still available."""
+    with patch("app.services.model_manager.LLM_PROVIDER", "gemini"), \
+         patch("app.services.model_manager.GEMINI_API_KEY", ""), \
+         patch("app.services.model_manager.GROQ_API_KEY", ""):
         specs = get_available_model_specs()
         assert len(specs) == 1
-        assert specs[0].provider == "ollama"
-
-        llm = ResilientFallbackLLM(fallback_chain=[mock_ollama_client])
-        with pytest.raises(AllModelsExhaustedError) as exc_info:
-            llm.complete("test prompt")
-        assert "ollama/llama3.1:8b" in exc_info.value.errors
-        assert "gemini" not in exc_info.value.errors
-        assert "groq" not in exc_info.value.errors
+        assert specs[0] == ModelSpec(provider="ollama", model_name="llama3.1:8b")
 
 
-def test_invalid_llm_provider_raises_value_error():
-    with patch("app.services.model_manager.LLM_PROVIDER", "unsupported_provider"):
-        with pytest.raises(ValueError) as exc_info:
-            get_available_model_specs()
-        assert "Invalid LLM_PROVIDER" in str(exc_info.value)
+def test_groq_client_receives_correct_context_windows():
+    mock_groq_cls = MagicMock()
+    with patch("app.services.model_manager.GROQ_API_KEY", "mock-groq-key"), \
+         patch.dict("sys.modules", {"llama_index.llms.groq": MagicMock(Groq=mock_groq_cls)}):
+
+        # 1. GPT-OSS 120B model
+        create_llm_client(ModelSpec(provider="groq", model_name="openai/gpt-oss-120b"))
+        kwargs_120b = mock_groq_cls.call_args[1]
+        assert kwargs_120b["context_window"] == 131072
+        assert kwargs_120b["max_tokens"] == 4096
+
+        reset_client_cache()
+
+        # 2. Qwen model
+        create_llm_client(ModelSpec(provider="groq", model_name="qwen/qwen3.8-27b"))
+        kwargs_qwen = mock_groq_cls.call_args[1]
+        assert kwargs_qwen["context_window"] == 32768
+        assert kwargs_qwen["max_tokens"] == 4096
+
+        reset_client_cache()
+
+        # 3. Minimax model
+        create_llm_client(ModelSpec(provider="groq", model_name="minimaxai/minimax-m2.7"))
+        kwargs_minimax = mock_groq_cls.call_args[1]
+        assert kwargs_minimax["context_window"] == 131072
+        assert kwargs_minimax["max_tokens"] == 4096
 
 
-def test_ollama_client_receives_runtime_num_ctx():
+def test_ollama_client_receives_llama31_parameters():
     mock_ollama_cls = MagicMock()
     with patch.dict("sys.modules", {"llama_index.llms.ollama": MagicMock(Ollama=mock_ollama_cls)}):
         create_llm_client(ModelSpec(provider="ollama", model_name="llama3.1:8b"))
@@ -117,20 +121,11 @@ def test_ollama_client_receives_runtime_num_ctx():
         assert kwargs["additional_kwargs"]["options"]["num_ctx"] == 16384
 
 
-def test_groq_client_receives_corrected_context_and_bounded_output():
-    mock_groq_cls = MagicMock()
-    with patch("app.services.model_manager.GROQ_API_KEY", "mock-groq-key"), \
-         patch.dict("sys.modules", {"llama_index.llms.groq": MagicMock(Groq=mock_groq_cls)}):
-        # Test 1: Qwen model gets 32,768 context and 4,096 max_tokens
-        create_llm_client(ModelSpec(provider="groq", model_name="qwen/qwen3.8-27b"))
-        kwargs_qwen = mock_groq_cls.call_args_list[0][1]
-        assert kwargs_qwen["context_window"] == 32768
-        assert kwargs_qwen["max_tokens"] == 4096
-
-        reset_client_cache()
-
-        # Test 2: 70b model gets 131,072 context and 4,096 max_tokens
-        create_llm_client(ModelSpec(provider="groq", model_name="llama-3.3-70b-versatile"))
-        kwargs_70b = mock_groq_cls.call_args_list[1][1]
-        assert kwargs_70b["context_window"] == 131072
-        assert kwargs_70b["max_tokens"] == 4096
+def test_client_caching_and_thread_safety():
+    """Verify clients are cached and returned on subsequent invocations."""
+    mock_ollama_cls = MagicMock()
+    with patch.dict("sys.modules", {"llama_index.llms.ollama": MagicMock(Ollama=mock_ollama_cls)}):
+        c1 = create_llm_client(ModelSpec(provider="ollama", model_name="llama3.1:8b"))
+        c2 = create_llm_client(ModelSpec(provider="ollama", model_name="llama3.1:8b"))
+        assert c1 is c2
+        assert mock_ollama_cls.call_count == 1

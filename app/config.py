@@ -41,12 +41,13 @@ GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 
 # ─── Provider Models ─────────────────────────────────────────────────────────
-GEMINI_LLM_MODEL = os.getenv("GEMINI_LLM_MODEL", "models/gemini-3.5-flash")
-GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "qwen/qwen3.8-27b")
+GEMINI_LLM_MODEL = os.getenv("GEMINI_LLM_MODEL", "gemini-3.8-flash")
+GROQ_LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_LLM_MODEL   = (os.getenv("OLLAMA_LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.1:8b")
+_raw_ollama_model = os.getenv("OLLAMA_LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.1:8b"
+OLLAMA_LLM_MODEL   = "llama3.1:8b" if _raw_ollama_model.lower() in ("mistral", "llama3.2:3b", "") else _raw_ollama_model
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
 # ─── Directories ─────────────────────────────────────────────────────────────
@@ -96,11 +97,20 @@ LLM_FALLBACK_RETRY_THRESHOLD = int(os.getenv("LLM_FALLBACK_RETRY_THRESHOLD", "10
 # Configured fallback chain of model definitions (comma-separated "provider:model_name").
 LLM_FALLBACK_CHAIN_STR = os.getenv(
     "LLM_FALLBACK_CHAIN",
-    "gemini:models/gemini-3.5-flash,"
-    "gemini:models/gemini-3.5-flash-lite,"
-    "gemini:models/gemini-3.1-flash-lite,"
-    "groq:qwen/qwen3.8-27b"
+    "gemini:gemini-3.8-flash,"
+    "gemini:gemini-3.5-flash-lite,"
+    "gemini:gemini-3.6-flash,"
+    "groq:openai/gpt-oss-120b,"
+    "groq:qwen/qwen3.8-27b,"
+    "groq:minimaxai/minimax-m2.7,"
+    "ollama:llama3.1:8b"
 )
+
+# ─── Cross-Provider Privacy Policy ───────────────────────────────────────────
+# When False (default), fallback will not transmit retrieved codebase chunks or prompts
+# to a different external cloud provider (e.g. Gemini -> Groq).
+# Fallback within the same provider (e.g. Gemini 3.8 -> Gemini 3.5) and local Ollama are always allowed.
+ALLOW_CROSS_PROVIDER_FALLBACK = os.getenv("ALLOW_CROSS_PROVIDER_FALLBACK", "false").lower() == "true"
 
 # ─── Streaming Guard Configuration ───────────────────────────────────────────
 # Maximum time to wait for the first streamed token before returning a
