@@ -87,6 +87,7 @@ function isExpiredAuthError(err: unknown): boolean {
 interface SidebarProps {
   repos?: Repo[];
   userEmail?: string;
+  userId?: string;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
 }
@@ -533,10 +534,11 @@ function RepositoryListSection(props: RepositoryListSectionProps) {
 
 // ── Main sidebar ──────────────────────────────────────────────────────────────
 
-export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose }: SidebarProps) {
+export default function Sidebar({ repos = [], userEmail, userId, mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
   const router   = useRouter();
   const supabase = useMemo(() => createClient(), []);
+  const userIdRef = useRef(userId);
 
   const [repoChats,        setRepoChats]        = useState<Record<string, Chat[]>>({});
   const [loadingChatRepoId, setLoadingChatRepoId] = useState<string | null>(null);
@@ -560,6 +562,15 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
     }
   });
 
+  // Track latest userId ref and reset cached chats whenever user identity changes
+  useEffect(() => {
+    userIdRef.current = userId;
+    setRepoChats({});
+    setLoadingChatRepoId(null);
+    setSearchQuery({});
+    setSearchOpen({});
+  }, [userId]);
+
   function logSidebarOperation(operation: string, details: Record<string, unknown> = {}) {
     console.info('[Sidebar]', operation, details);
   }
@@ -572,8 +583,13 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
     supabase.auth.getSession().then(({ data }) => {
       setAuthToken(data.session?.access_token ?? '');
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setAuthToken(session?.access_token ?? '');
+      if (event === 'SIGNED_OUT' || !session) {
+        setRepoChats({});
+        setLoadingChatRepoId(null);
+        setLastUsedRepoId(null);
+      }
     });
     return () => subscription.unsubscribe();
   }, [supabase]);
@@ -648,15 +664,27 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
   }, [activeRepoId, sortedRepos]);
   const recentRepos = prioritizedRepos.slice(0, 5);
 
-  async function fetchChats(repoId: string, token?: string) {
+  async function fetchChats(
+    repoId: string,
+    token?: string,
+    options?: { originatingUserId?: string; isCancelled?: () => boolean }
+  ) {
     const t = token ?? authToken;
-    if (!t) return;
+    const requestUserId = options?.originatingUserId ?? userIdRef.current;
+    if (!t || !requestUserId) return;
     try {
       const sessions = await listChatSessions(t, repoId, { includeArchived: true, includeDeleted: false, limit: 20 });
+      // Discard stale responses if cancelled or user changed before request completed
+      if (options?.isCancelled?.() || userIdRef.current !== requestUserId) {
+        return;
+      }
       authExpiredNotifiedRef.current = false;
       setRepoChats((prev) => ({ ...prev, [repoId]: sortChatsByLatest(sessions) }));
       return sessions;
     } catch (err) {
+      if (options?.isCancelled?.() || userIdRef.current !== requestUserId) {
+        return;
+      }
       if (isExpiredAuthError(err)) {
         if (!authExpiredNotifiedRef.current) {
           authExpiredNotifiedRef.current = true;
@@ -705,27 +733,49 @@ export default function Sidebar({ repos = [], mobileOpen = false, onMobileClose 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
-  // Auto-load chats for all ready repos
+  // Auto-load chats for all ready repos with cancellation and account isolation guards
   useEffect(() => {
+    let cancelled = false;
+
     async function loadChats() {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token ?? '';
-      if (!token) return;
+      const requestUserId = data.session?.user?.id;
+      if (!token || !requestUserId || !userId || requestUserId !== userId) return;
+
       for (const repo of recentRepos) {
+        if (cancelled || userIdRef.current !== requestUserId) break;
         if (repo.status !== 'ready' || repoChats[repo.id]) continue;
         try {
           setLoadingChatRepoId(repo.id);
-          await fetchChats(repo.id, token);
+          await fetchChats(repo.id, token, {
+            originatingUserId: requestUserId,
+            isCancelled: () => cancelled,
+          });
+          if (cancelled || userIdRef.current !== requestUserId) break;
+
+          // Guard against account switches while async requests are in flight
+          const { data: verifyData } = await supabase.auth.getSession();
+          if (verifyData.session?.user?.id !== requestUserId) break;
         } catch {
-          setRepoChats((prev) => ({ ...prev, [repo.id]: [] }));
+          if (!cancelled && userIdRef.current === requestUserId) {
+            setRepoChats((prev) => ({ ...prev, [repo.id]: [] }));
+          }
         } finally {
-          setLoadingChatRepoId(null);
+          if (!cancelled && userIdRef.current === requestUserId) {
+            setLoadingChatRepoId(null);
+          }
         }
       }
     }
-    if (recentRepos.length > 0) void loadChats();
+
+    if (recentRepos.length > 0 && userId) void loadChats();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recentRepos.map(r => r.id).join(',')]);
+  }, [recentRepos.map(r => r.id).join(','), userId]);
 
   function openChatSession(repoId: string, chatId: string) {
     setActiveRepoPreference(repoId, 'open-chat');
