@@ -197,4 +197,5 @@ def test_ordinary_source_file_truncation_remains_at_20k_characters():
         docs = load_documents([py_path], td)
         assert len(docs) == 1
         assert len(docs[0].text) == 20000
-        assert docs[0].metadata.get("file_size") == 20000
+        assert docs[0].metadata.get("file_size") == os.path.getsize(py_path)
+        assert docs[0].metadata.get("is_truncated") is True
