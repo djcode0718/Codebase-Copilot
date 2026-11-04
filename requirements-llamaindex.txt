@@ -19,7 +19,7 @@ rank-bm25
 chromadb>=0.5.0
 
 # ─── Code splitting (tree-sitter) ─────────────────────────────────────────────
-tree-sitter==0.21.3
+tree-sitter>=0.22.0
 tree-sitter-language-pack      # pre-built grammars for 100+ languages
 
 # ─── Repo loading ─────────────────────────────────────────────────────────────

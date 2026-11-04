@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Tuple
 
@@ -19,6 +20,7 @@ logger = get_logger(__name__)
 
 _SUPPORTED_PROVIDERS: Set[str] = {"gemini", "groq", "ollama"}
 _client_cache: Dict[Tuple[str, str], Any] = {}
+_client_cache_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -126,13 +128,15 @@ def get_available_model_specs() -> List[ModelSpec]:
 
 def reset_client_cache() -> None:
     """Clear cached LLM client instances for test isolation."""
-    _client_cache.clear()
+    with _client_cache_lock:
+        _client_cache.clear()
 
 
 def create_llm_client(spec: ModelSpec) -> Any:
     cache_key = (spec.provider, spec.model_name)
-    if cache_key in _client_cache:
-        return _client_cache[cache_key]
+    with _client_cache_lock:
+        if cache_key in _client_cache:
+            return _client_cache[cache_key]
 
     provider = _normalize_provider(spec.provider)
 
@@ -212,6 +216,6 @@ def create_llm_client(spec: ModelSpec) -> Any:
     setattr(client, "_cb_provider", provider)
     setattr(client, "_cb_model_name", spec.model_name)
 
-    _client_cache[cache_key] = client
+    with _client_cache_lock:
+        _client_cache[cache_key] = client
     return client
-

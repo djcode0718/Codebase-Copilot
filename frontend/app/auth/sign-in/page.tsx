@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import { buildOAuthRedirectUrl, createClient } from '@/lib/supabase/client';
 import { auditLoginAttempt, linkOAuthIdentity, normalizeEmail, preflightLogin } from '@/lib/auth-api';
 import { AUTH_SIGNIN_MARKER_STORAGE_ID, REMEMBER_EMAIL_STORAGE_ID } from '@/lib/auth-storage';
+import { clearUrlHash, getFriendlyAuthErrorMessage, parseAuthHash, sanitizeNextPath, type ParsedAuthHash } from '@/lib/auth-hash';
 import { toast } from 'sonner';
 import { Suspense } from 'react';
 import { AuthExperienceShell, OAuthButtons, type OAuthProvider } from '@/components/auth/AuthExperienceShell';
@@ -189,11 +190,17 @@ function validateSignIn(email: string, password: string): InlineErrors {
 function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get('next') ?? '/dashboard';
+  const rawNext = searchParams.get('next');
   const authProvider = searchParams.get('auth_provider');
   const oauthCode = searchParams.get('code');
-  const nextPath = next.startsWith('/') ? next : '/dashboard';
+  const nextPath = sanitizeNextPath(rawNext, '/dashboard');
   const supabase = useMemo(() => createClient(), []);
+
+  // Inspect hash immediately on client mount
+  const initialHashParsed = useMemo(() => {
+    if (typeof window === 'undefined' || !window.location.hash) return null;
+    return parseAuthHash(window.location.hash);
+  }, []);
 
   const [email, setEmail] = useState(() => {
     if (typeof window === 'undefined') return '';
@@ -217,10 +224,29 @@ function SignInForm() {
     }
   });
   const [capsLockOn, setCapsLockOn] = useState(false);
-  const [errors, setErrors] = useState<InlineErrors>({});
+
+  // Initialize errors: if hash contained an error or incomplete tokens, show immediately
+  const [errors, setErrors] = useState<InlineErrors>(() => {
+    if (initialHashParsed?.hasError) {
+      return { form: getFriendlyAuthErrorMessage(initialHashParsed) };
+    }
+    if (initialHashParsed?.isIncomplete) {
+      return { form: getFriendlyAuthErrorMessage(initialHashParsed) };
+    }
+    return {};
+  });
+
   const formErrorRef = useRef<HTMLDivElement | null>(null);
   const oauthRecordedRef = useRef(false);
-  const [resolvingOAuthCallback, setResolvingOAuthCallback] = useState(Boolean(authProvider || oauthCode));
+  const callbackHandledRef = useRef(false);
+  const hashParamsRef = useRef<ParsedAuthHash | null>(initialHashParsed);
+
+  // Resolving state: true if OAuth PKCE callback OR valid implicit hash tokens are present
+  const [resolvingOAuthCallback, setResolvingOAuthCallback] = useState(() => {
+    if (authProvider || oauthCode) return true;
+    if (initialHashParsed?.hasTokens) return true;
+    return false;
+  });
 
   const recordOAuthSuccess = useCallback(async (provider: OAuthProvider | 'other') => {
     if (oauthRecordedRef.current) return;
@@ -230,56 +256,144 @@ function SignInForm() {
     } = await supabase.auth.getSession();
     const signedInEmail = session?.user?.email;
     if (!session?.access_token || !signedInEmail) return;
-    await linkOAuthIdentity(session.access_token, provider);
+    if (provider !== 'other') {
+      await linkOAuthIdentity(session.access_token, provider).catch(() => undefined);
+    }
     await auditLoginAttempt({
       email: signedInEmail,
       success: true,
       provider,
       token: session.access_token,
       sessionId: session.access_token.slice(-16),
-      metadata: { oauth_callback: true },
-    });
+      metadata: { oauth_callback: true, flow: hashParamsRef.current?.hasTokens ? 'magiclink_hash' : 'oauth' },
+    }).catch(() => undefined);
   }, [supabase]);
 
   useEffect(() => {
-    async function redirectIfAuthenticated() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    let isMounted = true;
 
-      if (user && !user.is_anonymous) {
-        const provider = (authProvider as OAuthProvider | null) ?? 'other';
-        void recordOAuthSuccess(provider);
-        router.replace(nextPath);
-        router.refresh();
-        return;
+    // 1. Scrub hash from URL immediately if present to prevent sensitive token exposure in browser history
+    if (typeof window !== 'undefined' && window.location.hash) {
+      if (!hashParamsRef.current) {
+        hashParamsRef.current = parseAuthHash(window.location.hash);
       }
-
-      setResolvingOAuthCallback(false);
+      clearUrlHash();
     }
 
-    // OAuth callbacks can land here depending on provider/site-url setup.
-    if (authProvider || oauthCode) {
-      void redirectIfAuthenticated();
+    const hashData = hashParamsRef.current;
+    if (hashData?.hasError || hashData?.isIncomplete) {
+      if (isMounted) {
+        setErrors((prev) => ({
+          ...prev,
+          form: prev.form || getFriendlyAuthErrorMessage(hashData),
+        }));
+        setResolvingOAuthCallback(false);
+      }
+      return;
+    }
+
+    const hasImplicitTokens = Boolean(hashData?.hasTokens);
+    const isAuthCallback = Boolean(authProvider || oauthCode || hasImplicitTokens);
+
+    if (!isAuthCallback) {
+      // Normal sign-in page visit. Check if user is already authenticated.
+      async function checkExistingUser() {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user && !user.is_anonymous && isMounted) {
+          router.replace(nextPath);
+          router.refresh();
+        }
+      }
+      void checkExistingUser();
+      return;
+    }
+
+    async function finalizeAuthentication(provider: OAuthProvider | 'other') {
+      if (callbackHandledRef.current) return;
+      callbackHandledRef.current = true;
+      await recordOAuthSuccess(provider);
+      if (isMounted) {
+        router.replace(nextPath);
+        router.refresh();
+      }
+    }
+
+    async function processCallback() {
+      try {
+        // Step A: Check whether Supabase's automatic URL detection already established a session.
+        const { data: { session: existingSession } } = await supabase.auth.getSession();
+        if (existingSession?.user && !existingSession.user.is_anonymous) {
+          await finalizeAuthentication((authProvider as OAuthProvider | null) ?? 'other');
+          return;
+        }
+
+        // Step B: If automatic detection has not established the session and we have implicit hash tokens,
+        // use setSession() explicitly as a fallback.
+        if (hashData?.hasTokens && hashData.accessToken && hashData.refreshToken) {
+          const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+            access_token: hashData.accessToken,
+            refresh_token: hashData.refreshToken,
+          });
+
+          if (sessionError) {
+            if (isMounted) {
+              setErrors({ form: sessionError.message || 'Failed to establish session from sign-in link.' });
+              setResolvingOAuthCallback(false);
+            }
+            return;
+          }
+
+          if (sessionData.session?.user && !sessionData.session.user.is_anonymous) {
+            await finalizeAuthentication('other');
+            return;
+          }
+        }
+
+        // Step C: PKCE OAuth code check
+        if (oauthCode) {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user && !user.is_anonymous) {
+            await finalizeAuthentication((authProvider as OAuthProvider | null) ?? 'other');
+            return;
+          }
+        }
+      } catch (err: unknown) {
+        if (isMounted) {
+          const msg = err instanceof Error ? err.message : 'Authentication failed.';
+          setErrors({ form: msg });
+          setResolvingOAuthCallback(false);
+        }
+      }
     }
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user && !session.user.is_anonymous) {
-        const provider = (authProvider as OAuthProvider | null) ?? 'other';
-        void recordOAuthSuccess(provider);
-        router.replace(nextPath);
-        router.refresh();
+        void finalizeAuthentication((authProvider as OAuthProvider | null) ?? 'other');
         return;
       }
 
       if (authProvider || oauthCode) {
-        setResolvingOAuthCallback(false);
+        if (isMounted) setResolvingOAuthCallback(false);
       }
     });
 
-    return () => subscription.unsubscribe();
+    void processCallback();
+
+    // 10s watchdog timeout: ensure the user is never stuck on an infinite loading screen
+    const watchdogId = setTimeout(() => {
+      if (isMounted && !callbackHandledRef.current) {
+        setResolvingOAuthCallback(false);
+        setErrors((prev) => (prev.form ? prev : { form: 'Sign-in took too long to complete. Please try signing in again.' }));
+      }
+    }, 10000);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(watchdogId);
+      subscription.unsubscribe();
+    };
   }, [authProvider, oauthCode, nextPath, recordOAuthSuccess, router, supabase]);
 
 
@@ -392,7 +506,7 @@ function SignInForm() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: buildOAuthRedirectUrl(next, provider),
+          redirectTo: buildOAuthRedirectUrl(nextPath, provider),
         },
       });
       if (error) {

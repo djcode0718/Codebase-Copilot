@@ -43,7 +43,7 @@ class TestValidExtensions:
         assert any(f.endswith(ext) for f in result), f"Expected {ext} to be accepted"
 
     @pytest.mark.parametrize("ext", [
-        ".txt", ".log", ".yaml", ".yml", ".json", ".xml",
+        ".log", ".xml",
         ".png", ".jpg", ".gif", ".svg", ".ico",
         ".pdf", ".docx", ".xlsx",
         ".lock", ".env", ".toml", ".cfg", ".ini",
@@ -66,7 +66,7 @@ class TestValidExtensions:
         assert len(result) == 1
 
     def test_no_extension_rejected(self, tmp_path):
-        make_file(tmp_path, "Makefile")
+        make_file(tmp_path, "random_binary_blob")
         result = filter_files(str(tmp_path))
         assert result == []
 
@@ -139,14 +139,16 @@ class TestTraversal:
     def test_mixed_valid_and_invalid_files(self, tmp_path):
         make_file(tmp_path, "app.py")
         make_file(tmp_path, "README.md")
-        make_file(tmp_path, "config.json")  # rejected
-        make_file(tmp_path, "style.css")
+        make_file(tmp_path, "config.json")  # accepted
+        make_file(tmp_path, "style.css")    # accepted
         make_file(tmp_path, "image.png")    # rejected
+        make_file(tmp_path, "debug.log")    # rejected
         result = filter_files(str(tmp_path))
-        assert len(result) == 3
+        assert len(result) == 4
         exts = {os.path.splitext(f)[1].lower() for f in result}
-        assert ".json" not in exts
+        assert ".json" in exts
         assert ".png" not in exts
+        assert ".log" not in exts
 
     def test_returns_absolute_paths(self, tmp_path):
         make_file(tmp_path, "main.py")
@@ -159,14 +161,14 @@ class TestTraversal:
         make_file(tmp_path, "src/utils.py")
         make_file(tmp_path, "tests/test_main.py")
         make_file(tmp_path, "README.md")
-        make_file(tmp_path, "requirements.txt")         # rejected
+        make_file(tmp_path, "requirements.txt")         # accepted
         make_file(tmp_path, ".gitignore")               # rejected
         make_file(tmp_path, "__pycache__/cache.pyc")    # ignored dir
         make_file(tmp_path, "venv/lib/python3.10/site.py")  # ignored dir
         make_file(tmp_path, "node_modules/dep/index.js")    # ignored dir
 
         result = filter_files(str(tmp_path))
-        assert len(result) == 4  # main.py, utils.py, test_main.py, README.md
+        assert len(result) == 5  # main.py, utils.py, test_main.py, README.md, requirements.txt
 
     def test_count_matches_len_of_result(self, tmp_path):
         for i in range(10):

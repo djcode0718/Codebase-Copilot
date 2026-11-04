@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
 import { auditLogout } from '@/lib/auth-api';
+import { clearUrlHash, getFriendlyAuthErrorMessage, parseAuthHash, sanitizeNextPath } from '@/lib/auth-hash';
 import { clearAccountStorage } from '@/lib/auth-storage';
 import { toast } from 'sonner';
 import type { Session, User } from '@supabase/supabase-js';
@@ -41,6 +42,12 @@ export function LandingAuthActions({
   const oauthCode = searchParams.get('code');
   const oauthNext = searchParams.get('next') ?? '/dashboard';
 
+  const [hasAuthHash] = useState(() => {
+    if (typeof window === 'undefined' || !window.location.hash) return false;
+    const hash = window.location.hash;
+    return Boolean(hash.includes('access_token=') || hash.includes('error='));
+  });
+
   const applySession = useCallback((session: Session | null) => {
     setAuthState({
       signedIn: Boolean(session?.user),
@@ -57,6 +64,17 @@ export function LandingAuthActions({
       email: user?.email ?? undefined,
     });
     setIsResolving(false);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.location.hash) return;
+    const parsed = parseAuthHash(window.location.hash);
+    if (parsed.hasError) {
+      toast.error(getFriendlyAuthErrorMessage(parsed));
+      clearUrlHash();
+    } else if (parsed.hasTokens) {
+      clearUrlHash();
+    }
   }, []);
 
   useEffect(() => {
@@ -87,18 +105,18 @@ export function LandingAuthActions({
     } = supabase.auth.onAuthStateChange((_event, session) => {
       applySession(session);
 
-      if (oauthCode && session?.user && !session.user.is_anonymous) {
-        const targetPath = oauthNext.startsWith('/') ? oauthNext : '/dashboard';
+      if ((oauthCode || hasAuthHash) && session?.user && !session.user.is_anonymous) {
+        const targetPath = sanitizeNextPath(oauthNext, '/dashboard');
         router.replace(targetPath);
         router.refresh();
       }
     });
 
     return () => subscription.unsubscribe();
-  }, [supabase, applySession, oauthCode, oauthNext, router]);
+  }, [supabase, applySession, oauthCode, hasAuthHash, oauthNext, router]);
 
   useEffect(() => {
-    if (!oauthCode) return;
+    if (!oauthCode && !hasAuthHash) return;
 
     async function handleRootOAuthCallback() {
       const {
@@ -106,14 +124,14 @@ export function LandingAuthActions({
       } = await supabase.auth.getUser();
 
       if (user && !user.is_anonymous) {
-        const targetPath = oauthNext.startsWith('/') ? oauthNext : '/dashboard';
+        const targetPath = sanitizeNextPath(oauthNext, '/dashboard');
         router.replace(targetPath);
         router.refresh();
       }
     }
 
     void handleRootOAuthCallback();
-  }, [oauthCode, oauthNext, router, supabase]);
+  }, [oauthCode, hasAuthHash, oauthNext, router, supabase]);
 
   async function handleSignOut() {
     const {

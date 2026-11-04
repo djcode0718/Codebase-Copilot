@@ -250,3 +250,133 @@ async def test_stream_chat_relationship_clarification_flow(
     )
     assert "early_response" in res_err
     assert "Could you point me to a specific file" in res_err["early_response"]
+
+
+def test_vague_queries_classified_as_architectural():
+    """Verify that vague/broad exploration queries are classified as ARCHITECTURAL instead of strict CODE_LOOKUP."""
+    from app.retrieval.query_router import classify_query, QueryMode
+
+    with patch("app.retrieval.query_router._get_router_llm") as mock_get_llm:
+        mock_llm = MagicMock()
+        mock_llm.complete.return_value = "ARCHITECTURAL"
+        mock_get_llm.return_value = mock_llm
+
+        vague_queries = [
+            "security",
+            "how does it work?",
+            "what is this?",
+            "explain",
+            "how does it work",
+            "what is this",
+            "explain this",
+        ]
+
+        for q in vague_queries:
+            mode = classify_query(q)
+            assert mode == QueryMode.ARCHITECTURAL, f"Query '{q}' should be classified as ARCHITECTURAL, got {mode}"
+
+
+def test_vague_queries_with_resilient_llm_classifier():
+    """Verify that ambiguous queries query the resilient LLM classifier and map response appropriately."""
+    from app.retrieval.query_router import classify_query, QueryMode
+
+    with patch("app.retrieval.query_router._get_router_llm") as mock_get_llm:
+        mock_llm = MagicMock()
+        mock_llm.complete.return_value = "ARCHITECTURAL"
+        mock_get_llm.return_value = mock_llm
+
+        # Ambiguous query that reaches Stage 2
+        mode = classify_query("Can you tell me about the big picture here?")
+        assert mode == QueryMode.ARCHITECTURAL
+        mock_llm.complete.assert_called_once()
+
+
+def test_specific_code_queries_remain_code_lookup():
+    """Specific function/class/file queries must remain strict CODE_LOOKUP."""
+    from app.retrieval.query_router import classify_query, QueryMode
+
+    specific_queries = [
+        "where is parse_documents function defined?",
+        "show me the implementation of load_repository in file repo_loader.py",
+        "what parameters does build_vector_index take?",
+    ]
+
+    for q in specific_queries:
+        mode = classify_query(q)
+        assert mode == QueryMode.CODE_LOOKUP, f"Specific query '{q}' should be CODE_LOOKUP, got {mode}"
+
+
+# ─── Precheck Decoupling & Single Classification Tests (Phase 1B) ────────────
+
+from app.retrieval.query_router import run_query_prechecks, PrecheckResult, GREETING_RESPONSE, QueryMode
+
+
+def test_run_query_prechecks_greeting():
+    res = run_query_prechecks("hello there", "test_idx")
+    assert res.handled is True
+    assert res.is_greeting is True
+    assert res.response_text == GREETING_RESPONSE
+    assert res.query_mode == QueryMode.CODE_LOOKUP
+
+
+def test_run_query_prechecks_excluded_folder():
+    res = run_query_prechecks("tell me about node_modules/react", "test_idx")
+    assert res.handled is True
+    assert res.is_excluded_folder is True
+    assert "excluded from indexing" in res.response_text
+
+
+def test_run_query_prechecks_aggregation():
+    with patch("app.services.repo_stats_service.handle_aggregation_query", return_value="Total files: 42"):
+        res = run_query_prechecks("how many files are there", "test_idx")
+        assert res.handled is True
+        assert res.is_aggregation is True
+        assert res.response_text == "Total files: 42"
+
+
+def test_run_query_prechecks_superlative():
+    res = run_query_prechecks("most vulnerable file in repo", "test_idx")
+    assert res.handled is True
+    assert res.is_superlative is True
+    assert res.action_suggestion is not None
+    assert res.action_suggestion["suggested_action"] == "security_review"
+
+
+def test_run_query_prechecks_pass_through():
+    res = run_query_prechecks("how does auth work?", "test_idx")
+    assert res.handled is False
+    assert res.response_text is None
+
+
+def test_run_query_prechecks_cta_followup_bypass():
+    res = run_query_prechecks("hello", "test_idx", is_cta_followup=True)
+    assert res.handled is False
+
+
+def test_single_classification_pre_resolved_mode_orchestrator():
+    """Verify that passing pre-resolved query_mode and resolved_query to orchestrate() skips re-classification."""
+    from app.retrieval.orchestrator import SharedRetrievalOrchestrator, RetrievalTier
+    from unittest.mock import MagicMock
+
+    orch = SharedRetrievalOrchestrator()
+    mock_vector_index = MagicMock()
+    mock_vector_index.retrieve.return_value = []
+
+    with patch("app.retrieval.orchestrator.classify_query") as mock_classify, \
+         patch("app.retrieval.repository_isolation.enforce_chunk_isolation", side_effect=lambda nodes, **kwargs: nodes), \
+         patch("app.retrieval.repository_isolation.resolve_repository_id", return_value="mock_repo"):
+
+        decision = orch.orchestrate(
+            query="how does payment work?",
+            index_name="test_index",
+            vector_index=mock_vector_index,
+            query_mode=QueryMode.ARCHITECTURAL,
+            resolved_query="how does payment work?",
+            target_repo_id="mock_repo",
+        )
+
+        # classify_query MUST NOT be called because query_mode was provided!
+        mock_classify.assert_not_called()
+        assert decision.query_mode == QueryMode.ARCHITECTURAL
+
+

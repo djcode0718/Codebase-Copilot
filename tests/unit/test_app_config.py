@@ -37,6 +37,12 @@ class TestLLMProviderConfig:
         cfg = reload_config({"LLM_PROVIDER": "Ollama"})
         assert cfg.LLM_PROVIDER == "ollama"
 
+    def test_invalid_llm_provider_raises_value_error(self):
+        with pytest.raises(ValueError) as exc_info:
+            reload_config({"LLM_PROVIDER": "unsupported_provider"})
+        assert "Invalid LLM_PROVIDER 'unsupported_provider'" in str(exc_info.value)
+        assert "gemini" in str(exc_info.value)
+
 class TestFastLLMToggle:
     def test_use_fast_llm_false_by_default(self):
         cfg = reload_config({"USE_FAST_LLM": "false"})

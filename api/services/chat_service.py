@@ -36,7 +36,11 @@ from app.config import (
 )
 from app.utils.logger import get_logger
 from app.llm.prompts import CHAT_FOLLOWUP_SUGGESTION_PROMPT
-from api.services.chat_stream_utils import to_sse_data, safe_chat_error_message
+from api.services.chat_stream_utils import (
+    to_sse_data,
+    safe_chat_error_message,
+    format_interruption_disclaimer,
+)
 
 logger = get_logger(__name__)
 
@@ -122,6 +126,8 @@ _REPO_INTENT_KEYWORDS = {
     "authenticated", "authentication", "credential", "credentials", "secret",
     "token", "key", "env", "environment", "setting", "settings",
     "llm", "embedding", "vector", "index", "retrieval", "pipeline",
+    # Repository structure / entry points
+    "main", "entry", "entrypoint", "entry point", "entry-point", "application", "app", "startup", "start", "run",
 }
 
 
@@ -581,27 +587,15 @@ def _stream_prechecks(query: str, index_name: str, memory, is_cta_followup: bool
     if is_cta_followup:
         return None
 
-    from app.retrieval.query_router import detect_excluded_folder, detect_aggregation, check_superlative_intent
+    from app.retrieval.query_router import run_query_prechecks
 
-    excluded_folder = detect_excluded_folder(query)
-    if excluded_folder:
-        logger.info("Stream early exit: excluded folder referenced")
-        err_msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
-        return _stream_early_response_payload(memory, query, err_msg)
-
-    if detect_aggregation(query):
-        logger.info("Stream early exit: aggregation query")
-        from app.services.repo_stats_service import handle_aggregation_query
-
-        response_str = handle_aggregation_query(query, index_name)
-        return _stream_early_response_payload(memory, query, response_str)
-
-    superlative_suggest = check_superlative_intent(query, index_name=index_name)
-    if superlative_suggest:
-        logger.info("Stream early exit: superlative action suggestion")
-        import json
-
-        return _stream_early_response_payload(memory, query, json.dumps(superlative_suggest))
+    precheck = run_query_prechecks(query, index_name, is_cta_followup=is_cta_followup)
+    if precheck.handled:
+        logger.info(
+            "Stream early exit: precheck handled (greeting=%s, folder=%s, agg=%s, superlative=%s)",
+            precheck.is_greeting, precheck.is_excluded_folder, precheck.is_aggregation, precheck.is_superlative
+        )
+        return _stream_early_response_payload(memory, query, precheck.response_text or "")
 
     return None
 
@@ -720,8 +714,6 @@ async def _prepare_stream_prompt(
     from app.llm.prompts import CODE_LOOKUP_PROMPT, ARCHITECTURAL_PROMPT
 
     logger.info("Preparing stream prompt for repo=%s chat=%s", repo_id, chat_id)
-    vector_index, bm25_retriever = await _load_indexes(index_name)
-    logger.debug("Loaded stream indexes (bm25_available=%s)", bm25_retriever is not None)
     memory = _get_or_create_memory(repo_id, chat_id, persisted_history)
     logger.debug("Loaded/created stream memory (hydrated_history=%s)", bool(persisted_history))
 
@@ -732,19 +724,44 @@ async def _prepare_stream_prompt(
     resolved_query, query_mode = await _resolve_query_mode(query, memory, classify_query)
     logger.info("Resolved stream query mode=%s", query_mode.value)
 
-    if query_mode == QueryMode.RELATIONSHIP:
-        return _relationship_prompt_payload(index_name, memory, resolved_query, query_mode)
+    from app.indexing.incremental import acquire_index_read
+    from app.retrieval.orchestrator import get_retrieval_orchestrator, RetrievalTier
 
-    reranked_nodes, t_retrieval_ms = await _retrieve_ranked_nodes(
-        query_mode,
-        vector_index,
-        bm25_retriever,
-        resolved_query,
-        index_name,
-    )
-    retrieved_files = _build_retrieved_files(reranked_nodes)
-    context_str = _build_context_str(reranked_nodes)
-    context_str = _inject_arch_context_if_missing(query_mode, index_name, reranked_nodes, context_str)
+    async with acquire_index_read(index_name):
+        vector_index, bm25_retriever = await _load_indexes(index_name)
+        logger.debug("Loaded stream indexes (bm25_available=%s)", bm25_retriever is not None)
+
+        decision = get_retrieval_orchestrator().orchestrate(
+            query=query,
+            index_name=index_name,
+            vector_index=vector_index,
+            bm25_retriever=bm25_retriever,
+            memory=memory,
+            is_cta_followup=is_cta_followup,
+            query_mode=query_mode,
+            resolved_query=resolved_query,
+            target_repo_id=repo_id,
+        )
+
+        if decision.selected_tier == RetrievalTier.RELATIONSHIP or query_mode == QueryMode.RELATIONSHIP:
+            return _relationship_prompt_payload(index_name, memory, resolved_query, query_mode)
+
+        if decision.should_abstain:
+            return {
+                "memory": memory,
+                "resolved_query": resolved_query,
+                "query_mode": query_mode,
+                "reranked_nodes": [],
+                "retrieved_files": [],
+                "t_retrieval_ms": decision.t_retrieval_ms,
+                "full_prompt": "",
+                "early_response": decision.abstention_message,
+            }
+
+        reranked_nodes = decision.nodes
+        retrieved_files = decision.retrieved_files
+        context_str = decision.context_str
+        t_retrieval_ms = decision.t_retrieval_ms
 
     history_str = _build_history_str(memory)
 
@@ -922,8 +939,11 @@ async def stream_chat_response(
 
         # ── Low Confidence Check (Streaming) ──────────────────────────────────
         from app.retrieval.query_router import LOW_CONFIDENCE_SIMILARITY_THRESHOLD
-        if query_mode != QueryMode.RELATIONSHIP and top_score < LOW_CONFIDENCE_SIMILARITY_THRESHOLD:
-            logger.info("Streaming low-confidence clarification path triggered")
+        is_rrf_scale = top_score <= 0.10 and any(n.score is not None for n in reranked_nodes)
+        is_truly_low = (not is_rrf_scale) and (top_score < min(LOW_CONFIDENCE_SIMILARITY_THRESHOLD, 0.20))
+
+        if query_mode == QueryMode.CODE_LOOKUP and (not reranked_nodes or (is_truly_low and not _looks_repository_intent(query))):
+            logger.info("Streaming low-confidence clarification path triggered (top_score=%.3f)", top_score)
             clarification = "Could you point me to a specific file, folder, or function? I want to search the right part of the repo."
             for evt in _terminal_events(
                 text=clarification,
@@ -1021,6 +1041,12 @@ async def stream_chat_response(
             llm_provider = usage.get("provider")
             llm_model = usage.get("model")
         except StreamFirstTokenTimeoutError as timeout_err:
+            if full_response.strip():
+                logger.warning(
+                    "LLM stream timeout mid-stream after tokens yielded: %s",
+                    _redact_sensitive_text_for_log(timeout_err),
+                )
+                raise
             logger.warning(
                 "LLM stream startup timeout; attempting non-stream recovery: %s",
                 _redact_sensitive_text_for_log(timeout_err),
@@ -1028,8 +1054,14 @@ async def stream_chat_response(
             full_response, response_path = await _recover_from_stream_failure(full_prompt, timeout_err)
             yield to_sse_data({'type': 'token', 'content': full_response})
         except Exception as llm_err:
+            if full_response.strip():
+                logger.warning(
+                    "LLM streaming failed mid-stream after tokens yielded: %s",
+                    _redact_sensitive_text_for_log(llm_err),
+                )
+                raise
             logger.warning(
-                "LLM streaming failed; attempting non-stream recovery: %s",
+                "LLM streaming failed before first token; attempting non-stream recovery: %s",
                 _redact_sensitive_text_for_log(llm_err),
             )
             full_response, response_path = await _recover_from_stream_failure(full_prompt, llm_err)
@@ -1105,6 +1137,10 @@ async def stream_chat_response(
     except Exception as e:
         safe_msg = safe_chat_error_message(e, include_rate_limit=True)
         logger.error(f"Streaming chat error: {safe_msg}", exc_info=True)
+        if full_response.strip():
+            interruption_disclaimer = format_interruption_disclaimer(safe_msg)
+            yield to_sse_data({'type': 'token', 'content': interruption_disclaimer})
+            full_response += interruption_disclaimer
         yield to_sse_data({'type': 'error', 'message': safe_msg})
 
     finally:
@@ -1139,7 +1175,7 @@ async def get_full_response_for_persistence(
     t_start = time.time()
     response_str, new_engine, new_memory, query_mode = await asyncio.get_event_loop().run_in_executor(
         None,
-        partial(handle_user_query, is_cta_followup=is_cta_followup),
+        partial(handle_user_query, is_cta_followup=is_cta_followup, target_repo_id=repo_id),
         query,
         index_name,
         chat_engine,

@@ -992,9 +992,13 @@ def get_attachments_for_chat(
     query = supabase.table("attachments").select("*").eq("chat_id", chat_id)
     if not include_deleted:
         query = query.is_("deleted_at", "null")
-    result = query.order("created_at", desc=False).execute()
-    data = getattr(result, "data", None)
-    return data if isinstance(data, list) else []
+    try:
+        result = query.order("created_at", desc=False).execute()
+        data = getattr(result, "data", None)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.warning(f"get_attachments_for_chat: attachments table not accessible: {e}")
+        return []
 
 
 def get_attachment(supabase: Client, attachment_id: str) -> Optional[Dict[str, Any]]:
@@ -1006,13 +1010,19 @@ def get_attachment(supabase: Client, attachment_id: str) -> Optional[Dict[str, A
 
 
 def update_attachment(supabase: Client, attachment_id: str, fields: Dict[str, Any]) -> None:
-    supabase.table("attachments").update(fields).eq("id", attachment_id).execute()
+    try:
+        supabase.table("attachments").update(fields).eq("id", attachment_id).execute()
+    except Exception as e:
+        logger.warning(f"update_attachment failed: {e}")
 
 
 def soft_delete_attachment(supabase: Client, attachment_id: str) -> None:
-    supabase.table("attachments").update({
-        "deleted_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", attachment_id).execute()
+    try:
+        supabase.table("attachments").update({
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", attachment_id).execute()
+    except Exception as e:
+        logger.warning(f"soft_delete_attachment failed: {e}")
 
 
 # ── Saved Reports ─────────────────────────────────────────────────────────────
@@ -1048,9 +1058,13 @@ def get_saved_reports_for_repo(
     query = supabase.table("saved_reports").select("*").eq("repo_id", repo_id).eq("user_id", user_id)
     if not include_deleted:
         query = query.is_("deleted_at", "null")
-    result = query.order("updated_at", desc=True).execute()
-    data = getattr(result, "data", None)
-    return data if isinstance(data, list) else []
+    try:
+        result = query.order("updated_at", desc=True).execute()
+        data = getattr(result, "data", None)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.warning(f"get_saved_reports_for_repo: saved_reports table not accessible: {e}")
+        return []
 
 
 def get_saved_report(supabase: Client, report_id: str) -> Optional[Dict[str, Any]]:

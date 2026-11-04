@@ -148,6 +148,26 @@ def extract_relationship_target(query: str) -> Optional[str]:
     return None
 
 
+_GREETING_WORDS = {
+    "hi", "hello", "hey", "howdy", "sup", "yo", "hola",
+    "good morning", "good afternoon", "good evening",
+    "hi there", "hello there", "hey there", "greetings",
+    "what's up", "whats up"
+}
+
+GREETING_RESPONSE = (
+    "Hello! I am your Codebase Copilot. Ask me anything about this repository—such as "
+    "its architecture, where key entry points are located, or how specific functions work."
+)
+
+
+def detect_greeting(query: str) -> bool:
+    """Detect simple greeting / small talk queries like 'hi', 'hello', 'hey'."""
+    text = (query or "").strip().lower()
+    text = re.sub(r"[!?,.:;~`'\"-]+$", "", text).strip()
+    return text in _GREETING_WORDS
+
+
 def _get_router_llm():
     """Retrieve LLM client for query routing, prioritizing resilient LLM provider while respecting test mocks."""
     try:
@@ -179,6 +199,10 @@ def classify_query(query: str) -> QueryMode:
     """
     query_lower = query.lower()
     logger.debug("Classifying query (length=%s)", len(query or ""))
+
+    if detect_greeting(query):
+        logger.info("Query classified as CODE_LOOKUP (greeting fast-path)")
+        return QueryMode.CODE_LOOKUP
 
     if _is_relationship_query(query):
         logger.info("Query classified as RELATIONSHIP")
@@ -220,7 +244,7 @@ def classify_query(query: str) -> QueryMode:
             return QueryMode.CODE_LOOKUP
 
     except Exception as e:
-        # Safe fallback — CODE_LOOKUP is the more conservative mode
+        # Safe fallback — CODE_LOOKUP is the conservative mode
         logger.warning(f"LLM classifier failed: {e} — defaulting to CODE_LOOKUP")
         return QueryMode.CODE_LOOKUP
 
@@ -455,3 +479,81 @@ def is_real_identifier(target: Optional[str], index_name: Optional[str]) -> bool
     res = any(k.lower() == norm_target for k in graph.keys())
     _identifier_cache.put(cache_key, res)
     return res
+
+
+from dataclasses import dataclass
+
+@dataclass
+class PrecheckResult:
+    handled: bool
+    response_text: Optional[str] = None
+    query_mode: Optional[QueryMode] = None
+    action_suggestion: Optional[dict] = None
+    is_greeting: bool = False
+    is_excluded_folder: bool = False
+    is_aggregation: bool = False
+    is_superlative: bool = False
+
+
+def run_query_prechecks(
+    query: str,
+    index_name: str,
+    is_cta_followup: bool = False,
+) -> PrecheckResult:
+    """Deterministic query prechecks executed once prior to classification and retrieval."""
+    if is_cta_followup:
+        return PrecheckResult(handled=False)
+
+    # 1. Greeting fast-path
+    if detect_greeting(query):
+        logger.info("Query precheck: greeting detected")
+        return PrecheckResult(
+            handled=True,
+            response_text=GREETING_RESPONSE,
+            query_mode=QueryMode.CODE_LOOKUP,
+            is_greeting=True,
+        )
+
+    # 2. Excluded folder detection
+    excluded_folder = detect_excluded_folder(query)
+    if excluded_folder:
+        logger.info("Query precheck: excluded folder reference detected (%s)", excluded_folder)
+        msg = f"That folder ({excluded_folder}) is excluded from indexing (build/CI/dependency artifacts aren't indexed by default)."
+        return PrecheckResult(
+            handled=True,
+            response_text=msg,
+            query_mode=QueryMode.CODE_LOOKUP,
+            is_excluded_folder=True,
+        )
+
+    # 3. Aggregation query detection
+    if detect_aggregation(query):
+        logger.info("Query precheck: aggregation query detected")
+        try:
+            from app.services.repo_stats_service import handle_aggregation_query
+            agg_response = handle_aggregation_query(query, index_name)
+        except Exception as ex:
+            logger.warning("Aggregation query handler failed: %s", ex)
+            agg_response = "Unable to compute repository statistics at this time."
+        return PrecheckResult(
+            handled=True,
+            response_text=agg_response,
+            query_mode=QueryMode.CODE_LOOKUP,
+            is_aggregation=True,
+        )
+
+    # 4. Superlative intent / action suggestion
+    superlative_suggest = check_superlative_intent(query, index_name=index_name)
+    if superlative_suggest:
+        logger.info("Query precheck: superlative action suggestion detected")
+        import json
+        return PrecheckResult(
+            handled=True,
+            response_text=json.dumps(superlative_suggest),
+            query_mode=QueryMode.CODE_LOOKUP,
+            action_suggestion=superlative_suggest,
+            is_superlative=True,
+        )
+
+    return PrecheckResult(handled=False)
+

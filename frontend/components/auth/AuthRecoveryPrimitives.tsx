@@ -30,9 +30,11 @@ export function AuthSuccessPanel({
     <div className="rounded-2xl border border-border bg-background/60 px-4 py-8 text-center">
       <CheckCircle2 size={20} className="mx-auto text-brand" />
       <p className="mt-3 text-sm text-muted-foreground">{message}</p>
-      <Button asChild variant="outline" className="mt-4 border-border">
-        <Link href={ctaHref}>{ctaLabel}</Link>
-      </Button>
+      <Link href={ctaHref}>
+        <Button variant="outline" className="mt-4 border-border">
+          {ctaLabel}
+        </Button>
+      </Link>
     </div>
   );
 }

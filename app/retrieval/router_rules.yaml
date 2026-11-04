@@ -83,6 +83,8 @@ architectural:
     - "trade-offs"
     - "architecture"
     - "architectural"
+    - "security"
+    - "how does it work"
 out_of_scope:
   always:
     - "tell me a joke"

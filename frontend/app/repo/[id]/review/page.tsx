@@ -207,7 +207,7 @@ function FileActionRibbon({
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    setIsMounted(true);
+    queueMicrotask(() => setIsMounted(true));
   }, []);
 
   const modifierName = selectedFile?.owner?.trim();
@@ -945,22 +945,28 @@ export default function RepositoryReviewPage() {
 
   useEffect(() => {
     // Keep ribbon context file-scoped; prevents stale coverage/details from previous file.
-    setRibbonReview(null);
-    setRibbonFix(null);
-    setRibbonTests(null);
-    setRibbonHistory('');
-    setShowRibbonDiff(false);
-    setActionTimeline([]);
-    setTestDiscovery(null);
+    queueMicrotask(() => {
+      setRibbonReview(null);
+      setRibbonFix(null);
+      setRibbonTests(null);
+      setRibbonHistory('');
+      setShowRibbonDiff(false);
+      setActionTimeline([]);
+      setTestDiscovery(null);
+    });
   }, [selectedFilePath]);
 
   useEffect(() => {
     if (!token || !selectedFilePath) {
-      setSelectedFile(null);
+      queueMicrotask(() => {
+        setSelectedFile(null);
+      });
       return;
     }
     let cancelled = false;
-    setSelectedFile(null);
+    queueMicrotask(() => {
+      if (!cancelled) setSelectedFile(null);
+    });
     async function loadSelectedFile() {
       try {
         const details = await getExplorerFile(token, repoId, selectedFilePath);
@@ -1040,14 +1046,16 @@ export default function RepositoryReviewPage() {
   }, [healthRecommendations, selectedFilePath]);
 
   useEffect(() => {
-    if (!scopedRecommendations.length) {
-      setSelectedRecommendationId('');
-      return;
-    }
-    const hasSelected = scopedRecommendations.some((rec) => rec.recommendation_id === selectedRecommendationId);
-    if (!hasSelected) {
-      setSelectedRecommendationId(scopedRecommendations[0]?.recommendation_id || '');
-    }
+    queueMicrotask(() => {
+      if (!scopedRecommendations.length) {
+        setSelectedRecommendationId('');
+        return;
+      }
+      const hasSelected = scopedRecommendations.some((rec) => rec.recommendation_id === selectedRecommendationId);
+      if (!hasSelected) {
+        setSelectedRecommendationId(scopedRecommendations[0]?.recommendation_id || '');
+      }
+    });
   }, [scopedRecommendations, selectedRecommendationId]);
 
   const handleSetLifecycleStatus = useCallback(async (status: RecommendationLifecycleStatus, reason?: string) => {

@@ -458,6 +458,138 @@ def _load_pipeline_dependencies(emit):
     )
 
 
+def _validate_staged_index(staging_dir: str, min_nodes: int = 1) -> bool:
+    """Validate that the staged index has valid Chroma artifacts and manifest."""
+    chroma_dir = os.path.join(staging_dir, "chroma")
+    if not os.path.exists(chroma_dir):
+        raise ValueError(f"Validation failed: Chroma directory missing at {chroma_dir}")
+    sqlite_file = os.path.join(chroma_dir, "chroma.sqlite3")
+    if not os.path.exists(sqlite_file) or os.path.getsize(sqlite_file) == 0:
+        raise ValueError(f"Validation failed: chroma.sqlite3 missing or empty at {sqlite_file}")
+    manifest_file = os.path.join(staging_dir, "manifest.json")
+    if not os.path.exists(manifest_file):
+        raise ValueError(f"Validation failed: manifest.json missing at {manifest_file}")
+    return True
+
+
+def _promote_staged_index(staging_index_name: str, final_index_name: str) -> None:
+    """Atomically promote a staged index to final index name with collection rename and rollback on failure."""
+    from app.config import INDEX_DIR
+    import uuid
+    import shutil
+    import chromadb
+
+    staging_dir = os.path.join(INDEX_DIR, staging_index_name)
+    final_dir = os.path.join(INDEX_DIR, final_index_name)
+
+    if not os.path.exists(staging_dir):
+        raise FileNotFoundError(f"Staged index not found: {staging_dir}")
+
+    staging_chroma_dir = os.path.join(staging_dir, "chroma")
+    if os.path.exists(staging_chroma_dir):
+        client = None
+        try:
+            client = chromadb.PersistentClient(path=staging_chroma_dir)
+            existing_cols = {c.name: c for c in client.list_collections()}
+
+            # If final_index_name already exists in staging (rare collision), delete it safely
+            if final_index_name in existing_cols:
+                logger.warning(
+                    f"Conflicting collection '{final_index_name}' found in staging {staging_chroma_dir}; removing conflict."
+                )
+                client.delete_collection(name=final_index_name)
+
+            if staging_index_name in existing_cols:
+                staging_col = existing_cols[staging_index_name]
+                staging_col.modify(name=final_index_name)
+                logger.info(
+                    f"Successfully renamed staged Chroma collection '{staging_index_name}' to '{final_index_name}'."
+                )
+            else:
+                logger.warning(
+                    f"Staging collection '{staging_index_name}' not found in {staging_chroma_dir}. Collections: {list(existing_cols.keys())}"
+                )
+        except Exception as ce:
+            if "file is not a database" in str(ce).lower():
+                logger.warning(f"Mock or non-SQLite chroma directory detected; skipping collection rename: {ce}")
+            else:
+                logger.error(f"Failed to rename staged Chroma collection from '{staging_index_name}' to '{final_index_name}': {ce}")
+                raise
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    # 2. Release any shared client references to prevent SQLite file locking before atomic replace
+    try:
+        chromadb.api.client.SharedSystemClient.clear_system_cache()
+    except Exception:
+        pass
+
+    backup_dir = f"{final_dir}.backup-{uuid.uuid4().hex[:8]}"
+    if os.path.exists(final_dir):
+        os.replace(final_dir, backup_dir)
+
+    try:
+        os.replace(staging_dir, final_dir)
+
+        # Clear system cache again so any future client loads the new index fresh from disk
+        try:
+            chromadb.api.client.SharedSystemClient.clear_system_cache()
+        except Exception:
+            pass
+
+        # Verify that promoted Chroma index can be loaded and collection exists
+        final_chroma_dir = os.path.join(final_dir, "chroma")
+        if os.path.exists(final_chroma_dir):
+            verify_client = None
+            try:
+                verify_client = chromadb.PersistentClient(path=final_chroma_dir)
+                promoted_cols = [c.name for c in verify_client.list_collections()]
+                if final_index_name not in promoted_cols:
+                    raise ValueError(
+                        f"Promoted index validation failed: collection '{final_index_name}' missing in {promoted_cols}"
+                    )
+            except Exception as ve:
+                if "file is not a database" in str(ve).lower():
+                    logger.warning(f"Mock or non-SQLite chroma directory detected; skipping post-validation: {ve}")
+                else:
+                    raise
+            finally:
+                if verify_client is not None:
+                    try:
+                        verify_client.close()
+                    except Exception:
+                        pass
+
+        # Cleanup backup upon confirmed success
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+    except Exception as e:
+        logger.error(f"Failed to promote staged index from {staging_dir} to {final_dir}: {e}")
+        # Roll back: restore original active index from backup if it was moved
+        if os.path.exists(backup_dir):
+            try:
+                try:
+                    chromadb.api.client.SharedSystemClient.clear_system_cache()
+                except Exception:
+                    pass
+                if os.path.exists(final_dir):
+                    shutil.rmtree(final_dir, ignore_errors=True)
+                os.replace(backup_dir, final_dir)
+                try:
+                    chromadb.api.client.SharedSystemClient.clear_system_cache()
+                except Exception:
+                    pass
+                logger.info(f"Successfully rolled back active index to {final_dir} from {backup_dir}")
+            except Exception as re:
+                logger.critical(f"CRITICAL: Rollback failed from {backup_dir} to {final_dir}: {re}")
+        raise
+
+
 def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
     # Emit immediately so UI never appears stalled while pre-flight checks/imports run.
     emit("cloning", "Preparing indexing environment...", 1)
@@ -558,46 +690,78 @@ def _run_pipeline_sync(source: str, emit) -> Optional[dict]:
         emit("error", "No nodes generated from documents.", 100)
         return None
 
+    import uuid
+    import time
     context_splitter = SentenceSplitter(chunk_size=768, chunk_overlap=64)
     context_nodes = context_splitter.get_nodes_from_documents([context_doc])
+    context_gen_id = f"ctx_gen_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    total_context_chunks = len(context_nodes)
+    for idx, cnode in enumerate(context_nodes):
+        cnode.metadata["context_generation"] = context_gen_id
+        cnode.metadata["context_chunk_index"] = idx
+        cnode.metadata["context_total_chunks"] = total_context_chunks
+        cnode.metadata["path"] = "_codebase_context"
     nodes = context_nodes + nodes
     logger.info(f"Total nodes: {len(nodes)}")
 
     # Step 4 - Embed
-    emit("embedding", f"Building embeddings for {len(nodes)} chunks…", 65)
-    build_vector_index(nodes, index_name)
+    from app.config import INDEX_DIR
+    import shutil
+    is_existing = os.path.exists(os.path.join(INDEX_DIR, index_name))
+    build_index_name = f"{index_name}_stage_{uuid.uuid4().hex[:8]}" if is_existing else index_name
+    staging_dir = os.path.join(INDEX_DIR, build_index_name)
 
-    # Build initial manifest
-    from app.indexing.incremental import build_initial_manifest
-    try:
-        build_initial_manifest(nodes, repo_path, index_name)
-    except Exception as me:
-        logger.warning(f"Failed to build initial manifest: {me}")
+    if is_existing:
+        from app.indexing.incremental import register_active_staging_build, unregister_active_staging_build
+        register_active_staging_build(build_index_name)
 
-    # Step 4.5 - Git History Indexing
-    emit("history", "Extracting git log history…", 75)
     try:
-        from app.ingestion.git_history import build_and_save_full_git_history
-        build_and_save_full_git_history(valid_files, repo_path, index_name)
-    except Exception as ge:
-        logger.warning(f"Failed to build git history: {ge}", exc_info=True)
+        emit("embedding", f"Building embeddings for {len(nodes)} chunks…", 65)
+        build_vector_index(nodes, build_index_name)
 
-    # Step 5 - Relationship Graph
-    emit("graph", "Building call and reference graph…", 80)
-    try:
-        from app.parsing.relationship_graph import RelationshipGraphBuilder
-        import json
-        from app.config import INDEX_DIR
-        graph_builder = RelationshipGraphBuilder(repo_path)
-        graph = graph_builder.build_graph(valid_files)
-        graph_dir = os.path.join(INDEX_DIR, index_name)
-        os.makedirs(graph_dir, exist_ok=True)
-        graph_path = os.path.join(graph_dir, "relationship_graph.json")
-        with open(graph_path, "w", encoding="utf-8") as gf:
-            json.dump(graph, gf, indent=2)
-        logger.info(f"Relationship graph saved to {graph_path} with {len(graph)} symbols")
-    except Exception as ge:
-        logger.warning(f"Failed to build relationship graph: {ge}", exc_info=True)
+        # Build initial manifest
+        from app.indexing.incremental import build_initial_manifest
+        try:
+            build_initial_manifest(nodes, repo_path, build_index_name)
+        except Exception as me:
+            logger.warning(f"Failed to build initial manifest: {me}")
+
+        # Step 4.5 - Git History Indexing
+        emit("history", "Extracting git log history…", 75)
+        try:
+            from app.ingestion.git_history import build_and_save_full_git_history
+            build_and_save_full_git_history(valid_files, repo_path, build_index_name)
+        except Exception as ge:
+            logger.warning(f"Failed to build git history: {ge}", exc_info=True)
+
+        # Step 5 - Relationship Graph
+        emit("graph", "Building call and reference graph…", 80)
+        try:
+            from app.parsing.relationship_graph import RelationshipGraphBuilder
+            graph_builder = RelationshipGraphBuilder(repo_path)
+            graph_dir = os.path.join(INDEX_DIR, build_index_name)
+            graph, graph_path = graph_builder.build_graph_atomic(valid_files, graph_dir)
+            logger.info(f"Relationship graph saved atomically to {graph_path} with {len(graph)} symbols")
+        except Exception as ge:
+            logger.warning(f"Failed to build relationship graph: {ge}", exc_info=True)
+
+        if is_existing:
+            emit("activating", "Validating and activating replacement index…", 88)
+            _validate_staged_index(staging_dir, min_nodes=len(nodes))
+            _promote_staged_index(build_index_name, index_name)
+
+        # Invalidate cached retrievers only after successful promotion
+        from app.services.qa_service import invalidate_index_cache
+        invalidate_index_cache(index_name)
+
+    except Exception as build_err:
+        if is_existing and os.path.exists(staging_dir):
+            logger.warning(f"Index build failed in staging; removing staging artifacts {staging_dir}: {build_err}")
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        raise build_err
+    finally:
+        if is_existing:
+            unregister_active_staging_build(build_index_name)
 
     # Step 6 - Done
     emit("summary", "Finalising architectural context…", 90)
@@ -843,10 +1007,14 @@ async def indexing_event_generator(
             if event["step"] == "error":
                 logger.debug("Handling error event (repo_id=%s)", repo_id)
                 try:
+                    index_name = repo.get("index_name", repo.get("name", "repo"))
+                    from app.config import INDEX_DIR
+                    has_prior_index = os.path.exists(os.path.join(INDEX_DIR, index_name, "chroma", "chroma.sqlite3"))
+                    new_status = "ready" if has_prior_index else "failed"
                     supabase_service.update_repo_status(
-                        supabase, repo_id, status="failed"
+                        supabase, repo_id, status=new_status
                     )
-                    logger.debug("Updated repository status to failed (repo_id=%s)", repo_id)
+                    logger.debug("Updated repository status to %s (has_prior_index=%s, repo_id=%s)", new_status, has_prior_index, repo_id)
                 except Exception:
                     pass
                 break

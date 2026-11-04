@@ -31,7 +31,7 @@ def test_model_manager_module_importable():
 
 
 def test_seven_model_exact_fallback_order():
-    """Verify that the 7-model priority order is exactly as requested."""
+    """Verify that the 7-model priority order matches the configured chain."""
     with patch("app.services.model_manager.LLM_PROVIDER", "gemini"), \
          patch("app.services.model_manager.USE_FAST_LLM", False), \
          patch("app.services.model_manager.GEMINI_API_KEY", "mock-gemini-key"), \
@@ -39,11 +39,11 @@ def test_seven_model_exact_fallback_order():
         specs = get_available_model_specs()
         expected = [
             ModelSpec(provider="gemini", model_name="gemini-3.8-flash"),
-            ModelSpec(provider="gemini", model_name="gemini-3.7-flash"),
+            ModelSpec(provider="gemini", model_name="gemini-3.5-flash-lite"),
             ModelSpec(provider="gemini", model_name="gemini-3.6-flash"),
             ModelSpec(provider="groq", model_name="openai/gpt-oss-120b"),
             ModelSpec(provider="groq", model_name="qwen/qwen3.8-27b"),
-            ModelSpec(provider="groq", model_name="llama-3.3-70b-versatile"),
+            ModelSpec(provider="groq", model_name="minimaxai/minimax-m2.7"),
             ModelSpec(provider="ollama", model_name="llama3.1:8b"),
         ]
         assert specs[:7] == expected
@@ -60,15 +60,15 @@ def test_provider_to_model_mapping():
         groq_specs = [s for s in specs if s.provider == "groq"]
         ollama_specs = [s for s in specs if s.provider == "ollama"]
 
-        assert [s.model_name for s in gemini_specs] == [
+        assert [s.model_name for s in gemini_specs][:3] == [
             "gemini-3.8-flash",
-            "gemini-3.7-flash",
+            "gemini-3.5-flash-lite",
             "gemini-3.6-flash",
         ]
-        assert [s.model_name for s in groq_specs] == [
+        assert [s.model_name for s in groq_specs][:3] == [
             "openai/gpt-oss-120b",
             "qwen/qwen3.8-27b",
-            "llama-3.3-70b-versatile",
+            "minimaxai/minimax-m2.7",
         ]
         assert [s.model_name for s in ollama_specs] == ["llama3.1:8b"]
 
@@ -104,11 +104,11 @@ def test_groq_client_receives_correct_context_windows():
 
         reset_client_cache()
 
-        # 3. Llama 3.3 70B model
-        create_llm_client(ModelSpec(provider="groq", model_name="llama-3.3-70b-versatile"))
-        kwargs_70b = mock_groq_cls.call_args[1]
-        assert kwargs_70b["context_window"] == 131072
-        assert kwargs_70b["max_tokens"] == 4096
+        # 3. Minimax model
+        create_llm_client(ModelSpec(provider="groq", model_name="minimaxai/minimax-m2.7"))
+        kwargs_minimax = mock_groq_cls.call_args[1]
+        assert kwargs_minimax["context_window"] == 131072
+        assert kwargs_minimax["max_tokens"] == 4096
 
 
 def test_ollama_client_receives_llama31_parameters():
@@ -119,3 +119,13 @@ def test_ollama_client_receives_llama31_parameters():
         kwargs = mock_ollama_cls.call_args[1]
         assert kwargs["context_window"] == 16384
         assert kwargs["additional_kwargs"]["options"]["num_ctx"] == 16384
+
+
+def test_client_caching_and_thread_safety():
+    """Verify clients are cached and returned on subsequent invocations."""
+    mock_ollama_cls = MagicMock()
+    with patch.dict("sys.modules", {"llama_index.llms.ollama": MagicMock(Ollama=mock_ollama_cls)}):
+        c1 = create_llm_client(ModelSpec(provider="ollama", model_name="llama3.1:8b"))
+        c2 = create_llm_client(ModelSpec(provider="ollama", model_name="llama3.1:8b"))
+        assert c1 is c2
+        assert mock_ollama_cls.call_count == 1

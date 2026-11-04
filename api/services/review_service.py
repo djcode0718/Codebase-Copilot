@@ -14,8 +14,51 @@ from api.services.review_suggestion_service import generate_review_payload
 
 logger = get_logger(__name__)
 
-_MAX_FILE_CHARS = 18000
+_TRUNCATION_SENTINEL = (
+    "\n\n# --- [TRUNCATED FOR REVIEW: File exceeds length limit; remaining lines omitted] ---\n"
+    "# --- [NOTE TO REVIEWER: Incomplete trailing expressions or unclosed blocks at this boundary are truncation artifacts; DO NOT report them as syntax errors or bugs.] ---"
+)
 _MAX_FILES = 25
+
+# Provider-specific budget profiles (single_file_limit, aggregate_limit, per_file_limit)
+# Calibrated for: 1 token ≈ 4.2 chars, prompt JSON escaping overhead (~12%), and reserved output tokens
+_PROVIDER_BUDGETS = {
+    "gemini": {"single": 40000, "aggregate": 60000, "per_file_max": 20000},
+    "groq": {"single": 40000, "aggregate": 50000, "per_file_max": 15000},
+    "ollama": {"single": 40000, "aggregate": 45000, "per_file_max": 12000},
+}
+
+
+def _resolve_review_budget(file_count: int, provider: Optional[str] = None) -> Tuple[int, int, int]:
+    """Resolve (single_limit, aggregate_limit, per_file_limit) based on actual active provider and file count."""
+    if not provider:
+        try:
+            from app.services.model_manager import get_available_model_specs
+            specs = get_available_model_specs()
+            if specs:
+                provider = specs[0].provider
+        except Exception:
+            pass
+
+    if not provider:
+        try:
+            from app.config import LLM_PROVIDER, USE_FAST_LLM
+            raw = (LLM_PROVIDER or "").lower().strip()
+            if raw == "ollama":
+                provider = "ollama"
+            elif USE_FAST_LLM:
+                provider = "groq"
+            else:
+                provider = raw or "gemini"
+        except Exception:
+            provider = "gemini"
+
+    profile = _PROVIDER_BUDGETS.get(provider) or _PROVIDER_BUDGETS["gemini"]
+    single_limit = profile["single"]
+    aggregate_limit = profile["aggregate"]
+    per_file_limit = single_limit if file_count <= 1 else profile["per_file_max"]
+
+    return single_limit, aggregate_limit, per_file_limit
 
 
 @dataclass
@@ -43,13 +86,23 @@ def _safe_join_repo_path(repo_root: str, relative_path: str) -> Optional[str]:
     return candidate
 
 
-def _read_repo_file(repo_root: str, relative_path: str) -> Optional[ReviewTarget]:
+def _read_repo_file(repo_root: str, relative_path: str, max_chars: int = 40000) -> Optional[ReviewTarget]:
     abs_path = _safe_join_repo_path(repo_root, relative_path)
     if not abs_path:
         return None
     try:
         with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read(_MAX_FILE_CHARS)
+            raw = f.read(max_chars + 1)
+
+        if len(raw) > max_chars:
+            cut = raw[:max_chars]
+            last_nl = cut.rfind("\n")
+            if last_nl > 0:
+                cut = cut[:last_nl]
+            content = cut + _TRUNCATION_SENTINEL
+        else:
+            content = raw
+
         return ReviewTarget(path=relative_path, content=content)
     except Exception as err:
         logger.warning(f"Failed to read review target '{relative_path}': {err}")
@@ -127,19 +180,36 @@ def _extract_code_smells(target: ReviewTarget) -> List[Dict[str, Any]]:
     return findings
 
 
-def _collect_targets(repo: Dict[str, Any], file_paths: List[str]) -> Tuple[List[ReviewTarget], List[str]]:
+def _collect_targets(
+    repo: Dict[str, Any],
+    file_paths: List[str],
+    provider: Optional[str] = None,
+) -> Tuple[List[ReviewTarget], List[str]]:
     repo_root = _resolve_repo_root(repo.get("index_name") or repo.get("name") or "", repo.get("name") or "")
     targets: List[ReviewTarget] = []
     missing: List[str] = []
-    for path in file_paths[:_MAX_FILES]:
-        normalized = path.strip().replace("\\", "/")
-        if not normalized:
+
+    valid_paths = [p.strip().replace("\\", "/") for p in file_paths[:_MAX_FILES] if p.strip()]
+    single_limit, aggregate_limit, per_file_limit = _resolve_review_budget(len(valid_paths), provider=provider)
+    remaining_aggregate_chars = single_limit if len(valid_paths) == 1 else aggregate_limit
+
+    _MIN_FILE_CHARS = 500
+
+    for path in valid_paths:
+        if remaining_aggregate_chars < _MIN_FILE_CHARS:
+            missing.append(f"{path} (skipped: review context budget exhausted)")
             continue
-        target = _read_repo_file(repo_root, normalized)
+
+        file_max = min(per_file_limit, remaining_aggregate_chars)
+        target = _read_repo_file(repo_root, path, max_chars=file_max)
         if target is None:
-            missing.append(normalized)
+            missing.append(path)
             continue
+
         targets.append(target)
+        source_chars = len(target.content.replace(_TRUNCATION_SENTINEL, ""))
+        remaining_aggregate_chars -= source_chars
+
     return targets, missing
 
 
@@ -148,8 +218,9 @@ async def review_files(
     repo: Dict[str, Any],
     file_paths: List[str],
     prompt: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
-    targets, missing = _collect_targets(repo, file_paths)
+    targets, missing = _collect_targets(repo, file_paths, provider=provider)
     snippets = [
         {
             "file": t.path,

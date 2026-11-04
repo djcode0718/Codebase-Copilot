@@ -31,6 +31,9 @@ USE_FAST_LLM = os.getenv("USE_FAST_LLM", "false").lower() == "true"
 
 # ─── Groq Fast Model ─────────────────────────────────────────────────────────
 # Used only when USE_FAST_LLM=true.
+# Swap between these two in .env to compare speed vs quality:
+#   "llama-3.3-70b-versatile"  → better quality,  ~2-3s latency  (recommended for evals)
+#   "llama-3.1-8b-instant"   → faster,          ~0.5-1s latency (good for quick demos)
 GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "qwen/qwen3.8-27b")
 
 # ─── API Keys ────────────────────────────────────────────────────────────────
@@ -67,9 +70,13 @@ def get_index_dir() -> str:
     return INDEX_DIR
 
 # ─── Retrieval ────────────────────────────────────────────────────────────────
-TOP_K_FILES   = 3    # files returned by DocumentSummaryIndex coarse pass
-TOP_K_CHUNKS  = 10   # chunks returned by hybrid retriever before rerank
-TOP_K_RERANK  = 5    # final chunks passed to LLM prompt
+TOP_K_FILES         = 3    # files returned by DocumentSummaryIndex coarse pass
+DENSE_TOP_K         = int(os.getenv("DENSE_TOP_K", "30"))            # Dense retrieval candidate limit
+BM25_TOP_K          = int(os.getenv("BM25_TOP_K", "30"))             # BM25 retrieval candidate limit
+RRF_OUTPUT_CUTOFF   = int(os.getenv("RRF_OUTPUT_CUTOFF", "20"))      # RRF fusion output cutoff
+CROSS_ENCODER_DEPTH = int(os.getenv("CROSS_ENCODER_DEPTH", "15"))    # CrossEncoder candidate scoring depth
+TOP_K_RERANK        = int(os.getenv("TOP_K_RERANK", "5"))            # Final context chunks passed to LLM
+TOP_K_CHUNKS        = DENSE_TOP_K                                    # Legacy alias for backward compatibility
 
 # ─── Chunking ─────────────────────────────────────────────────────────────────
 CHUNK_LINES        = 50    # lines per chunk for CodeSplitter
@@ -99,6 +106,12 @@ LLM_FALLBACK_CHAIN_STR = os.getenv(
     "ollama:llama3.1:8b"
 )
 
+# ─── Cross-Provider Privacy Policy ───────────────────────────────────────────
+# When False (default), fallback will not transmit retrieved codebase chunks or prompts
+# to a different external cloud provider (e.g. Gemini -> Groq).
+# Fallback within the same provider (e.g. Gemini 3.8 -> Gemini 3.5) and local Ollama are always allowed.
+ALLOW_CROSS_PROVIDER_FALLBACK = os.getenv("ALLOW_CROSS_PROVIDER_FALLBACK", "false").lower() == "true"
+
 # ─── Streaming Guard Configuration ───────────────────────────────────────────
 # Maximum time to wait for the first streamed token before returning a
 # guaranteed fallback response so the UI does not stay pending.
@@ -125,4 +138,4 @@ INDEX_GIT_HISTORY = os.getenv("INDEX_GIT_HISTORY", "true").lower() == "true"
 GIT_HISTORY_MAX_COMMITS_PER_FILE = int(os.getenv("GIT_HISTORY_MAX_COMMITS_PER_FILE", "50"))
 
 # -- Citation validation controls ---------------------------------------------
-CITATION_VALIDATION_MODE = os.getenv("CITATION_VALIDATION_MODE", "log").lower()
+CITATION_VALIDATION_MODE = os.getenv("CITATION_VALIDATION_MODE", "strict").lower()

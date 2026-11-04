@@ -39,6 +39,9 @@ def safe_chat_error_message(err: Exception, *, include_rate_limit: bool = True) 
     if include_rate_limit and is_rate_limit_error(err):
         return "The model provider is rate-limited right now. Please retry in a moment."
 
+    if "undergoing" in msg_l or "indexrefreshingerror" in msg_l or "being refreshed" in msg_l or "being updated" in msg_l:
+        return "The repository index is currently being updated. Please retry in a moment."
+
     if any(token in msg_l for token in _MEMORY_SCHEMA_ERROR_TOKENS):
         return (
             "I hit a temporary repository memory issue. "
@@ -68,4 +71,10 @@ def parse_sse_data_line(sse_line: str) -> Optional[Dict[str, Any]]:
         return json.loads(sse_line[6:])
     except Exception:
         return None
+
+
+def format_interruption_disclaimer(safe_msg: str) -> str:
+    """Format a clear interruption disclaimer token emitted on mid-stream failure."""
+    return f"\n\n[Response interrupted: {safe_msg}]"
+
 

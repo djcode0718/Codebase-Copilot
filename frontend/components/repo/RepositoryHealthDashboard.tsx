@@ -178,7 +178,10 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
   }, [repoId]);
 
   useEffect(() => {
-    setLocalRunHistory(readCachedRunHistory(repoId));
+    const cached = readCachedRunHistory(repoId);
+    queueMicrotask(() => {
+      setLocalRunHistory(cached);
+    });
   }, [repoId]);
 
   useEffect(() => {
@@ -703,7 +706,7 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                   <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" interval={Math.max(0, Math.floor(chartData.length / 5) - 1)} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                   <Tooltip
-                    formatter={(value: number | string) => [`${value}/100`, 'Score']}
+                    formatter={(value: unknown) => [`${value ?? ''}/100`, 'Score']}
                     labelFormatter={(_, payload) => {
                       const point = payload?.[0]?.payload as { createdAt?: string; name?: string } | undefined;
                       if (!point?.createdAt) return point?.name || '';
@@ -867,8 +870,9 @@ export default function RepositoryHealthDashboard({ repoId, token, disabled, onR
                           size="sm"
                           variant={currentStatus === status ? 'default' : 'outline'}
                           className="h-7 px-2 text-[11px]"
-                          disabled={statusUpdatingByRec[rec.recommendation_id]}
+                          disabled={Boolean(rec.recommendation_id && statusUpdatingByRec[rec.recommendation_id])}
                           onClick={() => {
+                            if (!rec.recommendation_id) return;
                             if (status === 'IGNORED') {
                               const reason = window.prompt('Optional ignore reason') || undefined;
                               void handleRecommendationStatus(rec.recommendation_id, status, reason);

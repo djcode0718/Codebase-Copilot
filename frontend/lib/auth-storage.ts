@@ -77,5 +77,3 @@ export function clearAccountStorage(targetUserId?: string): void {
     // Ignore storage errors in restricted contexts
   }
 }
-
-

@@ -29,7 +29,7 @@ function decodeBase64ToBytes(base64: string): Uint8Array {
 
 function downloadFile(content: string, filename: string, mimeType: string, encoding?: string) {
   const blob = encoding === 'base64'
-    ? new Blob([decodeBase64ToBytes(content)], { type: mimeType })
+    ? new Blob([decodeBase64ToBytes(content) as unknown as BlobPart], { type: mimeType })
     : new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

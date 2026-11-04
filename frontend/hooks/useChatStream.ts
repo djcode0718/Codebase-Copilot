@@ -9,7 +9,7 @@ import { useState, useRef, useCallback } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 import type { ChatEvent, RetrievedFile, QueryMode } from '@/lib/types';
 
-function parseSseEvents(chunk: string, flush = false): { events: ChatEvent[]; rest: string } {
+export function parseSseEvents(chunk: string, flush = false): { events: ChatEvent[]; rest: string } {
   const normalized = chunk.replace(/\r\n/g, '\n');
   const lines = normalized.split('\n');
   let rest = lines.pop() ?? '';
@@ -50,10 +50,19 @@ export interface StreamedResponse {
   suggestions?: string[];
 }
 
-interface StreamCallbacks {
+export interface StreamCallbacks {
   onTextDone?: (content: string, metadata: Omit<StreamedResponse, 'content'>) => void;
   onFollowupPending?: () => void;
   onFollowupSuggestions?: (questions: string[]) => void;
+  onError?: (error: string, partialContent?: string) => void;
+}
+
+export interface StreamState {
+  fullText: string;
+  metadata: Omit<StreamedResponse, 'content'>;
+  receivedErrorEvent: boolean;
+  receivedDoneEvent: boolean;
+  errorMessage: string | null;
 }
 
 interface UseChatStreamResult {
@@ -73,13 +82,9 @@ interface UseChatStreamResult {
   cancelStream: () => void;
 }
 
-function processStreamEvent(
+export function processStreamEvent(
   event: ChatEvent,
-  state: {
-    fullText: string;
-    metadata: Omit<StreamedResponse, 'content'>;
-    receivedErrorEvent: boolean;
-  },
+  state: StreamState,
   setStreamedText: React.Dispatch<React.SetStateAction<string>>,
   streamedTextRef: React.MutableRefObject<string>,
   setPendingMetadata: React.Dispatch<React.SetStateAction<Omit<StreamedResponse, 'content'> | null>>,
@@ -118,15 +123,27 @@ function processStreamEvent(
     }
   } else if (event.type === 'error') {
     state.receivedErrorEvent = true;
+    const errMsg = event.message || 'An error occurred. Please retry.';
+    state.errorMessage = errMsg;
     if (!state.fullText) {
-      const errMsg = event.message || 'An error occurred. Please retry.';
-      state.fullText += errMsg;
-      setStreamedText((prev) => prev + errMsg);
+      state.fullText = errMsg;
+      streamedTextRef.current = errMsg;
+      setStreamedText(errMsg);
     }
   } else if (event.type === 'done') {
-    console.debug('[useChatStream] done received, fullText length=', state.fullText.length);
-    if (callbacks?.onTextDone) {
-      callbacks.onTextDone(state.fullText, state.metadata);
+    if (state.receivedDoneEvent) {
+      return { shouldStop: false };
+    }
+    state.receivedDoneEvent = true;
+    console.debug('[useChatStream] done received, fullText length=', state.fullText.length, 'hasError=', state.receivedErrorEvent);
+    if (state.receivedErrorEvent) {
+      if (callbacks?.onError) {
+        callbacks.onError(state.errorMessage || 'Stream interrupted', state.fullText);
+      }
+    } else {
+      if (callbacks?.onTextDone) {
+        callbacks.onTextDone(state.fullText, state.metadata);
+      }
     }
     if (onDoneReceived) {
       onDoneReceived();
@@ -135,13 +152,9 @@ function processStreamEvent(
   return { shouldStop: false };
 }
 
-async function readResponseStream(
+export async function readResponseStream(
   res: Response,
-  state: {
-    fullText: string;
-    metadata: Omit<StreamedResponse, 'content'>;
-    receivedErrorEvent: boolean;
-  },
+  state: StreamState,
   setStreamedText: React.Dispatch<React.SetStateAction<string>>,
   streamedTextRef: React.MutableRefObject<string>,
   setPendingMetadata: React.Dispatch<React.SetStateAction<Omit<StreamedResponse, 'content'> | null>>,
@@ -152,7 +165,7 @@ async function readResponseStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let shouldStop = false;
-  let timeoutId: any = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const onDoneReceived = () => {
     if (timeoutId) clearTimeout(timeoutId);
@@ -163,7 +176,7 @@ async function readResponseStream(
       if (callbacks?.onFollowupSuggestions) {
         callbacks.onFollowupSuggestions([]);
       }
-    }, 12000);
+    }, 5000);
   };
 
   try {
@@ -196,6 +209,26 @@ async function readResponseStream(
       }
 
       if (done) shouldStop = true;
+    }
+
+    // Guard against sudden connection termination without 'done' event
+    if (!state.receivedDoneEvent) {
+      state.receivedDoneEvent = true;
+      if (!state.receivedErrorEvent) {
+        const errMsg = state.fullText
+          ? 'Connection closed unexpectedly before response was completed.'
+          : 'Connection closed unexpectedly before response started.';
+        state.receivedErrorEvent = true;
+        state.errorMessage = errMsg;
+        if (!state.fullText) {
+          state.fullText = errMsg;
+          streamedTextRef.current = errMsg;
+          setStreamedText(errMsg);
+        }
+        if (callbacks?.onError) {
+          callbacks.onError(errMsg, state.fullText);
+        }
+      }
     }
   } finally {
     if (timeoutId) {
@@ -239,18 +272,21 @@ export function useChatStream(): UseChatStreamResult {
       setPendingMetadata(null);
       setError(null);
 
-      let fullText = '';
-      let receivedErrorEvent = false;
-      let metadata: Omit<StreamedResponse, 'content'> = {
-        queryMode: null,
-        retrievedFiles: [],
-        latencyRetrievalMs: null,
-        latencyLlmMs: null,
-        latencyTotalMs: null,
-        llmProvider: null,
-        llmModel: null,
+      const state: StreamState = {
+        fullText: '',
+        receivedErrorEvent: false,
+        receivedDoneEvent: false,
+        errorMessage: null,
+        metadata: {
+          queryMode: null,
+          retrievedFiles: [],
+          latencyRetrievalMs: null,
+          latencyLlmMs: null,
+          latencyTotalMs: null,
+          llmProvider: null,
+          llmModel: null,
+        },
       };
-      const state = { fullText, metadata, receivedErrorEvent };
 
       try {
         const res = await fetch(`${apiBase}/api/chat/${chatId}/message/stream`, {
@@ -271,23 +307,20 @@ export function useChatStream(): UseChatStreamResult {
         await readResponseStream(res, state, setStreamedText, streamedTextRef, setPendingMetadata, callbacks);
 
         setStreaming(false);
+        if (state.receivedErrorEvent) {
+          setError(state.errorMessage || 'Stream interrupted');
+          return null;
+        }
         return { content: state.fullText, ...state.metadata };
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           setStreaming(false);
-          // Return partial content if any tokens arrived before abort.
-          if (streamedTextRef.current) {
-            return { content: streamedTextRef.current, ...state.metadata };
-          }
+          // Intentional abort: do not set error state
           return null;
         }
         const msg = err instanceof Error ? err.message : 'Unknown error';
         setError(msg);
         setStreaming(false);
-        // Return partial content if any tokens arrived before the error.
-        if (streamedTextRef.current) {
-          return { content: streamedTextRef.current, ...state.metadata };
-        }
         return null;
       }
     },

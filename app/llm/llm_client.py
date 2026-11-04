@@ -48,8 +48,13 @@ def get_llm():
     return _cached_resilient_llm
 
 
-def reset_llm_client():
-    """Reset cached LLM client instances for test isolation."""
+def reset_llm_client() -> None:
+    """Reset cached resilient LLM and embed model instances for test isolation.
+
+    NOTE: Intended solely for unit/integration test fixtures. The application
+    architecture relies on static process startup configuration and does not
+    support dynamic runtime provider switching.
+    """
     global _cached_resilient_llm, _cached_embed_model
     _cached_resilient_llm = None
     _cached_embed_model = None
@@ -61,12 +66,15 @@ def get_embed_model():
 
     Always local, regardless of configured generative provider.
     """
-    from llama_index.embeddings.ollama import OllamaEmbedding
-    logger.info(f"Loading embedding model: {OLLAMA_EMBED_MODEL} via Ollama")
-    return OllamaEmbedding(
-        model_name=OLLAMA_EMBED_MODEL,
-        base_url=OLLAMA_BASE_URL,
-    )
+    global _cached_embed_model
+    if _cached_embed_model is None:
+        from llama_index.embeddings.ollama import OllamaEmbedding
+        logger.info(f"Loading embedding model: {OLLAMA_EMBED_MODEL} via Ollama")
+        _cached_embed_model = OllamaEmbedding(
+            model_name=OLLAMA_EMBED_MODEL,
+            base_url=OLLAMA_BASE_URL,
+        )
+    return _cached_embed_model
 
 
 def configure_llamaindex_settings():
@@ -82,7 +90,7 @@ def configure_llamaindex_settings():
     Settings.llm = get_llm()
     Settings.embed_model = get_embed_model()
 
-    logger.info(
+    logger.debug(
         f"LlamaIndex configured — LLM: {LLM_PROVIDER}, "
         f"embed: {OLLAMA_EMBED_MODEL} (Ollama)"
     )

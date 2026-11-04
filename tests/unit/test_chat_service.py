@@ -38,6 +38,7 @@ _STUBS = [
     "app.services.qa_service",
 ]
 _orig_modules = {m: sys.modules.get(m) for m in _STUBS}
+_orig_query_mode = getattr(_orig_modules.get("app.retrieval.query_router"), "QueryMode", None)
 for _m in _STUBS:
     sys.modules[_m] = MagicMock()
 
@@ -65,6 +66,11 @@ for _m, _val in _orig_modules.items():
         sys.modules.pop(_m, None)
     else:
         sys.modules[_m] = _val
+
+from app.retrieval.query_router import QueryMode as _canonical_query_mode
+chat_service.QueryMode = _canonical_query_mode
+if "app.retrieval.query_router" in sys.modules:
+    sys.modules["app.retrieval.query_router"].QueryMode = _canonical_query_mode
 
 
 # ─── Session cache helpers ────────────────────────────────────────────────────
@@ -377,6 +383,112 @@ async def test_stream_chat_response_early_done_and_decoupled_suggestions():
 
     # Verify passive citation validation was called
     mock_citation.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_prepare_stream_prompt_passes_target_repo_id_to_orchestrator():
+    """Verify _prepare_stream_prompt propagates repo_id as target_repo_id to orchestrator."""
+    from app.retrieval.orchestrator import RetrievalDecision, RetrievalTier
+    from app.retrieval.query_router import QueryMode
+
+    repo_uuid = "verified-repo-uuid-555"
+    idx_name = "test_index"
+
+    mock_decision = RetrievalDecision(
+        query="test query",
+        resolved_query="test query",
+        query_mode=QueryMode.CODE_LOOKUP,
+        selected_tier=RetrievalTier.TIER3_HYBRID_CODE,
+        nodes=[],
+        retrieved_files=[],
+        confidence_score=0.9,
+        should_abstain=False,
+    )
+
+    mock_orch = MagicMock()
+    mock_orch.orchestrate.return_value = mock_decision
+
+    with patch("api.services.chat_service._stream_prechecks", return_value=None), \
+         patch("api.services.chat_service._load_indexes", AsyncMock(return_value=(MagicMock(), MagicMock()))), \
+         patch("app.retrieval.orchestrator.get_retrieval_orchestrator", return_value=mock_orch), \
+         patch("api.services.chat_service._build_full_prompt", return_value="assembled prompt"):
+
+        res = await chat_service._prepare_stream_prompt(
+            query="test query",
+            index_name=idx_name,
+            repo_id=repo_uuid,
+            chat_id="test_chat",
+            memory_context=None,
+        )
+
+        mock_orch.orchestrate.assert_called_once()
+        _, kwargs = mock_orch.orchestrate.call_args
+        assert kwargs.get("target_repo_id") == repo_uuid
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_response_mid_stream_failure_emits_disclaimer_error_done():
+    """Verify mid-stream failure emits disclaimer token, error event, done event, and skips memory update."""
+    import json
+
+    prep_mock = {
+        "memory": MagicMock(),
+        "resolved_query": "resolved query",
+        "query_mode": chat_service.QueryMode.ARCHITECTURAL,
+        "reranked_nodes": [],
+        "retrieved_files": [],
+        "t_retrieval_ms": 10,
+        "full_prompt": "full prompt",
+    }
+
+    async def mock_prepare(*args, **kwargs):
+        return prep_mock
+
+    # Mock streaming from LLM that yields partial tokens and then fails mid-stream
+    async def mock_failing_stream_llm(*args, **kwargs):
+        # 60+ chars to trigger yield
+        yield "Initial partial code output received from model before drop.\n"
+        raise RuntimeError("Provider connection dropped mid-stream")
+
+    with patch("api.services.chat_service._prepare_stream_prompt", side_effect=mock_prepare), \
+         patch("api.services.chat_service._stream_llm_response_with_guard", side_effect=mock_failing_stream_llm), \
+         patch("api.services.chat_service._persist_memory_turn") as mock_persist, \
+         patch("api.services.chat_service.is_general_knowledge_or_preference_query", return_value=False):
+
+        events = []
+        async for sse_data in chat_service.stream_chat_response(
+            query="Explain the code",
+            index_name="test_index",
+            repo_id="test_repo",
+            chat_id="test_chat",
+        ):
+            events.append(sse_data)
+
+    parsed_events = []
+    for evt in events:
+        assert evt.startswith("data: ")
+        assert evt.endswith("\n\n")
+        parsed_events.append(json.loads(evt[6:-2]))
+
+    # 1. Partial token yielded
+    assert parsed_events[0]["type"] == "token"
+    assert "Initial partial code output" in parsed_events[0]["content"]
+
+    # 2. Interruption disclaimer token yielded
+    assert parsed_events[1]["type"] == "token"
+    assert "[Response interrupted:" in parsed_events[1]["content"]
+
+    # 3. Error event yielded
+    assert parsed_events[2]["type"] == "error"
+    assert "message" in parsed_events[2]
+
+    # 4. Terminal done event yielded
+    assert parsed_events[3]["type"] == "done"
+
+    # Memory update must be skipped on failed stream
+    mock_persist.assert_not_called()
+
+
 
 
 
