@@ -133,3 +133,5 @@ evaluation/e2e/PHASE2_*.md
 # Temporary Git consolidation and hygiene working reports
 evaluation/e2e/GIT_CONSOLIDATION_INVENTORY.md
 evaluation/e2e/GITIGNORE_HYGIENE_REPORT.md
+
+git-stabilization-backups/
