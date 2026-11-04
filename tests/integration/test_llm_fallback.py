@@ -485,3 +485,25 @@ def test_same_provider_fallback_allowed_when_cross_provider_blocked(monkeypatch)
     g1.complete.assert_called_once()
     g2.complete.assert_called_once()
     groq1.complete.assert_not_called()
+
+
+def test_ollama_primary_cannot_fallback_to_cloud_when_cross_provider_blocked(monkeypatch):
+    """When Ollama is primary and ALLOW_CROSS_PROVIDER_FALLBACK=False, failing Ollama cannot fallback to cloud (Gemini/Groq)."""
+    monkeypatch.setattr(config, "ALLOW_CROSS_PROVIDER_FALLBACK", False)
+
+    ollama1 = create_mock_llm("llama3.1:8b", provider="ollama")
+    g1 = create_mock_llm("gemini-3.8-flash", provider="gemini")
+    groq1 = create_mock_llm("openai/gpt-oss-120b", provider="groq")
+
+    ollama1.complete.side_effect = Exception("Connection refused: Ollama daemon offline")
+
+    pipeline = ResilientFallbackLLM(fallback_chain=[ollama1, g1, groq1])
+
+    with pytest.raises(AllModelsExhaustedError) as exc_info:
+        pipeline.complete("local code query")
+
+    assert "All LLM models in the fallback chain were exhausted" in str(exc_info.value)
+    ollama1.complete.assert_called_once()
+    g1.complete.assert_not_called()
+    groq1.complete.assert_not_called()
+

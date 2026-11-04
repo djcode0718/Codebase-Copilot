@@ -11,8 +11,10 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { getApiBaseUrl } from '@/lib/api';
 import { auditLogout } from '@/lib/auth-api';
+import { clearAccountStorage } from '@/lib/auth-storage';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTheme } from 'next-themes';
 
@@ -20,6 +22,7 @@ const subscribe = () => () => {};
 
 export default function SettingsPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { theme, setTheme, resolvedTheme } = useTheme();
   const mounted = useSyncExternalStore(subscribe, () => true, () => false);
   const selectedTheme = mounted ? (theme === 'system' ? (resolvedTheme ?? 'system') : theme) : undefined;
@@ -35,6 +38,8 @@ export default function SettingsPage() {
       email: session?.user?.email,
       sessionId: session?.access_token?.slice(-16),
     }).catch(() => undefined);
+    queryClient.clear();
+    clearAccountStorage();
     await supabase.auth.signOut();
     router.push('/auth/sign-in');
     toast.success('Signed out');
@@ -52,6 +57,8 @@ export default function SettingsPage() {
       allDevices: true,
     }).catch(() => undefined);
 
+    queryClient.clear();
+    clearAccountStorage();
     await supabase.auth.signOut({ scope: 'global' });
     router.push('/auth/sign-in');
     toast.success('Signed out on all devices');

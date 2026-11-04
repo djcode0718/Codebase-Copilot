@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
 import { auditLogout } from '@/lib/auth-api';
 import { clearUrlHash, getFriendlyAuthErrorMessage, parseAuthHash, sanitizeNextPath } from '@/lib/auth-hash';
+import { clearAccountStorage } from '@/lib/auth-storage';
 import { toast } from 'sonner';
 import type { Session, User } from '@supabase/supabase-js';
 
@@ -28,6 +30,7 @@ export function LandingAuthActions({
 }: LandingAuthActionsProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
   const supabase = useMemo(() => createClient(), []);
   const [authState, setAuthState] = useState<AuthState>({
     signedIn: initialSignedIn,
@@ -141,6 +144,8 @@ export function LandingAuthActions({
     }).catch(() => undefined);
 
     setSigningOut(true);
+    queryClient.clear();
+    clearAccountStorage();
     const { error } = await supabase.auth.signOut();
     setSigningOut(false);
 
